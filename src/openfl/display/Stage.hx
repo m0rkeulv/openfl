@@ -3224,7 +3224,8 @@ class Stage extends DisplayObjectContainer #if lime implements IModule #end
 		{
 			__renderer.__allowSmoothing = (quality != LOW);
 		}
-
+		__renderDirty = true;
+		
 		return value;
 	}
 

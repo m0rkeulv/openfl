@@ -8,6 +8,7 @@ import openfl.display.GradientType;
 import openfl.display.Graphics;
 import openfl.display.InterpolationMethod;
 import openfl.display.SpreadMethod;
+import openfl.display.StageQuality;
 import openfl.geom.Matrix;
 import openfl.geom.Point;
 import openfl.geom.Rectangle;
@@ -18,6 +19,8 @@ import lime.graphics.cairo.CairoExtend;
 import lime.graphics.cairo.CairoFilter;
 import lime.graphics.cairo.CairoImageSurface;
 import lime.graphics.cairo.CairoPattern;
+import lime.graphics.cairo.CairoOperator;
+import lime.graphics.cairo.CairoAntialias;
 import lime.math.Matrix3;
 import lime.math.Vector2;
 #end
@@ -56,6 +59,7 @@ class CairoGraphics
 	private static var strokePattern:CairoPattern;
 	private static var tempMatrix3 = new Matrix3();
 	private static var worldAlpha:Float;
+	private static var quality:StageQuality;
 
 	private static function closePath(strokeBefore:Bool = false):Void
 	{
@@ -467,6 +471,17 @@ class CairoGraphics
 	private static function playCommands(commands:DrawCommandBuffer, stroke:Bool = false):Void
 	{
 		if (commands.length == 0) return;
+		if (quality == StageQuality.LOW) {
+			performRenderPass(commands, stroke, OVER, NONE );	
+		}else {
+			performRenderPass(commands, stroke, OVER, stroke? BEST:NONE );
+		}
+
+	}
+
+private static function performRenderPass(commands:DrawCommandBuffer, stroke:Bool, opt:CairoOperator, antialias:CairoAntialias) {
+
+
 
 		bounds = graphics.__bounds;
 
@@ -481,8 +496,10 @@ class CairoGraphics
 		var startY = 0.0;
 		var setStart = false;
 
+
+		cairo.setOperator(opt);
 		cairo.fillRule = EVEN_ODD;
-		cairo.antialias = SUBPIXEL;
+		cairo.antialias = antialias;
 
 		var hasPath:Bool = false;
 
@@ -1113,15 +1130,30 @@ class CairoGraphics
 		CairoGraphics.graphics = graphics;
 		CairoGraphics.allowSmoothing = renderer.__allowSmoothing;
 		CairoGraphics.worldAlpha = renderer.__getAlpha(graphics.__owner.__worldAlpha);
+		CairoGraphics.quality = graphics.__owner.stage != null ? graphics.__owner.stage.quality: StageQuality.HIGH;
+ 
 
-		graphics.__update(renderer.__worldTransform);
+ 		var replaceBitmap = false; //TODO solve replace image issue
+		var upScale = (quality == StageQuality.HIGH || quality == StageQuality.BEST ) && graphics.__commands.length >0;
+		
+
+		// TODO disable upscale for text ?
+		//if (Std.is(graphics.__owner, openfl.text.StaticText) ||Std.is(graphics.__owner, openfl.text.TextField))upScale = false;
+		 graphics.__update(renderer.__worldTransform,  upScale ? 2 : 1);
+
 
 		if (!graphics.__softwareDirty || graphics.__managed) return;
 
-		bounds = graphics.__bounds;
+		
+		//  if(upScale && !replaceBitmap) {
+		// 	graphics.__upScale(renderer.__worldTransform, 2);
+		//  }
 
+		bounds = graphics.__bounds;
+		
 		var width = graphics.__width;
 		var height = graphics.__height;
+		//trace("q:" +quality+ " s:" +upScale+ " w:"+width + " h:" +height + "t:" + graphics.__owner);
 
 		if (!graphics.__visible || graphics.__commands.length == 0 || bounds == null || width < 1 || height < 1)
 		{
@@ -1393,8 +1425,29 @@ class CairoGraphics
 
 			data.destroy();
 
+
+
+			// TODO: figure out how to  replace 2x image with 1x image without
+			// causing the rendering to get messed up and resizing the image
 			graphics.__bitmap.image.dirty = true;
 			graphics.__bitmap.image.version++;
+			
+
+			 if(upScale && replaceBitmap) {
+
+				var matrix = new Matrix();
+				matrix.scale(0.5,0.5);
+			 	var bitmap = new BitmapData(Math.ceil(graphics.__width /2 ), Math.ceil(graphics.__height /2 ), true, 0);
+			 	bitmap.drawWithQuality(graphics.__bitmap, matrix,null,null,null,true);	
+			 	//graphics.__bitmap.disposeImage();
+			 	graphics.__bitmap = bitmap;				
+		
+			 }
+		}
+
+		if(upScale && replaceBitmap) {
+			// update graphics with normal/downscaled size
+			graphics.__upScale(renderer.__worldTransform,  1);
 		}
 
 		graphics.__softwareDirty = false;

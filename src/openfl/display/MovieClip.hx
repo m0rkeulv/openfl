@@ -456,6 +456,7 @@ class MovieClip extends Sprite #if (openfl_dynamic && haxe_ver < "4.0.0") implem
 					if (instance.clipDepth > 0)
 					{
 						currentMasks.push(instance);
+						instance.displayObject.__isMask = true;
 					}
 				}
 			}

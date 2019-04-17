@@ -1841,7 +1841,7 @@ import js.html.CanvasRenderingContext2D;
 		}
 	}
 
-	@:noCompletion private function __update(displayMatrix:Matrix):Void
+	@:noCompletion private function __update(displayMatrix:Matrix, upScale:Int = 1):Void
 	{
 		if (__bounds == null || __bounds.width <= 0 || __bounds.height <= 0) return;
 
@@ -1893,6 +1893,9 @@ import js.html.CanvasRenderingContext2D;
 				scaleY *= Math.sqrt(displayMatrix.c * displayMatrix.c + displayMatrix.d * displayMatrix.d);
 			}
 		}
+
+		scaleY *= upScale;
+		scaleX *= upScale;
 
 		#if openfl_disable_graphics_upscaling
 		if (scaleX > 1) scaleX = 1;
@@ -1950,13 +1953,127 @@ import js.html.CanvasRenderingContext2D;
 		var newWidth = Math.ceil(width + __renderTransform.tx);
 		var newHeight = Math.ceil(height + __renderTransform.ty);
 
+		var oldWidth = Math.ceil(__width);
+		var oldHeight = Math.ceil(__height);
+
 		// Mark dirty if render size changed
-		if (newWidth != __width || newHeight != __height)
+		if (newWidth != oldWidth || newHeight != oldHeight)
 		{
 			#if !openfl_disable_graphics_upscaling
 			__dirty = true;
 			#end
 		}
+
+		__width = newWidth;
+		__height = newHeight;
+	}
+	@:noCompletion private function __upScale(displayMatrix:Matrix, upScale:Int = 1):Void
+	{
+		if (__bounds == null || __bounds.width <= 0 || __bounds.height <= 0) return;
+
+		var parentTransform = __owner.__renderTransform;
+		var scaleX = 1.0, scaleY = 1.0;
+
+		if (parentTransform != null)
+		{
+			if (parentTransform.b == 0)
+			{
+				scaleX = Math.abs(parentTransform.a);
+			}
+			else
+			{
+				scaleX = Math.sqrt(parentTransform.a * parentTransform.a + parentTransform.b * parentTransform.b);
+			}
+
+			if (parentTransform.c == 0)
+			{
+				scaleY = Math.abs(parentTransform.d);
+			}
+			else
+			{
+				scaleY = Math.sqrt(parentTransform.c * parentTransform.c + parentTransform.d * parentTransform.d);
+			}
+		}
+		else
+		{
+			return;
+		}
+
+		if (displayMatrix != null)
+		{
+			if (displayMatrix.b == 0)
+			{
+				scaleX *= displayMatrix.a;
+			}
+			else
+			{
+				scaleX *= Math.sqrt(displayMatrix.a * displayMatrix.a + displayMatrix.b * displayMatrix.b);
+			}
+
+			if (displayMatrix.c == 0)
+			{
+				scaleY *= displayMatrix.d;
+			}
+			else
+			{
+				scaleY *= Math.sqrt(displayMatrix.c * displayMatrix.c + displayMatrix.d * displayMatrix.d);
+			}
+		}
+
+		scaleY *= upScale;
+		scaleX *= upScale;
+
+
+		var width = __bounds.width * scaleX;
+		var height = __bounds.height * scaleY;
+
+		if (width < 1 || height < 1)
+		{
+			if (__width >= 1 || __height >= 1) __dirty = true;
+			__width = 0;
+			__height = 0;
+			return;
+		}
+
+		if (maxTextureWidth != null && width > maxTextureWidth)
+		{
+			width = maxTextureWidth;
+			scaleX = maxTextureWidth / __bounds.width;
+		}
+
+		if (maxTextureWidth != null && height > maxTextureHeight)
+		{
+			height = maxTextureHeight;
+			scaleY = maxTextureHeight / __bounds.height;
+		}
+
+		__renderTransform.a = width / __bounds.width;
+		__renderTransform.d = height / __bounds.height;
+		var inverseA = (1 / __renderTransform.a);
+		var inverseD = (1 / __renderTransform.d);
+
+		// Inlined & simplified `__worldTransform.concat (parentTransform)` below:
+		__worldTransform.a = inverseA * parentTransform.a;
+		__worldTransform.b = inverseA * parentTransform.b;
+		__worldTransform.c = inverseD * parentTransform.c;
+		__worldTransform.d = inverseD * parentTransform.d;
+
+		var x = __bounds.x;
+		var y = __bounds.y;
+		var tx = x * parentTransform.a + y * parentTransform.c + parentTransform.tx;
+		var ty = x * parentTransform.b + y * parentTransform.d + parentTransform.ty;
+
+		// Floor the world position for crisp graphics rendering
+		__worldTransform.tx = Math.ffloor(tx);
+		__worldTransform.ty = Math.ffloor(ty);
+
+		// Offset the rendering with the subpixel offset removed by Math.floor above
+		__renderTransform.tx = __worldTransform.__transformInverseX(tx, ty);
+		__renderTransform.ty = __worldTransform.__transformInverseY(tx, ty);
+
+		// Calculate the size to contain the graphics and the extra subpixel
+		var newWidth = Math.ceil(width + __renderTransform.tx);
+		var newHeight = Math.ceil(height + __renderTransform.ty);
 
 		__width = newWidth;
 		__height = newHeight;
