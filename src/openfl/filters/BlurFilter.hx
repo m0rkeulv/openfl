@@ -121,13 +121,11 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 	@:noCompletion private static function __init__()
 	{
 		untyped Object.defineProperties(BlurFilter.prototype, {
-			"blurX": {get: untyped #if haxe4 js.Syntax.code #else __js__ #end ("function () { return this.get_blurX (); }"),
-				set: untyped #if haxe4 js.Syntax.code #else __js__ #end ("function (v) { return this.set_blurX (v); }")},
-			"blurY": {get: untyped #if haxe4 js.Syntax.code #else __js__ #end ("function () { return this.get_blurY (); }"),
-				set: untyped #if haxe4 js.Syntax.code #else __js__ #end ("function (v) { return this.set_blurY (v); }")},
+			"blurX": {get: untyped __js__("function () { return this.get_blurX (); }"), set: untyped __js__("function (v) { return this.set_blurX (v); }")},
+			"blurY": {get: untyped __js__("function () { return this.get_blurY (); }"), set: untyped __js__("function (v) { return this.set_blurY (v); }")},
 			"quality": {
-				get: untyped #if haxe4 js.Syntax.code #else __js__ #end ("function () { return this.get_quality (); }"),
-				set: untyped #if haxe4 js.Syntax.code #else __js__ #end ("function (v) { return this.set_quality (v); }")
+				get: untyped __js__("function () { return this.get_quality (); }"),
+				set: untyped __js__("function (v) { return this.set_quality (v); }")
 			},
 		});
 	}
@@ -190,10 +188,10 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 		return sourceBitmapData;
 	}
 
-	@:noCompletion private override function __initShader(renderer:DisplayObjectRenderer, pass:Int):Shader
+	@:noCompletion private override function __initShader(renderer:DisplayObjectRenderer, pass:Int, sourceBitmapData:BitmapData):Shader
 	{
 		#if !macro
-		if (pass <= __horizontalPasses)
+		if (pass < __horizontalPasses)
 		{
 			var scale = Math.pow(0.5, pass >> 1);
 			__blurShader.uRadius.value[0] = blurX * scale;
@@ -302,13 +300,13 @@ private class BlurShader extends BitmapFilterShader
 			gl_Position = openfl_Matrix * openfl_Position;
 
 			vec2 r = uRadius / uTextureSize;
-			vBlurCoords[0] = openfl_TextureCoord - r * 1.0;
+			vBlurCoords[0] = openfl_TextureCoord - r;
 			vBlurCoords[1] = openfl_TextureCoord - r * 0.75;
 			vBlurCoords[2] = openfl_TextureCoord - r * 0.5;
 			vBlurCoords[3] = openfl_TextureCoord;
 			vBlurCoords[4] = openfl_TextureCoord + r * 0.5;
 			vBlurCoords[5] = openfl_TextureCoord + r * 0.75;
-			vBlurCoords[6] = openfl_TextureCoord + r * 1.0;
+			vBlurCoords[6] = openfl_TextureCoord + r;
 
 		}")
 	public function new()
