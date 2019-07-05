@@ -2405,13 +2405,6 @@ class DisplayObject extends EventDispatcher implements IBitmapDrawable #if (open
 								bitmap2 = cacheBitmap;
 							}
 
-							if (filter.__preserveObject && filter.__drawPreservedObject)
-							{
-								childRenderer.__setBlendMode(NORMAL);
-								childRenderer.__setRenderTarget(bitmap);
-								childRenderer.__renderFilterPass(bitmap3, childRenderer.__defaultDisplayShader, filter.__smooth, false);
-							}
-
 							filter.__renderDirty = false;
 						}
 
