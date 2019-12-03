@@ -2040,7 +2040,7 @@ class TextField extends InteractiveObject
 	@:noCompletion private override function __renderCairo(renderer:CairoRenderer):Void
 	{
 		#if lime_cairo
-		__updateCacheBitmap(renderer, /*!__worldColorTransform.__isDefault ()*/ false);
+		__updateCacheBitmap(renderer, __dirty);
 
 		if (__cacheBitmap != null && !__isCacheBitmapRender)
 		{
@@ -2082,7 +2082,7 @@ class TextField extends InteractiveObject
 
 		if (mask == null || (mask.width > 0 && mask.height > 0))
 		{
-			__updateCacheBitmap(renderer, /*!__worldColorTransform.__isDefault ()*/ false);
+			__updateCacheBitmap(renderer, __dirty);
 
 			if (__cacheBitmap != null && !__isCacheBitmapRender)
 			{
