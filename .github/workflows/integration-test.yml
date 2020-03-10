@@ -49,8 +49,10 @@ jobs:
         haxelib run openfl setup -alias -y
 
     - name: Run integration tests
-      run: |
-        hxp integration-test hl
+      uses: GabrielBB/xvfb-action@v1.0
+      with:
+        run: |
+          hxp integration-test hl
 
     - name: Notify Discord (success)
       uses: appleboy/discord-action@master
