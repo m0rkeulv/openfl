@@ -21,8 +21,7 @@ jobs:
         mkdir $GITHUB_WORKSPACE/.haxelib
         haxelib setup $GITHUB_WORKSPACE/.haxelib
         haxelib dev openfl $GITHUB_WORKSPACE
-        whoami
-        sudo useradd -G sound 
+        sudo useradd -G audio runner
 
     - name: Install Hashlink
       run: |
