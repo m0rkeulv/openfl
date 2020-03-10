@@ -21,7 +21,6 @@ jobs:
         mkdir $GITHUB_WORKSPACE/.haxelib
         haxelib setup $GITHUB_WORKSPACE/.haxelib
         haxelib dev openfl $GITHUB_WORKSPACE
-        sudo apt-get install xvfb
 
     - name: Install Hashlink
       run: |
@@ -108,7 +107,7 @@ jobs:
 
     - name: Run integration tests
       run: |
-       xvfb-run hxp integration-test linux -32
+       hxp integration-test linux -32
 
     - name: Notify Discord (success)
       uses: appleboy/discord-action@master
