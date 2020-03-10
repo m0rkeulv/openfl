@@ -40,7 +40,7 @@ jobs:
 
     - name: Run integration tests
       run: |
-        hxp integration-test hashlink
+        hxp integration-test hl
 
     - name: Notify Discord (success)
       uses: appleboy/discord-action@master
