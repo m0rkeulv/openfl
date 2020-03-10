@@ -22,7 +22,7 @@ jobs:
         haxelib setup $GITHUB_WORKSPACE/.haxelib
         haxelib dev openfl $GITHUB_WORKSPACE
         sudo apt-get install alsa
-        sudo aplay -l
+        sudo modprobe snd-dummy ; modprobe snd-pcm-oss ; modprobe snd-mixer-oss ; modprobe snd-seq-oss
         
 
     - name: Install Hashlink
