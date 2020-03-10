@@ -106,7 +106,7 @@ jobs:
 
     - name: Run integration tests
       run: |
-        hxp integration-test linux -32
+       xvfb-run hxp integration-test linux -32
 
     - name: Notify Discord (success)
       uses: appleboy/discord-action@master
