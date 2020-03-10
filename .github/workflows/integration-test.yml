@@ -6,7 +6,7 @@ jobs:
 
   lime-hashlink:
     name: "Lime / Hashlink"
-    runs-on: ubuntu-18.04
+    runs-on: ubuntu-19.04
 
     steps:
     - uses: actions/checkout@v1
@@ -21,9 +21,6 @@ jobs:
         mkdir $GITHUB_WORKSPACE/.haxelib
         haxelib setup $GITHUB_WORKSPACE/.haxelib
         haxelib dev openfl $GITHUB_WORKSPACE
-        sudo apt-get install alsa
-        sudo modprobe snd-dummy ; modprobe snd-pcm-oss ; modprobe snd-mixer-oss ; modprobe snd-seq-oss
-        
 
     - name: Install Hashlink
       run: |
