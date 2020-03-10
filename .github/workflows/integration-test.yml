@@ -28,7 +28,8 @@ jobs:
         git clone --branch 1.10 https://github.com/HaxeFoundation/hashlink.git
         cd $GITHUB_WORKSPACE/hashlink
         sudo make
-        sudo make install
+        sudo make INSTALL_DIR=/usr install
+        
         
     - name: Install dependencies
       run: |
