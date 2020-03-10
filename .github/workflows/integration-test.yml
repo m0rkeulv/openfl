@@ -22,6 +22,14 @@ jobs:
         haxelib setup $GITHUB_WORKSPACE/.haxelib
         haxelib dev openfl $GITHUB_WORKSPACE
 
+    - name: Install Hashlink
+      run: |
+        sudo apt-get install libpng-dev libturbojpeg-dev libvorbis-dev libopenal-dev libsdl2-dev libmbedtls-dev libuv1-dev
+        git clone --branch 1.10 https://github.com/HaxeFoundation/hashlink.git
+        cd $GITHUB_WORKSPACE/hashlink
+        make
+        make install
+        
     - name: Install dependencies
       run: |
         haxelib install lime > /dev/null
