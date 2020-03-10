@@ -27,8 +27,8 @@ jobs:
         sudo apt-get install libpng-dev libturbojpeg-dev libvorbis-dev libopenal-dev libsdl2-dev libmbedtls-dev libuv1-dev
         git clone --branch 1.10 https://github.com/HaxeFoundation/hashlink.git
         cd $GITHUB_WORKSPACE/hashlink
-        make
-        make install
+        sudo make
+        sudo make install
         
     - name: Install dependencies
       run: |
