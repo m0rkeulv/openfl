@@ -1145,25 +1145,27 @@ class Stage extends DisplayObjectContainer #if lime implements IModule #end
 		{
 			var dispatchers = DisplayObject.__broadcastEvents.get(event.type);
 
-			for (dispatcher in dispatchers)
+			for (dispatcherRef in dispatchers)
 			{
 				// TODO: Way to resolve dispatching occurring if object not on stage
 				// and there are multiple stage objects running in HTML5?
-
-				if (dispatcher.stage == this || dispatcher.stage == null)
-				{
-					#if !openfl_disable_handle_error
-					try
+				if(dispatcherRef.get() != null) {
+					var dispatcher = dispatcherRef.get();
+					if (dispatcher.stage == this || dispatcher.stage == null)
 					{
+						#if !openfl_disable_handle_error
+						try
+						{
+							dispatcher.__dispatch(event);
+						}
+						catch (e:Dynamic)
+						{
+							__handleError(e);
+						}
+						#else
 						dispatcher.__dispatch(event);
+						#end
 					}
-					catch (e:Dynamic)
-					{
-						__handleError(e);
-					}
-					#else
-					dispatcher.__dispatch(event);
-					#end
 				}
 			}
 		}

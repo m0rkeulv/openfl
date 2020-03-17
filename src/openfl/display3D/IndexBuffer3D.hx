@@ -54,6 +54,7 @@ import openfl.Vector;
 	{
 		var gl = __context.gl;
 		gl.deleteBuffer(__id);
+		__id = null;
 	}
 
 	/**

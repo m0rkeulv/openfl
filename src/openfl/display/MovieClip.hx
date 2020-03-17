@@ -2,6 +2,7 @@ package openfl.display;
 
 #if !flash
 // TODO: Force keeping of SWF symbols a different way?
+import openfl._internal.utils.ObjectPool;
 import openfl._internal.formats.swf.SWFLite;
 import openfl._internal.symbols.BitmapSymbol;
 import openfl._internal.symbols.ButtonSymbol;
@@ -74,6 +75,9 @@ import hscript.Parser;
 @:access(openfl.geom.ColorTransform)
 class MovieClip extends Sprite #if (openfl_dynamic && haxe_ver < "4.0.0") implements Dynamic<DisplayObject> #end
 {
+
+	@:noCompletion private static var __mapPool:ObjectPool<Map<Int, FrameSymbolInstance>> = new ObjectPool<Map<Int, FrameSymbolInstance>>(function() return new Map<Int, FrameSymbolInstance>(), function(map) map.clear());
+	
 	@:noCompletion private static var __initSWF:SWFLite;
 	@:noCompletion private static var __initSymbol:SpriteSymbol;
 	#if openfljs
@@ -402,7 +406,7 @@ class MovieClip extends Sprite #if (openfl_dynamic && haxe_ver < "4.0.0") implem
 		{
 			__updateFrameLabel();
 
-			var currentInstancesByFrameObjectID = new Map<Int, FrameSymbolInstance>();
+			var currentInstancesByFrameObjectID = __mapPool.get();
 
 			var frame:Int;
 			var frameData:Frame;
@@ -461,6 +465,8 @@ class MovieClip extends Sprite #if (openfl_dynamic && haxe_ver < "4.0.0") implem
 					}
 				}
 			}
+
+			__mapPool.release(currentInstancesByFrameObjectID);
 
 			currentInstances.sort(__sortDepths);
 

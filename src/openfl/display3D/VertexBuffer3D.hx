@@ -82,6 +82,7 @@ class VertexBuffer3D
 	{
 		var gl = __context.gl;
 		gl.deleteBuffer(__id);
+		__id = null;
 	}
 
 	/**

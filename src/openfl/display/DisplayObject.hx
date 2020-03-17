@@ -1,6 +1,7 @@
 package openfl.display;
 
 #if !flash
+import openfl.utils.WeakRefrence;
 import openfl._internal.renderer.cairo.CairoBitmap;
 import openfl._internal.renderer.cairo.CairoDisplayObject;
 import openfl._internal.renderer.cairo.CairoGraphics;
@@ -190,9 +191,10 @@ import js.html.CSSStyleDeclaration;
 @:access(openfl.geom.ColorTransform)
 @:access(openfl.geom.Matrix)
 @:access(openfl.geom.Rectangle)
+@:access(openfl.geom.Transform)
 class DisplayObject extends EventDispatcher implements IBitmapDrawable #if (openfl_dynamic && haxe_ver < "4.0.0") implements Dynamic<DisplayObject> #end
 {
-	@:noCompletion private static var __broadcastEvents:Map<String, Array<DisplayObject>> = new Map();
+	@:noCompletion private static var __broadcastEvents:Map<String, Array<WeakRefrence<DisplayObject>>> = new Map();
 	@:noCompletion private static var __initStage:Stage;
 	@:noCompletion private static var __instanceCount:Int = 0;
 
@@ -1101,11 +1103,19 @@ class DisplayObject extends EventDispatcher implements IBitmapDrawable #if (open
 					__broadcastEvents.set(type, []);
 				}
 
+				__broadcastEvents.set(type, __broadcastEvents.get(type).filter(function(e) return e.get() != null));
 				var dispatchers = __broadcastEvents.get(type);
-
-				if (dispatchers.indexOf(this) == -1)
+				var found = false;
+				
+				for(refrence in dispatchers) {
+					if (this == refrence.get()) {
+						found = true;
+						break;
+					}
+				}
+				if (!found)
 				{
-					dispatchers.push(this);
+					dispatchers.push(new WeakRefrence(this, useWeakReference));
 				}
 
 			case RenderEvent.CLEAR_DOM, RenderEvent.RENDER_CAIRO, RenderEvent.RENDER_CANVAS, RenderEvent.RENDER_DOM, RenderEvent.RENDER_OPENGL:
@@ -1345,7 +1355,8 @@ class DisplayObject extends EventDispatcher implements IBitmapDrawable #if (open
 				{
 					if (__broadcastEvents.exists(type))
 					{
-						__broadcastEvents.get(type).remove(this);
+						var dispatchers = __broadcastEvents.get(type);
+						__broadcastEvents.set(type, dispatchers.filter(function(e) return e.get() != null && e.get() != this));
 					}
 				}
 
@@ -3003,7 +3014,11 @@ class DisplayObject extends EventDispatcher implements IBitmapDrawable #if (open
 		}
 
 		__setTransformDirty();
-		__objectTransform.matrix = value.matrix;
+		
+		if(value.__hasMatrix) 
+		{
+			__objectTransform.__copyMatrix(value.__displayObject.__transform);
+		}
 
 		if (!__objectTransform.colorTransform.__equals(value.colorTransform, true)
 			|| (!cacheAsBitmap && __objectTransform.colorTransform.alphaMultiplier != value.colorTransform.alphaMultiplier))
