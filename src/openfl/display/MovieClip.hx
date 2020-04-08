@@ -75,6 +75,8 @@ import hscript.Parser;
 @:access(openfl.geom.ColorTransform)
 class MovieClip extends Sprite #if (openfl_dynamic && haxe_ver < "4.0.0") implements Dynamic<DisplayObject> #end
 {
+	@:noCompletion private static var __movieclipInstances = Type.getInstanceFields(MovieClip);
+	@:noCompletion private static var __instanceFieldCache =new Map<String, Array<String>>();
 
 	@:noCompletion private static var __mapPool:ObjectPool<Map<Int, FrameSymbolInstance>> = new ObjectPool<Map<Int, FrameSymbolInstance>>(function() return new Map<Int, FrameSymbolInstance>(), function(map) map.clear());
 	
@@ -809,7 +811,25 @@ class MovieClip extends Sprite #if (openfl_dynamic && haxe_ver < "4.0.0") implem
 		__enterFrame(0);
 
 		#if (!openfljs && (!openfl_dynamic || haxe_ver >= "4.0.0"))
-		__instanceFields = Type.getInstanceFields(Type.getClass(this));
+		var myClass = Type.getClass(this);
+		var myClassName = Type.getClassName(myClass);
+
+		// skip anything that are plain movieCLips
+		if ("openfl.display.MovieClip" == myClassName) return;
+
+		if (!__instanceFieldCache.exists(myClassName)) {
+//			__instanceFields = Type.getInstanceFields(myClass);
+			var tmp = Type.getInstanceFields(myClass);
+			__instanceFields.resize(tmp.length -tmp.length);
+			var i = 0;
+            for(s in tmp) {
+                if (__movieclipInstances.indexOf(s) == -1)__instanceFields[i++] =s;
+            }
+			__instanceFieldCache.set(myClassName, __instanceFields);
+
+		}else {
+			__instanceFields = __instanceFieldCache.get(myClassName);
+		}
 		__updateInstanceFields();
 		#end
 	}
