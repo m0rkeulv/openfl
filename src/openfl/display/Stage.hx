@@ -1627,6 +1627,7 @@ class Stage extends DisplayObjectContainer #if lime implements IModule #end
 						if (focus == nextObject) nextObject = null;
 					}
 
+					var cancelTab = nextIndex >= 0 && nextIndex < tabStack.length;
 					if (tabStack.length == 1 || tabStack.length == 0 && focus != null)
 					{
 						nextIndex = 0;
@@ -1672,6 +1673,12 @@ class Stage extends DisplayObjectContainer #if lime implements IModule #end
 					{
 						__currentTabOrderIndex = nextIndex;
 						if (nextObject != null) focus = nextObject;
+						if (cancelTab)
+						{
+							// ensure that the html5 target does not lose focus
+							// to the browser every time that tab is pressed
+							window.onKeyDown.cancel();
+						}
 
 						// TODO: handle border around focus
 					}
