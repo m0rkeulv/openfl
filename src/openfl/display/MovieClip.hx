@@ -2,6 +2,7 @@ package openfl.display;
 
 #if !flash
 // TODO: Force keeping of SWF symbols a different way?
+import openfl.display.InstanceFieldsCache;
 import openfl._internal.formats.swf.SWFLite;
 import openfl._internal.symbols.BitmapSymbol;
 import openfl._internal.symbols.ButtonSymbol;
@@ -76,6 +77,7 @@ class MovieClip extends Sprite #if (openfl_dynamic && haxe_ver < "4.0.0") implem
 {
 	@:noCompletion private static var __initSWF:SWFLite;
 	@:noCompletion private static var __initSymbol:SpriteSymbol;
+	@:noCompletion private static var __InstanceFieldCache:Map<String,Array<String>> = new Map();
 	#if openfljs
 	@:noCompletion private static var __useParentFPS:Bool;
 	#else
@@ -805,10 +807,12 @@ class MovieClip extends Sprite #if (openfl_dynamic && haxe_ver < "4.0.0") implem
 		__enterFrame(0);
 
 		#if (!openfljs && (!openfl_dynamic || haxe_ver >= "4.0.0"))
-		__instanceFields = Type.getInstanceFields(Type.getClass(this));
+		__instanceFields  = InstanceFieldsCache.getInstanceFields(this);
 		__updateInstanceFields();
 		#end
 	}
+
+
 
 	@:noCompletion private function __getNextFrame(deltaTime:Int):Int
 	{
@@ -982,6 +986,7 @@ class MovieClip extends Sprite #if (openfl_dynamic && haxe_ver < "4.0.0") implem
 			}
 		}
 	}
+
 
 	@:noCompletion private function __updateInstanceFields():Void
 	{
