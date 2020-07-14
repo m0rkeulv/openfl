@@ -1487,6 +1487,33 @@ class Stage extends DisplayObjectContainer #if lime implements IModule #end
 			var keyCode = Keyboard.__convertKeyCode(keyCode);
 			var charCode = Keyboard.__getCharCode(keyCode, modifier.shiftKey);
 
+			if (type == KeyboardEvent.KEY_UP && (keyCode == Keyboard.SPACE || keyCode == Keyboard.ENTER) && Std.is(__focus, Sprite))
+			{
+				var sprite = cast(__focus, Sprite);
+				if (sprite.buttonMode && sprite.focusRect == true)
+				{
+					var localPoint = Point.__pool.get();
+					var targetPoint = Point.__pool.get();
+					targetPoint.x = __mouseX;
+					targetPoint.y = __mouseY;
+
+					#if openfl_pool_events
+					var clickEvent = MouseEvent.__pool.get(MouseEvent.CLICK, __mouseX, __mouseY, sprite.__globalToLocal(targetPoint, localPoint), sprite);
+					#else
+					var clickEvent = MouseEvent.__create(MouseEvent.CLICK, 0, __mouseX, __mouseY, sprite.__globalToLocal(targetPoint, localPoint), sprite);
+					#end
+
+					__dispatchStack(clickEvent, stack);
+
+					#if openfl_pool_events
+					MouseEvent.__pool.release(clickEvent);
+					#end
+
+					Point.__pool.release(targetPoint);
+					Point.__pool.release(localPoint);
+				}
+			}
+
 			// Flash Player events are not cancelable, should we make only some events (like APP_CONTROL_BACK) cancelable?
 
 			var event = new KeyboardEvent(type, true, true, charCode, keyCode, keyLocation,
@@ -1526,15 +1553,10 @@ class Stage extends DisplayObjectContainer #if lime implements IModule #end
 							return a.tabIndex - b.tabIndex;
 						});
 
-						if (tabStack[tabStack.length - 1].tabIndex == -1)
+						if (tabStack[tabStack.length - 1].tabIndex != -1)
 						{
-							// all tabIndices are equal to -1
-							if (focus != null) nextIndex = 0;
-							else
-								nextIndex = __currentTabOrderIndex;
-						}
-						else
-						{
+							// if some tabIndices aren't equal to -1, remove all
+							// of the ones that are
 							var i = 0;
 							while (i < tabStack.length)
 							{
@@ -1546,19 +1568,57 @@ class Stage extends DisplayObjectContainer #if lime implements IModule #end
 
 								i++;
 							}
+						}
 
-							if (focus != null)
-							{
-								var index = tabStack.indexOf(focus);
-
-								if (index < 0) nextIndex = 0;
-								else
-									nextIndex = index + nextOffset;
+						if (focus != null)
+						{
+							var current = focus;
+							var index = tabStack.indexOf(current);
+							while (index == -1 && current != null) {
+								// if the current focus is not in the tab stack,
+								// try to find the nearest object in the display
+								// list that is in the stack
+								var currentParent = current.parent;
+								if (currentParent != null && currentParent.tabChildren)
+								{
+									var currentIndex = currentParent.getChildIndex(current);
+									if (currentIndex == -1)
+									{
+										current = currentParent;
+										continue;
+									}
+									var i = currentIndex + nextOffset;
+									while(modifier.shiftKey ? (i >= 0) : (i < currentParent.numChildren))
+									{
+										var sibling = currentParent.getChildAt(i);
+										if (Std.is(sibling, InteractiveObject))
+										{
+											var interactiveSibling = cast(sibling, InteractiveObject);
+											index = tabStack.indexOf(interactiveSibling);
+											if (index != -1)
+											{
+												nextOffset = 0;
+												break;
+											}
+										}
+										i += nextOffset;
+									}
+								}
+								else if (modifier.shiftKey)
+								{
+									index = tabStack.indexOf(currentParent);
+									if (index != -1) nextOffset = 0;
+								}
+								current = currentParent;
 							}
+
+							if (index < 0) nextIndex = 0;
 							else
-							{
-								nextIndex = __currentTabOrderIndex;
-							}
+								nextIndex = index + nextOffset;
+						}
+						else
+						{
+							nextIndex = __currentTabOrderIndex;
 						}
 					}
 					else if (tabStack.length == 1)
@@ -1568,6 +1628,7 @@ class Stage extends DisplayObjectContainer #if lime implements IModule #end
 						if (focus == nextObject) nextObject = null;
 					}
 
+					var cancelTab = nextIndex >= 0 && nextIndex < tabStack.length;
 					if (tabStack.length == 1 || tabStack.length == 0 && focus != null)
 					{
 						nextIndex = 0;
@@ -1602,12 +1663,23 @@ class Stage extends DisplayObjectContainer #if lime implements IModule #end
 						stack.reverse();
 
 						__dispatchStack(focusEvent, stack);
+
+						if (focusEvent.isDefaultPrevented())
+						{
+							window.onKeyDown.cancel();
+						}
 					}
 
 					if (focusEvent == null || !focusEvent.isDefaultPrevented())
 					{
 						__currentTabOrderIndex = nextIndex;
 						if (nextObject != null) focus = nextObject;
+						if (cancelTab)
+						{
+							// ensure that the html5 target does not lose focus
+							// to the browser every time that tab is pressed
+							window.onKeyDown.cancel();
+						}
 
 						// TODO: handle border around focus
 					}
@@ -2043,28 +2115,29 @@ class Stage extends DisplayObjectContainer #if lime implements IModule #end
 	@:noCompletion private function __onLimeTouchCancel(touch:Touch):Void
 	{
 		// TODO: Should we handle this differently?
-
-		if (__primaryTouch == touch)
+		var isPrimaryTouchPoint = __primaryTouch == touch;
+		if (isPrimaryTouchPoint)
 		{
 			__primaryTouch = null;
 		}
 
-		__onTouch(TouchEvent.TOUCH_END, touch);
+		__onTouch(TouchEvent.TOUCH_END, touch, isPrimaryTouchPoint);
 	}
 
 	@:noCompletion private function __onLimeTouchMove(touch:Touch):Void
 	{
-		__onTouch(TouchEvent.TOUCH_MOVE, touch);
+		__onTouch(TouchEvent.TOUCH_MOVE, touch, __primaryTouch == touch);
 	}
 
 	@:noCompletion private function __onLimeTouchEnd(touch:Touch):Void
 	{
-		if (__primaryTouch == touch)
+		var isPrimaryTouchPoint = __primaryTouch == touch;
+		if (isPrimaryTouchPoint)
 		{
 			__primaryTouch = null;
 		}
 
-		__onTouch(TouchEvent.TOUCH_END, touch);
+		__onTouch(TouchEvent.TOUCH_END, touch, isPrimaryTouchPoint);
 	}
 
 	@:noCompletion private function __onLimeTouchStart(touch:Touch):Void
@@ -2074,7 +2147,7 @@ class Stage extends DisplayObjectContainer #if lime implements IModule #end
 			__primaryTouch = touch;
 		}
 
-		__onTouch(TouchEvent.TOUCH_BEGIN, touch);
+		__onTouch(TouchEvent.TOUCH_BEGIN, touch, __primaryTouch == touch);
 	}
 
 	@:noCompletion private function __onLimeUpdate(deltaTime:Int):Void
@@ -2655,7 +2728,7 @@ class Stage extends DisplayObjectContainer #if lime implements IModule #end
 	#end
 
 	#if lime
-	@:noCompletion private function __onTouch(type:String, touch:Touch):Void
+	@:noCompletion private function __onTouch(type:String, touch:Touch, isPrimaryTouchPoint:Bool):Void
 	{
 		var targetPoint = Point.__pool.get();
 		targetPoint.setTo(Math.round(touch.x * window.width * window.scale), Math.round(touch.y * window.height * window.scale));
@@ -2715,7 +2788,6 @@ class Stage extends DisplayObjectContainer #if lime implements IModule #end
 		}
 
 		var localPoint = Point.__pool.get();
-		var isPrimaryTouchPoint:Bool = (__primaryTouch == touch);
 		var touchEvent = TouchEvent.__create(type, null, touchX, touchY, target.__globalToLocal(targetPoint, localPoint), cast target);
 		touchEvent.touchPointID = touchId;
 		touchEvent.isPrimaryTouchPoint = isPrimaryTouchPoint;

@@ -1625,13 +1625,13 @@ import js.html.CanvasRenderingContext2D;
 		return graphicsData;
 	}
 
-	@:noCompletion private function __calculateBezierCubicPoint(t:Float, p1:Float, p2:Float, p3:Float, p4:Float):Float
+	@:noCompletion private #if !js inline #end function __calculateBezierCubicPoint(t:Float, p1:Float, p2:Float, p3:Float, p4:Float):Float
 	{
 		var iT = 1 - t;
 		return p1 * (iT * iT * iT) + 3 * p2 * t * (iT * iT) + 3 * p3 * iT * (t * t) + p4 * (t * t * t);
 	}
 
-	@:noCompletion private function __calculateBezierQuadPoint(t:Float, p1:Float, p2:Float, p3:Float):Float
+	@:noCompletion private #if !js inline #end function __calculateBezierQuadPoint(t:Float, p1:Float, p2:Float, p3:Float):Float
 	{
 		var iT = 1 - t;
 		return iT * iT * p1 + 2 * iT * t * p2 + t * t * p3;
@@ -1939,10 +1939,10 @@ import js.html.CanvasRenderingContext2D;
 		var ty = x * parentTransform.b + y * parentTransform.d + parentTransform.ty;
 
 		// Floor the world position for crisp graphics rendering
-		__worldTransform.tx = Math.ffloor(tx);
-		__worldTransform.ty = Math.ffloor(ty);
+		__worldTransform.tx = Math.fround(tx);
+		__worldTransform.ty = Math.fround(ty);
 
-		// Offset the rendering with the subpixel offset removed by Math.floor above
+		// Offset the rendering with the subpixel offset removed by Math.round above
 		__renderTransform.tx = __worldTransform.__transformInverseX(tx, ty);
 		__renderTransform.ty = __worldTransform.__transformInverseY(tx, ty);
 
