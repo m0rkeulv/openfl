@@ -43,6 +43,7 @@ package openfl.events;
 					  information about broadcast events, see the DisplayObject
 					  class.
 **/
+import openfl.utils.ReferenceProxy;
 #if !openfl_debug
 @:fileXml('tags="haxe,release"')
 @:noDebug
@@ -187,7 +188,7 @@ class EventDispatcher implements IEventDispatcher
 		if (!__eventMap.exists(type))
 		{
 			var list = new Array<Listener>();
-			list.push(new Listener(listener, useCapture, priority));
+			list.push(new Listener(listener, useCapture, priority, useWeakReference));
 
 			var iterator = new DispatchIterator(list);
 
@@ -213,7 +214,7 @@ class EventDispatcher implements IEventDispatcher
 				}
 			}
 
-			__addListenerByPriority(list, new Listener(listener, useCapture, priority));
+			__addListenerByPriority(list, new Listener(listener, useCapture, priority, useWeakReference));
 		}
 	}
 
@@ -394,12 +395,12 @@ class EventDispatcher implements IEventDispatcher
 
 		for (listener in iterator)
 		{
-			if (listener == null) continue;
+			if (listener == null || listener.callback.get() == null) continue;
 
 			if (listener.useCapture == capture)
 			{
 				// listener.callback (event.clone ());
-				listener.callback(event);
+				listener.callback.get()(event);
 
 				if (event.__isCanceledNow)
 				{
@@ -536,13 +537,13 @@ class EventDispatcher implements IEventDispatcher
 @SuppressWarnings("checkstyle:FieldDocComment")
 private class Listener
 {
-	public var callback:Dynamic->Void;
+	public var callback:ReferenceProxy<Dynamic->Void>;
 	public var priority:Int;
 	public var useCapture:Bool;
 
-	public function new(callback:Dynamic->Void, useCapture:Bool, priority:Int)
+	public function new(callback:Dynamic->Void, useCapture:Bool, priority:Int, useWeakReference:Bool = false)
 	{
-		this.callback = callback;
+		this.callback = new ReferenceProxy(callback, useWeakReference);
 		this.useCapture = useCapture;
 		this.priority = priority;
 	}
@@ -550,9 +551,9 @@ private class Listener
 	public function match(callback:Dynamic->Void, useCapture:Bool):Bool
 	{
 		#if hl // https://github.com/HaxeFoundation/hashlink/issues/301
-		return ((Reflect.compareMethods(this.callback, callback) || Reflect.compare(this.callback, callback) == 0) && this.useCapture == useCapture);
+		return ((Reflect.compareMethods(this.callback.get(), callback) || Reflect.compare(this.callback.get(), callback) == 0) && this.useCapture == useCapture);
 		#else
-		return (Reflect.compareMethods(this.callback, callback) && this.useCapture == useCapture);
+		return (Reflect.compareMethods(this.callback.get(), callback) && this.useCapture == useCapture);
 		#end
 	}
 }

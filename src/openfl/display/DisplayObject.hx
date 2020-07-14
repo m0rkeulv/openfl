@@ -31,6 +31,7 @@ import openfl.geom.Rectangle;
 import openfl.geom.Transform;
 import openfl.ui.MouseCursor;
 import openfl.Vector;
+import openfl.utils.ReferenceProxy;
 #if lime
 import lime._internal.graphics.ImageCanvasUtil; // TODO
 import lime.graphics.cairo.Cairo;
@@ -193,7 +194,7 @@ import js.html.CSSStyleDeclaration;
 @:access(openfl.geom.Transform)
 class DisplayObject extends EventDispatcher implements IBitmapDrawable #if (openfl_dynamic && haxe_ver < "4.0.0") implements Dynamic<DisplayObject> #end
 {
-	@:noCompletion private static var __broadcastEvents:Map<String, Array<DisplayObject>> = new Map();
+	@:noCompletion private static var __broadcastEvents:Map<String, Array<ReferenceProxy<DisplayObject>>> = new Map();
 	@:noCompletion private static var __initStage:Stage;
 	@:noCompletion private static var __instanceCount:Int = 0;
 
@@ -1090,6 +1091,23 @@ class DisplayObject extends EventDispatcher implements IBitmapDrawable #if (open
 		}
 	}
 
+	private function removeDeadReferencesForType(type:EventType<Dynamic>)
+	{
+		__broadcastEvents.set(type, __broadcastEvents.get(type).filter(function(e) return e.get() != null));
+	}
+
+	private function noBroadcastEventReferenceFor(ref:Any, type:EventType<Dynamic>):Bool
+	{
+		for(proxy in __broadcastEvents.get(type))
+		{
+			if (ref == proxy.get())
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
 	@SuppressWarnings("checkstyle:Dynamic")
 	public override function addEventListener<T>(type:EventType<T>, listener:T->Void, useCapture:Bool = false, priority:Int = 0,
 			useWeakReference:Bool = false):Void
@@ -1102,11 +1120,11 @@ class DisplayObject extends EventDispatcher implements IBitmapDrawable #if (open
 					__broadcastEvents.set(type, []);
 				}
 
-				var dispatchers = __broadcastEvents.get(type);
+				removeDeadReferencesForType(type);
 
-				if (dispatchers.indexOf(this) == -1)
+				if (noBroadcastEventReferenceFor(this, type))
 				{
-					dispatchers.push(this);
+					__broadcastEvents.get(type).push(new ReferenceProxy(this, useWeakReference));
 				}
 
 			case RenderEvent.CLEAR_DOM, RenderEvent.RENDER_CAIRO, RenderEvent.RENDER_CANVAS, RenderEvent.RENDER_DOM, RenderEvent.RENDER_OPENGL:
@@ -1346,7 +1364,8 @@ class DisplayObject extends EventDispatcher implements IBitmapDrawable #if (open
 				{
 					if (__broadcastEvents.exists(type))
 					{
-						__broadcastEvents.get(type).remove(this);
+						var dispatchers = __broadcastEvents.get(type);
+						__broadcastEvents.set(type, dispatchers.filter(function(e) return e.get() != null && e.get() != this));
 					}
 				}
 
