@@ -1,5 +1,7 @@
 package openfl._internal.symbols;
 
+import haxe.Serializer;
+import haxe.Unserializer;
 import openfl._internal.formats.swf.SWFLite;
 import openfl.display.CapsStyle;
 import openfl.display.JointStyle;
@@ -115,6 +117,26 @@ class StaticTextSymbol extends SWFSymbol
 
 		return staticText;
 	}
+
+	@:keep
+	override function hxSerialize(s:Serializer) {
+		s.serialize(matrix);
+		s.serialize(records);
+		s.serialize(rendered);
+		super.hxSerialize(s);
+
+	}
+
+	@:keep
+	override function hxUnserialize(u:Unserializer) {
+
+		matrix = u.unserialize();
+		records = u.unserialize();
+		rendered = u.unserialize();
+		super.hxUnserialize(u);
+
+	}
+
 }
 
 @:keep class StaticTextRecord
@@ -128,4 +150,29 @@ class StaticTextSymbol extends SWFSymbol
 	public var offsetY:Null<Int>;
 
 	public function new() {}
+
+	@:keep
+	function hxSerialize(s:Serializer) {
+		s.serialize(advances);
+		s.serialize(color);
+		s.serialize(fontHeight);
+		s.serialize(fontID);
+		s.serialize(glyphs);
+		s.serialize(offsetX);
+		s.serialize(offsetY);
+	}
+
+	@:keep
+	function hxUnserialize(u:Unserializer) {
+
+		advances =  u.unserialize();
+		color =  u.unserialize();
+		fontHeight =  u.unserialize();
+		fontID =  u.unserialize();
+		glyphs =  u.unserialize();
+		offsetX =  u.unserialize();
+		offsetY =  u.unserialize();
+
+	}
+
 }

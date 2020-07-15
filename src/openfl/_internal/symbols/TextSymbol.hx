@@ -1,6 +1,8 @@
 package openfl._internal.symbols;
 
 #if !openfl_debug
+import haxe.Serializer;
+import haxe.Unserializer;
 @:fileXml('tags="haxe,release"')
 @:noDebug
 #end
@@ -22,4 +24,38 @@ class TextSymbol extends SWFSymbol
 	{
 		super();
 	}
+
+	@:keep
+	override function hxSerialize(s:Serializer) {
+		s.serialize(border);
+		s.serialize(color);
+		s.serialize(fontHeight);
+		s.serialize(fontID);
+		s.serialize(height);
+		s.serialize(multiline);
+		s.serialize(password);
+		s.serialize(selectable);
+		s.serialize(text);
+		s.serialize(width);
+		s.serialize(wordWrap);
+		super.hxSerialize(s);
+	}
+
+	@:keep
+	override function hxUnserialize(u:Unserializer) {
+
+		border = u.unserialize();
+		color = u.unserialize();
+		fontHeight = u.unserialize();
+		fontID = u.unserialize();
+		height = u.unserialize();
+		multiline = u.unserialize();
+		password = u.unserialize();
+		selectable = u.unserialize();
+		text = u.unserialize();
+		width = u.unserialize();
+		wordWrap = u.unserialize();
+		super.hxUnserialize(u);
+	}
+
 }

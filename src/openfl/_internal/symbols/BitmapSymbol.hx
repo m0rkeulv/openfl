@@ -1,5 +1,7 @@
 package openfl._internal.symbols;
 
+import haxe.Unserializer;
+import haxe.Serializer;
 import openfl._internal.formats.swf.SWFLite;
 import openfl.display.Bitmap;
 import openfl.display.BitmapData;
@@ -28,4 +30,22 @@ class BitmapSymbol extends SWFSymbol
 		return null;
 		#end
 	}
+
+	@:keep
+	override function hxSerialize(s:Serializer) {
+		s.serialize(alpha);
+		s.serialize(path);
+		s.serialize(smooth);
+		super.hxSerialize(s);
+	}
+
+	@:keep
+	override function hxUnserialize(u:Unserializer) {
+
+		alpha = u.unserialize();
+		path = u.unserialize();
+		smooth = u.unserialize();
+		super.hxUnserialize(u);
+	}
+
 }

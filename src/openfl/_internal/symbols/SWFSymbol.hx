@@ -1,5 +1,7 @@
 package openfl._internal.symbols;
 
+import haxe.Unserializer;
+import haxe.Serializer;
 import openfl._internal.formats.swf.SWFLite;
 import openfl.display.DisplayObject;
 
@@ -17,5 +19,21 @@ import openfl.display.DisplayObject;
 	private function __createObject(swf:SWFLite):DisplayObject
 	{
 		return null;
+	}
+
+	@:keep
+	function hxSerialize(s:Serializer) {
+		s.serialize(className);
+		s.serialize(id);
+
+	}
+
+	@:keep
+	function hxUnserialize(u:Unserializer) {
+
+		className = u.unserialize();
+		id = u.unserialize();
+
+
 	}
 }

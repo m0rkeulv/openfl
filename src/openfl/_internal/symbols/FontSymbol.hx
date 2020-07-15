@@ -1,5 +1,7 @@
 package openfl._internal.symbols;
 
+import haxe.Serializer;
+import haxe.Unserializer;
 import openfl._internal.formats.swf.ShapeCommand;
 
 #if !openfl_debug
@@ -22,4 +24,34 @@ class FontSymbol extends SWFSymbol
 	{
 		super();
 	}
+
+	@:keep
+	override function hxSerialize(s:Serializer) {
+		s.serialize(advances);
+		s.serialize(ascent);
+		s.serialize(bold);
+		s.serialize(codes);
+		s.serialize(descent);
+		s.serialize(glyphs);
+		s.serialize(italic);
+		s.serialize(leading);
+		s.serialize(name);
+		super.hxSerialize(s);
+	}
+
+	@:keep
+	override function hxUnserialize(u:Unserializer) {
+
+		advances = u.unserialize();
+		ascent = u.unserialize();
+		bold = u.unserialize();
+		codes  = u.unserialize();
+		descent = u.unserialize();
+		glyphs = u.unserialize();
+		italic = u.unserialize();
+		leading = u.unserialize();
+		name = u.unserialize();
+		super.hxUnserialize(u);
+	}
+
 }
