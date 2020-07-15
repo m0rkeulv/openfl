@@ -1,5 +1,7 @@
 package openfl._internal.symbols;
 
+import haxe.Unserializer;
+import haxe.Serializer;
 import openfl._internal.formats.swf.SWFLite;
 import openfl.display.SimpleButton;
 
@@ -47,5 +49,25 @@ class ButtonSymbol extends SWFSymbol
 		}
 
 		return simpleButton;
+	}
+
+	@:keep
+	override function hxSerialize(s:Serializer) {
+		s.serialize(downState);
+		s.serialize(hitState);
+		s.serialize(overState);
+		s.serialize(upState);
+
+		super.hxSerialize(s);
+	}
+
+	@:keep
+	override function hxUnserialize(u:Unserializer) {
+
+		downState = u.unserialize();
+		hitState = u.unserialize();
+		overState = u.unserialize();
+		upState = u.unserialize();
+		super.hxUnserialize(u);
 	}
 }

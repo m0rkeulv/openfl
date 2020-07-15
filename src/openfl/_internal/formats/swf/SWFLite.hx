@@ -18,6 +18,9 @@ import openfl.Assets;
 @SuppressWarnings("checkstyle:FieldDocComment")
 @:keep class SWFLite
 {
+	private static var classCache:Map<String, Class<Dynamic>> = new Map();
+	private static var enumCache:Map<String, Enum<Dynamic>> = new Map();
+
 	public static var instances:Map<String, SWFLite> = new Map();
 
 	public var frameRate:Float;
@@ -85,6 +88,7 @@ import openfl.Assets;
 	@SuppressWarnings("checkstyle:Dynamic")
 	private static function resolveClass(name:String):Class<Dynamic>
 	{
+		if(classCache.exists(name)) return classCache.get(name);
 		var value = Type.resolveClass(name);
 
 		#if flash
@@ -98,12 +102,14 @@ import openfl.Assets;
 		if (value == null) value = Type.resolveClass(StringTools.replace(name, "openfl._v2", "openfl"));
 		#end
 
+		classCache.set(name, value);
 		return value;
 	}
 
 	@SuppressWarnings("checkstyle:Dynamic")
 	private static function resolveEnum(name:String):Enum<Dynamic>
 	{
+		if(enumCache.exists(name)) return enumCache.get(name);
 		var value = Type.resolveEnum(name);
 
 		#if flash
@@ -121,6 +127,7 @@ import openfl.Assets;
 		if (value == null) value = Type.resolveEnum(StringTools.replace(name, "openfl._v2", "openfl"));
 		#end
 
+		enumCache.set(name, value);
 		return value;
 	}
 
@@ -138,7 +145,8 @@ import openfl.Assets;
 			return null;
 		}
 
-		var unserializer = new Unserializer(data);
+//		var unserializer = new Unserializer(data);
+		var unserializer = new FasterUnserializer(data);
 		unserializer.setResolver({resolveClass: resolveClass, resolveEnum: resolveEnum});
 
 		var swfLite:SWFLite = cast unserializer.unserialize();

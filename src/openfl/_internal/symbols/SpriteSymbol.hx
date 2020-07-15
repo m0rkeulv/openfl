@@ -1,5 +1,7 @@
 package openfl._internal.symbols;
 
+import haxe.Unserializer;
+import haxe.Serializer;
 import openfl._internal.formats.swf.SWFLite;
 import openfl._internal.symbols.timeline.Frame;
 import openfl.display.MovieClip;
@@ -66,4 +68,25 @@ class SpriteSymbol extends SWFSymbol
 
 		return movieClip;
 	}
+
+
+	@:keep
+	override function hxSerialize(s:Serializer) {
+		s.serialize(baseClassName);
+		s.serialize(frames);
+		s.serialize(scale9Grid);
+		super.hxSerialize(s);
+
+	}
+
+	@:keep
+	override function hxUnserialize(u:Unserializer) {
+
+		baseClassName = u.unserialize();
+		frames = u.unserialize();
+		scale9Grid = u.unserialize();
+		super.hxUnserialize(u);
+
+	}
+
 }

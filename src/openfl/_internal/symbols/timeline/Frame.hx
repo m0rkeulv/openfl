@@ -1,6 +1,8 @@
 package openfl._internal.symbols.timeline;
 
 #if !openfl_debug
+import haxe.Unserializer;
+import haxe.Serializer;
 @:fileXml('tags="haxe,release"')
 @:noDebug
 #end
@@ -13,4 +15,25 @@ package openfl._internal.symbols.timeline;
 
 	// public var scriptType:FrameScriptType;
 	public function new() {}
+
+	@:keep
+	function hxSerialize(s:Serializer) {
+		s.serialize(label);
+		s.serialize(objects);
+		s.serialize(script);
+		s.serialize(scriptSource);
+
+	}
+
+	@:keep
+	function hxUnserialize(u:Unserializer) {
+
+		label = u.unserialize();
+		objects = u.unserialize();
+		script = u.unserialize();
+		scriptSource = u.unserialize();
+
+
+	}
+
 }

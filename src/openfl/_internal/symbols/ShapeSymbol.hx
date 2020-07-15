@@ -1,5 +1,7 @@
 package openfl._internal.symbols;
 
+import haxe.Unserializer;
+import haxe.Serializer;
 import openfl._internal.formats.swf.ShapeCommand;
 import openfl._internal.formats.swf.SWFLite;
 import openfl.display.BitmapData;
@@ -26,6 +28,23 @@ class ShapeSymbol extends SWFSymbol
 {
 	public var commands:Array<ShapeCommand>;
 	public var rendered:Shape;
+
+	@:keep
+	override function hxSerialize(s:Serializer) {
+		s.serialize(commands);
+		s.serialize(rendered);
+		super.hxSerialize(s);
+	}
+
+	@:keep
+	override function hxUnserialize(u:Unserializer) {
+
+		commands = u.unserialize();
+		rendered = u.unserialize();
+		super.hxUnserialize(u);
+
+	}
+
 
 	public function new()
 	{
