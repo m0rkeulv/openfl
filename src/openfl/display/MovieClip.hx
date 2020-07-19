@@ -356,13 +356,13 @@ class MovieClip extends Sprite #if (openfl_dynamic && haxe_ver < "4.0.0") implem
 
 	public override function __enterFrame(deltaTime:Int):Void
 	{
-		__updateFrameScript(deltaTime);
+		var childrenUpdated = __updateFrameScript(deltaTime);
 		__updateSymbol(__currentFrame);
 
-		super.__enterFrame(deltaTime);
+		if(!childrenUpdated)super.__enterFrame(deltaTime);
 	}
 
-	@:noCompletion private function __updateFrameScript(deltaTime:Int):Void
+	@:noCompletion private function __updateFrameScript(deltaTime:Int):Bool
 	{
 		if (__symbol != null && __playing)
 		{
@@ -371,7 +371,7 @@ class MovieClip extends Sprite #if (openfl_dynamic && haxe_ver < "4.0.0") implem
 			if (__lastFrameScriptEval == nextFrame)
 			{
 				super.__enterFrame(deltaTime);
-				return;
+				return true;
 			}
 
 			if (__frameScripts != null)
@@ -381,7 +381,7 @@ class MovieClip extends Sprite #if (openfl_dynamic && haxe_ver < "4.0.0") implem
 					if (!__evaluateFrameScripts(__totalFrames))
 					{
 						super.__enterFrame(deltaTime);
-						return;
+						return true;
 					}
 
 					__currentFrame = 1;
@@ -390,7 +390,7 @@ class MovieClip extends Sprite #if (openfl_dynamic && haxe_ver < "4.0.0") implem
 				if (!__evaluateFrameScripts(nextFrame))
 				{
 					super.__enterFrame(deltaTime);
-					return;
+					return true;
 				}
 			}
 			else
@@ -398,6 +398,7 @@ class MovieClip extends Sprite #if (openfl_dynamic && haxe_ver < "4.0.0") implem
 				__currentFrame = nextFrame;
 			}
 		}
+		return false;
 	}
 
 	@:noCompletion private function __updateSymbol(targetFrame:Int):Void
