@@ -2760,10 +2760,6 @@ class DisplayObject extends EventDispatcher implements IBitmapDrawable #if (open
 
 	@:noCompletion private function set_mask(value:DisplayObject):DisplayObject
 	{
-		if (value == __mask)
-		{
-			return value;
-		}
 
 		if (value != __mask)
 		{
@@ -2773,6 +2769,8 @@ class DisplayObject extends EventDispatcher implements IBitmapDrawable #if (open
 
 		if (__mask != null)
 		{
+			if (value == __mask && __mask.__isMask)return value;
+
 			__mask.__isMask = false;
 			__mask.__maskTarget = null;
 			__mask.__setTransformDirty();
@@ -2781,6 +2779,8 @@ class DisplayObject extends EventDispatcher implements IBitmapDrawable #if (open
 
 		if (value != null)
 		{
+			if (value == __mask && value.__isMask) return value;
+
 			value.__isMask = true;
 			value.__maskTarget = this;
 			value.__setWorldTransformInvalid();
