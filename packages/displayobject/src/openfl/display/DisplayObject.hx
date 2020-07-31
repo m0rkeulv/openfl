@@ -1849,19 +1849,19 @@ class DisplayObject extends EventDispatcher implements IBitmapDrawable #if (open
 
 	@:noCompletion private function set_mask(value:DisplayObject):DisplayObject
 	{
-		if (value == __mask)
-		{
-			return value;
-		}
 
 		if (value != __mask)
 		{
+			if (value == __mask && __mask.__isMask)return value;
+
 			__setTransformDirty();
 			__setRenderDirty();
 		}
 
 		if (__mask != null)
 		{
+			if (value == __mask && __mask.__isMask)return value;
+
 			__mask.__isMask = false;
 			__mask.__maskTarget = null;
 			__mask.__setTransformDirty();
