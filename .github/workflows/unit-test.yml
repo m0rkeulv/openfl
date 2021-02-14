@@ -12,11 +12,12 @@ jobs:
       with:
         submodules: true
 
+    - uses: haxeui/haxeui-core/.github/actions/haxe@master
+      with:
+        haxe-version: 4.2.0
+
     - name: Setup environment
       run: |
-        sudo add-apt-repository ppa:haxe/releases -y
-        sudo apt-get update
-        sudo apt-get install haxe -y
         mkdir $GITHUB_WORKSPACE/.haxelib
         haxelib setup $GITHUB_WORKSPACE/.haxelib
         haxelib dev openfl $GITHUB_WORKSPACE
