@@ -66,6 +66,7 @@ import format.amf3.Writer as AMF3Writer;
 #if !openfl_doc_gen
 @:forward(endian, objectEncoding)
 #end
+@:transitive
 abstract ByteArray(ByteArrayData) from ByteArrayData to ByteArrayData
 {
 	/**
@@ -741,13 +742,6 @@ abstract ByteArray(ByteArrayData) from ByteArrayData to ByteArrayData
 		#else
 		return (byteArray : ByteArrayData).getData();
 		#end
-	}
-	#end
-
-	#if lime
-	@:to @:noCompletion private static function toLimeBytes(byteArray:ByteArray):LimeBytes
-	{
-		return fromBytes(byteArray);
 	}
 	#end
 
