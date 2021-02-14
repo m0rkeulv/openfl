@@ -26,7 +26,7 @@ jobs:
 
     - name: Install dependencies
       run: |
-        haxelib install lime --quiet
+        haxelib git lime https://github.com/m0rkeulv/lime.git feature/haxe_4_2_support --quiet
         haxelib git utest https://github.com/haxe-utest/utest.git --quiet
         haxelib install hxp --quiet
         haxelib run hxp --install-hxp-alias
