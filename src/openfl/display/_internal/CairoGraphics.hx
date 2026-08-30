@@ -1668,7 +1668,11 @@ class CairoGraphics
 							}
 
 							cairo.source = fillPattern;
-							if (!hitTesting) cairo.fillPreserve();
+							if (!hitTesting)
+							{
+								cairo.fillPreserve();
+								cairo.strokePreserve();
+							}
 
 							if (!hitTesting && hasScale9Grid && fillScale9Bounds != null && bitmapFill != null)
 							{
@@ -1895,12 +1899,20 @@ class CairoGraphics
 				if (pendingMatrix != null)
 				{
 					cairo.transform(pendingMatrix.__toMatrix3());
-					if (!hitTesting) cairo.fillPreserve();
+					if (!hitTesting)
+					{
+						cairo.fillPreserve();
+						cairo.strokePreserve();
+					}
 					cairo.transform(inversePendingMatrix.__toMatrix3());
 				}
 				else
 				{
-					if (!hitTesting) cairo.fillPreserve();
+					if (!hitTesting)
+					{
+						cairo.fillPreserve();
+						cairo.strokePreserve();
+					}
 				}
 
 				if (!hitTesting && hasScale9Grid && fillScale9Bounds != null && bitmapFill != null)

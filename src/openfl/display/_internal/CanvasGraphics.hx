@@ -1820,7 +1820,11 @@ class CanvasGraphics
 								}
 							}
 
-							if (!hitTesting) context.fill(windingRule);
+							if (!hitTesting)
+							{
+								context.fill(windingRule);
+								sealFillEdge();
+							}
 
 							if (!hitTesting && hasScale9Grid && fillScale9Bounds != null && bitmapFill != null)
 							{
@@ -2076,13 +2080,21 @@ class CanvasGraphics
 					if (pendingMatrix != null)
 					{
 						context.transform(pendingMatrix.a, pendingMatrix.b, pendingMatrix.c, pendingMatrix.d, pendingMatrix.tx, pendingMatrix.ty);
-						if (!hitTesting) context.fill(windingRule);
+						if (!hitTesting)
+						{
+							context.fill(windingRule);
+							sealFillEdge();
+						}
 						context.transform(inversePendingMatrix.a, inversePendingMatrix.b, inversePendingMatrix.c, inversePendingMatrix.d,
 							inversePendingMatrix.tx, inversePendingMatrix.ty);
 					}
 					else
 					{
-						if (!hitTesting) context.fill(windingRule);
+						if (!hitTesting)
+						{
+							context.fill(windingRule);
+							sealFillEdge();
+						}
 					}
 
 					if (!hitTesting && hasScale9Grid && fillScale9Bounds != null && bitmapFill != null)
@@ -2103,6 +2115,14 @@ class CanvasGraphics
 			commands.moveTo(positionX, positionY);
 		}
 		#end
+	}
+
+	private static function sealFillEdge()
+	{
+		var prevStroke = context.strokeStyle;
+		context.strokeStyle = context.fillStyle;
+		context.stroke();
+		context.strokeStyle = prevStroke;
 	}
 
 	public static function render(graphics:Graphics, renderer:CanvasRenderer):Void
