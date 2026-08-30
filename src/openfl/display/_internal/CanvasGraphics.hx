@@ -10,6 +10,7 @@ import openfl.display.GradientType;
 import openfl.display.Graphics;
 import openfl.display.InterpolationMethod;
 import openfl.display.SpreadMethod;
+import openfl.display.StageQuality;
 import openfl.geom.Matrix;
 import openfl.geom.Point;
 import openfl.geom.Rectangle;
@@ -37,6 +38,41 @@ import js.html.Path2D;
 @SuppressWarnings("checkstyle:FieldDocComment")
 class CanvasGraphics
 {
+	/**
+		FSAA (supersample) factor for the html5 canvas path, the counterpart of
+		`CairoGraphics.supersample`. Because the Canvas 2D API cannot disable
+		path anti-aliasing, this only *reduces* the interior-seam conflation
+		(background bleed between abutting fills) rather than eliminating it: the
+		graphic is rendered into an NxN-larger scratch canvas and downsampled with
+		high-quality smoothing, which shrinks the leftover magenta/salmon seam
+		~1/N but never to zero. The MSAA path (see OpenGLGraphics, selected with
+		`-D openfl_canvas_msaa`) is the truly-clean alternative.
+
+		The default value 0 means "derive the factor from `Stage.quality`" via
+		`__qualityToSupersample` (LOW=1, MEDIUM=2, HIGH=3, BEST=4). A value > 0
+		overrides the stage quality; 1 disables FSAA (legacy per-fill behaviour).
+		Define `-D openfl_canvas_no_supersample` to make 1 (off) the default.
+	**/
+	public static var supersample:Int = #if openfl_canvas_no_supersample 1 #else 0 #end;
+
+	// Upper bound on either dimension of the supersampled scratch canvas; very
+	// large graphics reduce their effective factor to stay under this, bounding
+	// the transient memory a single shape can use.
+	private static inline var SUPERSAMPLE_MAX:Int = 8192;
+
+	// Maps Stage.quality to a supersampling factor (matches CairoGraphics).
+	private static function __qualityToSupersample(quality:StageQuality):Int
+	{
+		return switch (quality)
+		{
+			case LOW: 1;
+			case MEDIUM: 2;
+			case HIGH: 3;
+			case BEST: 4;
+			default: 3;
+		}
+	}
+
 	private static inline var SIN45:Float = 0.70710678118654752440084436210485;
 	private static inline var TAN22:Float = 0.4142135623730950488016887242097;
 	private static inline var KAPPA = 0.5522848;
@@ -63,6 +99,10 @@ class CanvasGraphics
 	private static var context:CanvasRenderingContext2D;
 	private static var hitTestCanvas:CanvasElement;
 	private static var hitTestContext:CanvasRenderingContext2D;
+	// Reused NxN scratch canvas for FSAA supersampling (grown to the largest
+	// size seen; the downsample target stays graphics.__canvas at normal size).
+	private static var ssCanvas:CanvasElement;
+	private static var ssContext:CanvasRenderingContext2D;
 	#end
 
 	#if (js && html5)
@@ -2166,7 +2206,6 @@ class CanvasGraphics
 				graphics.__context = graphics.__canvas.getContext("2d");
 			}
 
-			context = graphics.__context;
 			var transform = graphics.__renderTransform;
 			var canvas = graphics.__canvas;
 
@@ -2174,10 +2213,28 @@ class CanvasGraphics
 			var scaledWidth = Std.int(width * scale);
 			var scaledHeight = Std.int(height * scale);
 
-			renderer.__setBlendModeContext(context, NORMAL);
+			// Determine the FSAA supersampling factor (see `supersample`). Only the
+			// bitmap-cache (non-DOM) path supports it; the DOM path renders at 1x.
+			var fsaaN = 1;
+			if (!renderer.__isDOM)
+			{
+				fsaaN = supersample;
+				if (fsaaN <= 0)
+				{
+					var quality = (graphics.__owner != null
+						&& graphics.__owner.stage != null) ? graphics.__owner.stage.quality : StageQuality.HIGH;
+					fsaaN = __qualityToSupersample(quality);
+				}
+				if (fsaaN < 1) fsaaN = 1;
+				var maxDim = width > height ? width : height;
+				while (fsaaN > 1 && maxDim * fsaaN > SUPERSAMPLE_MAX) fsaaN--;
+			}
 
 			if (renderer.__isDOM)
 			{
+				context = graphics.__context;
+				renderer.__setBlendModeContext(context, NORMAL);
+
 				if (canvas.width == scaledWidth && canvas.height == scaledHeight)
 				{
 					context.clearRect(0, 0, scaledWidth, scaledHeight);
@@ -2190,12 +2247,48 @@ class CanvasGraphics
 					canvas.style.height = height + "px";
 				}
 
-				var transform = graphics.__renderTransform;
 				context.setTransform(transform.a * scale, transform.b * scale, transform.c * scale, transform.d * scale, transform.tx * scale,
 					transform.ty * scale);
 			}
+			else if (fsaaN > 1)
+			{
+				// FSAA: replay every fill into an NxN-larger scratch canvas with
+				// high-quality downsampling at the end. Because Canvas 2D keeps
+				// path AA on, this only shrinks the interior-seam bleed (~1/N), it
+				// does not remove it; the final bitmap stays graphics.__canvas at
+				// normal size (only the scratch is oversized, and it is reused).
+				var ssW = width * fsaaN;
+				var ssH = height * fsaaN;
+
+				if (ssCanvas == null)
+				{
+					ssCanvas = cast Browser.document.createElement("canvas");
+					ssContext = ssCanvas.getContext("2d");
+				}
+				if (ssCanvas.width < ssW || ssCanvas.height < ssH)
+				{
+					ssCanvas.width = ssW;
+					ssCanvas.height = ssH;
+				}
+				// keep the normal-size final canvas correctly sized for the bitmap
+				if (canvas.width != width || canvas.height != height)
+				{
+					canvas.width = width;
+					canvas.height = height;
+				}
+
+				context = ssContext;
+				renderer.__setBlendModeContext(context, NORMAL);
+				context.setTransform(1, 0, 0, 1, 0, 0);
+				context.clearRect(0, 0, ssW, ssH);
+				context.setTransform(transform.a * fsaaN, transform.b * fsaaN, transform.c * fsaaN, transform.d * fsaaN, transform.tx * fsaaN,
+					transform.ty * fsaaN);
+			}
 			else
 			{
+				context = graphics.__context;
+				renderer.__setBlendModeContext(context, NORMAL);
+
 				if (canvas.width == scaledWidth && canvas.height == scaledHeight)
 				{
 					context.closePath();
@@ -2444,6 +2537,20 @@ class CanvasGraphics
 			}
 
 			data.destroy();
+
+			if (fsaaN > 1)
+			{
+				// Downsample the NxN scratch into the final normal-size canvas.
+				// The high-quality smoothing reconstructs the anti-aliasing; the
+				// oversized scratch is not retained beyond this reuse slot.
+				var fctx = graphics.__context;
+				fctx.setTransform(1, 0, 0, 1, 0, 0);
+				fctx.clearRect(0, 0, graphics.__canvas.width, graphics.__canvas.height);
+				untyped fctx.imageSmoothingEnabled = true;
+				untyped fctx.imageSmoothingQuality = "high";
+				fctx.drawImage(ssCanvas, 0, 0, graphics.__canvas.width * fsaaN, graphics.__canvas.height * fsaaN, 0, 0, graphics.__canvas.width,
+					graphics.__canvas.height);
+			}
 
 			if (graphics.__bitmap == null)
 			{
