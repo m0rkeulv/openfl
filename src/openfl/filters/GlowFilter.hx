@@ -69,6 +69,11 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 {
 	@:noCompletion private static var __invertAlphaShader = new InvertAlphaShader();
 	@:noCompletion private static var __blurAlphaShader = new BlurAlphaShader();
+	#if flash_box_blur
+	// Flash-faithful fractional box blur of the alpha channel (Ruffle-style),
+	// colourised like BlurAlphaShader. Shared by GlowFilter + DropShadowFilter.
+	@:noCompletion private static var __boxBlurAlphaShader = new BoxBlurAlphaShader();
+	#end
 	@:noCompletion private static var __combineShader = new CombineShader();
 	@:noCompletion private static var __innerCombineShader = new InnerCombineShader();
 	@:noCompletion private static var __combineKnockoutShader = new CombineKnockoutShader();
@@ -286,6 +291,11 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 
 		if (blurPass < numBlurPasses)
 		{
+			var strength = blurPass == (numBlurPasses - 1) ? __strength : 1.0;
+			#if flash_box_blur
+			var horizontal = blurPass < __horizontalPasses;
+			return __setupBoxBlur(horizontal, horizontal ? blurX : blurY, color, alpha, strength);
+			#else
 			var shader = __blurAlphaShader;
 			if (blurPass < __horizontalPasses)
 			{
@@ -303,8 +313,9 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 			shader.uColor.value[1] = ((color >> 8) & 0xFF) / 255;
 			shader.uColor.value[2] = (color & 0xFF) / 255;
 			shader.uColor.value[3] = alpha;
-			shader.uStrength.value[0] = blurPass == (numBlurPasses - 1) ? __strength : 1.0;
+			shader.uStrength.value[0] = strength;
 			return shader;
+			#end
 		}
 		if (__inner)
 		{
@@ -354,10 +365,57 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 
 	@:noCompletion private function __calculateNumShaderPasses():Void
 	{
+		#if flash_box_blur
+		// one horizontal + one vertical box pass per quality iteration
+		var q = (__quality > 0) ? __quality : 1;
+		__horizontalPasses = (__blurX <= 0) ? 0 : q;
+		__verticalPasses = (__blurY <= 0) ? 0 : q;
+		#else
 		__horizontalPasses = (__blurX <= 0) ? 0 : Math.round(__blurX * (__quality / 4)) + 1;
 		__verticalPasses = (__blurY <= 0) ? 0 : Math.round(__blurY * (__quality / 4)) + 1;
+		#end
 		__numShaderPasses = __horizontalPasses + __verticalPasses + (__inner ? 2 : 1);
 	}
+
+	#if flash_box_blur
+	// Configure the shared box-blur-alpha shader for one axis/pass (used by both
+	// GlowFilter and DropShadowFilter). Same kernel math as BlurFilter's box blur.
+	@:noCompletion private static function __setupBoxBlur(horizontal:Bool, v:Float, color:Int, alpha:Float, strength:Float):BitmapFilterShader
+	{
+		var s = __boxBlurAlphaShader;
+		var fullSize = v > 255 ? 255.0 : v;
+		s.uDir.value[0] = horizontal ? 1.0 : 0.0;
+		s.uDir.value[1] = horizontal ? 0.0 : 1.0;
+		if (fullSize <= 1)
+		{
+			s.uFullSize.value[0] = 1.0;
+			s.uM.value[0] = 0.0;
+			s.uM2.value[0] = 0.0;
+			s.uFirstWeight.value[0] = 0.0;
+			s.uLastOffset.value[0] = 0.0;
+			s.uLastWeight.value[0] = 1.0;
+		}
+		else
+		{
+			var radius = (fullSize - 1) / 2;
+			var m = Math.ceil(radius) - 1;
+			if (m < 0) m = 0;
+			var frac = Math.floor((radius - m) * 255) / 255;
+			s.uFullSize.value[0] = fullSize;
+			s.uM.value[0] = m;
+			s.uM2.value[0] = m * 2;
+			s.uFirstWeight.value[0] = frac;
+			s.uLastOffset.value[0] = frac / (frac + 1);
+			s.uLastWeight.value[0] = frac + 1;
+		}
+		s.uColor.value[0] = ((color >> 16) & 0xFF) / 255;
+		s.uColor.value[1] = ((color >> 8) & 0xFF) / 255;
+		s.uColor.value[2] = (color & 0xFF) / 255;
+		s.uColor.value[3] = alpha;
+		s.uStrength.value[0] = strength;
+		return s;
+	}
+	#end
 
 	// Get & Set Methods
 	@:noCompletion private function get_alpha():Float
@@ -575,6 +633,79 @@ private class BlurAlphaShader extends BitmapFilterShader
 		#end
 	}
 }
+
+#if flash_box_blur
+#if !openfl_debug
+@:fileXml('tags="haxe,release"')
+@:noDebug
+#end
+private class BoxBlurAlphaShader extends BitmapFilterShader
+{
+	@:glFragmentSource("#pragma header
+
+		uniform vec4 uColor;
+		uniform float uStrength;
+		uniform vec2 uTextureSize;
+		uniform vec2 uDir;
+		uniform float uFullSize;
+		uniform float uM;
+		uniform float uM2;
+		uniform float uFirstWeight;
+		uniform float uLastOffset;
+		uniform float uLastWeight;
+
+		void main(void)
+		{
+			vec2 direction = uDir / uTextureSize;
+			vec2 base = openfl_TextureCoordv - direction * uM;
+
+			float total = texture2D(openfl_Texture, base - direction).a * uFirstWeight;
+
+			float center = 0.0;
+			for (int i = 0; i < 64; i++) {
+				float fi = float(i) * 2.0 + 0.5;
+				if (fi >= uM2) break;
+				center += texture2D(openfl_Texture, base + direction * fi).a;
+			}
+			total += center * 2.0;
+
+			total += texture2D(openfl_Texture, base + direction * (uM2 + uLastOffset)).a * uLastWeight;
+
+			float a = total / uFullSize;
+			gl_FragColor = uColor * clamp(a * uStrength, 0.0, 1.0);
+		}")
+	@:glVertexSource("#pragma header
+
+		void main(void) {
+
+			#pragma body
+
+		}")
+	public function new()
+	{
+		super();
+		#if !macro
+		uColor.value = [0, 0, 0, 0];
+		uStrength.value = [1];
+		uDir.value = [1, 0];
+		uFullSize.value = [1];
+		uM.value = [0];
+		uM2.value = [0];
+		uFirstWeight.value = [0];
+		uLastOffset.value = [0];
+		uLastWeight.value = [1];
+		#end
+	}
+
+	@:noCompletion private override function __update():Void
+	{
+		#if !macro
+		uTextureSize.value = [__texture.input.width, __texture.input.height];
+		#end
+		super.__update();
+	}
+}
+#end
 
 #if !openfl_debug
 @:fileXml('tags="haxe,release"')

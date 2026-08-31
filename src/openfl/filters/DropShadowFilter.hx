@@ -324,6 +324,11 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 
 		if (blurPass < numBlurPasses)
 		{
+			var strength = blurPass == (numBlurPasses - 1) ? __strength : 1.0;
+			#if flash_box_blur
+			var horizontal = blurPass < __horizontalPasses;
+			return GlowFilter.__setupBoxBlur(horizontal, horizontal ? blurX : blurY, color, alpha, strength);
+			#else
 			var shader = GlowFilter.__blurAlphaShader;
 			if (blurPass < __horizontalPasses)
 			{
@@ -341,8 +346,9 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 			shader.uColor.value[1] = ((color >> 8) & 0xFF) / 255;
 			shader.uColor.value[2] = (color & 0xFF) / 255;
 			shader.uColor.value[3] = alpha;
-			shader.uStrength.value[0] = blurPass == (numBlurPasses - 1) ? __strength : 1.0;
+			shader.uStrength.value[0] = strength;
 			return shader;
+			#end
 		}
 		if (__inner)
 		{
@@ -402,8 +408,14 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 
 	@:noCompletion private function __calculateNumShaderPasses():Void
 	{
+		#if flash_box_blur
+		var q = (__quality > 0) ? __quality : 1;
+		__horizontalPasses = (__blurX <= 0) ? 0 : q;
+		__verticalPasses = (__blurY <= 0) ? 0 : q;
+		#else
 		__horizontalPasses = (__blurX <= 0) ? 0 : Math.round(__blurX * (__quality / 4)) + 1;
 		__verticalPasses = (__blurY <= 0) ? 0 : Math.round(__blurY * (__quality / 4)) + 1;
+		#end
 		__numShaderPasses = __horizontalPasses + __verticalPasses + (__inner ? 2 : 1);
 	}
 

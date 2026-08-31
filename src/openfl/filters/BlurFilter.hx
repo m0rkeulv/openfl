@@ -201,38 +201,13 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 	{
 		#if flash_box_blur
 		#if !macro
-		// Passes alternate horizontal / vertical; each applies one full box blur
-		// for its axis, iterated `quality` times (separable box passes commute).
+		// passes alternate horizontal / vertical; each applies one full box blur
+		// for its axis, iterated `quality` times (separable box passes commute)
 		var horizontal = (pass % 2 == 0);
-		var v = horizontal ? blurX : blurY;
-		var fullSize = v > 255 ? 255.0 : v;
-		__boxBlurShader.uDir.value = horizontal ? [1.0, 0.0] : [0.0, 1.0];
-		if (fullSize <= 1)
-		{
-			// noop pass: sample the centre pixel unchanged
-			__boxBlurShader.uFullSize.value = [1.0];
-			__boxBlurShader.uM.value = [0.0];
-			__boxBlurShader.uM2.value = [0.0];
-			__boxBlurShader.uFirstWeight.value = [0.0];
-			__boxBlurShader.uLastOffset.value = [0.0];
-			__boxBlurShader.uLastWeight.value = [1.0];
-		}
-		else
-		{
-			var radius = (fullSize - 1) / 2;
-			var m = Math.ceil(radius) - 1;
-			if (m < 0) m = 0;
-			// fractional edge weight, 8-bit quantised to imitate Flash's fixed point
-			var alpha = Math.floor((radius - m) * 255) / 255;
-			__boxBlurShader.uFullSize.value = [fullSize];
-			__boxBlurShader.uM.value = [m];
-			__boxBlurShader.uM2.value = [m * 2];
-			__boxBlurShader.uFirstWeight.value = [alpha];
-			__boxBlurShader.uLastOffset.value = [alpha / (alpha + 1)];
-			__boxBlurShader.uLastWeight.value = [alpha + 1];
-		}
-		#end
+		return __setupBoxBlur(horizontal, horizontal ? blurX : blurY);
+		#else
 		return __boxBlurShader;
+		#end
 		#else
 		#if !macro
 		if (pass < __horizontalPasses)
@@ -252,6 +227,42 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 		return __blurShader;
 		#end
 	}
+
+	#if flash_box_blur
+	// Configure the shared box-blur shader for one axis of one pass. Reused by
+	// BevelFilter (which blurs the source before deriving highlight/shadow).
+	@:noCompletion private static function __setupBoxBlur(horizontal:Bool, v:Float):BitmapFilterShader
+	{
+		var s = __boxBlurShader;
+		var fullSize = v > 255 ? 255.0 : v;
+		s.uDir.value[0] = horizontal ? 1.0 : 0.0;
+		s.uDir.value[1] = horizontal ? 0.0 : 1.0;
+		if (fullSize <= 1)
+		{
+			s.uFullSize.value[0] = 1.0;
+			s.uM.value[0] = 0.0;
+			s.uM2.value[0] = 0.0;
+			s.uFirstWeight.value[0] = 0.0;
+			s.uLastOffset.value[0] = 0.0;
+			s.uLastWeight.value[0] = 1.0;
+		}
+		else
+		{
+			var radius = (fullSize - 1) / 2;
+			var m = Math.ceil(radius) - 1;
+			if (m < 0) m = 0;
+			// fractional edge weight, 8-bit quantised to imitate Flash's fixed point
+			var frac = Math.floor((radius - m) * 255) / 255;
+			s.uFullSize.value[0] = fullSize;
+			s.uM.value[0] = m;
+			s.uM2.value[0] = m * 2;
+			s.uFirstWeight.value[0] = frac;
+			s.uLastOffset.value[0] = frac / (frac + 1);
+			s.uLastWeight.value[0] = frac + 1;
+		}
+		return s;
+	}
+	#end
 
 	@:noCompletion inline function __padFor(value:Float):Int
 	{
