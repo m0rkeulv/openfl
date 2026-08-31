@@ -86,6 +86,13 @@ class Context3DVectorGraphics
 	private static var ibufCap:Int = 0;
 	private static var rampTex:RectangleTexture;
 	private static var rampBmd:BitmapData;
+	private static var _curRamp:RectangleTexture; // ramp texture to bind for the current gradient
+	#if c3d_ramp_cache
+	// cache gradient ramps by their stops so identical gradients don't rebuild +
+	// re-upload the 256x1 texture every frame (-Dc3d_ramp_cache to enable)
+	private static var rampCache:Map<String, RectangleTexture>;
+	private static var rampCount:Int = 0;
+	#end
 
 	// render transform + inverse (pixel -> shape-local, bounds folded in)
 	private static var _rt:Matrix;
@@ -268,7 +275,7 @@ class Context3DVectorGraphics
 				case BEGIN_GRADIENT_FILL:
 					if (hasFill) flushFill(context);
 					var c = data.readBeginGradientFill();
-					setupGradient(c.type, c.colors, c.alphas, c.ratios, c.matrix, c.spreadMethod);
+					setupGradient(context, c.type, c.colors, c.alphas, c.ratios, c.matrix, c.spreadMethod);
 					hasFill = true;
 					collectStrokes();
 					_sub = [];
@@ -450,6 +457,9 @@ class Context3DVectorGraphics
 			rampTex = context.createRectangleTexture(256, 1, Context3DTextureFormat.BGRA, false);
 			rampBmd = new BitmapData(256, 1, true, 0xFF000000);
 			rampTex.uploadFromBitmapData(rampBmd);
+			#if c3d_ramp_cache
+			rampCache = new Map();
+			#end
 
 			ensureBuffers(context, 4096);
 			return true;
@@ -575,7 +585,7 @@ class Context3DVectorGraphics
 				consts.push(0);
 				consts.push(0);
 				context.setProgramConstantsFromVector(Context3DProgramType.FRAGMENT, 0, consts);
-				context.setTextureAt(0, rampTex);
+				context.setTextureAt(0, _curRamp);
 				context.setSamplerStateAt(0, Context3DWrapMode.CLAMP, Context3DTextureFilter.LINEAR, Context3DMipFilter.MIPNONE);
 
 			case MODE_BITMAP:
@@ -810,8 +820,8 @@ class Context3DVectorGraphics
 	}
 
 	// pixel -> gradient-local matrix + ramp, matching OpenGLGraphics.setupGradient
-	private static function setupGradient(type:GradientType, colors:Array<Int>, alphas:Array<Float>, ratios:Array<Int>, matrix:Matrix,
-			spread:SpreadMethod):Void
+	private static function setupGradient(context:Context3D, type:GradientType, colors:Array<Int>, alphas:Array<Float>, ratios:Array<Int>,
+			matrix:Matrix, spread:SpreadMethod):Void
 	{
 		_mode = (type == RADIAL) ? MODE_RADIAL : MODE_LINEAR;
 		_spread = switch (spread)
@@ -846,11 +856,32 @@ class Context3DVectorGraphics
 		_mD = gb * _invC + gd * _invD;
 		_mTY = gb * _invTX + gd * _invTY + gty;
 
-		buildRamp(colors, alphas, ratios);
+		#if c3d_ramp_cache
+		// reuse the ramp texture for identical stops instead of rebuilding it
+		var key = colors.join(",") + "|" + alphas.join(",") + "|" + ratios.join(",");
+		var cached = rampCache.get(key);
+		if (cached == null)
+		{
+			if (rampCount >= 256) // crude bound; distinct gradients are usually few
+			{
+				for (tex in rampCache) tex.dispose(); // free the evicted GPU textures
+				rampCache = new Map();
+				rampCount = 0;
+			}
+			cached = context.createRectangleTexture(256, 1, Context3DTextureFormat.BGRA, false);
+			buildRampInto(cached, colors, alphas, ratios);
+			rampCache.set(key, cached);
+			rampCount++;
+		}
+		_curRamp = cached;
+		#else
+		buildRampInto(rampTex, colors, alphas, ratios);
+		_curRamp = rampTex;
+		#end
 	}
 
-	// Build a 256x1 straight-RGBA ramp from the colour stops and upload it.
-	private static function buildRamp(colors:Array<Int>, alphas:Array<Float>, ratios:Array<Int>):Void
+	// Build a 256x1 straight-RGBA ramp from the colour stops into `target`.
+	private static function buildRampInto(target:RectangleTexture, colors:Array<Int>, alphas:Array<Float>, ratios:Array<Int>):Void
 	{
 		var n = colors.length;
 		var si = 0;
@@ -883,7 +914,7 @@ class Context3DVectorGraphics
 			var col = (ai << 24) | (Std.int(r) << 16) | (Std.int(g) << 8) | Std.int(b);
 			rampBmd.setPixel32(i, 0, col);
 		}
-		rampTex.uploadFromBitmapData(rampBmd);
+		target.uploadFromBitmapData(rampBmd);
 	}
 
 	// pixel -> normalized uv matrix for a bitmap fill; returns false if the
