@@ -244,6 +244,15 @@ class Context3DVectorGraphics
 		_hasStroke = false;
 		_strokeBatches = [];
 
+		// Save the current render target. When this graphic is being rendered
+		// into a filter / cacheAsBitmap cache texture, the active target is that
+		// cache -- NOT the back buffer -- so we must restore it (not blindly
+		// setRenderToBackBuffer) or the cache render is lost and filters break.
+		var prevTarget = context.__state.renderToTexture;
+		var prevDepthStencil = context.__state.renderToTextureDepthStencil;
+		var prevAntiAlias = context.__state.renderToTextureAntiAlias;
+		var prevSurfaceSelector = context.__state.renderToTextureSurfaceSelector;
+
 		context.setRenderToTexture(tex, true, OpenGLGraphics.samples);
 		context.clear(0, 0, 0, 0, 1, 0);
 		context.setDepthTest(false, Context3DCompareMode.ALWAYS);
@@ -287,7 +296,7 @@ class Context3DVectorGraphics
 					if (!setupBitmap(c.bitmap, c.matrix, c.repeat, c.smooth))
 					{
 						data.destroy();
-						context.setRenderToBackBuffer();
+						restoreTarget(context, prevTarget, prevDepthStencil, prevAntiAlias, prevSurfaceSelector);
 						return false;
 					}
 					hasFill = true;
@@ -367,7 +376,7 @@ class Context3DVectorGraphics
 			Context3DStencilAction.KEEP, Context3DStencilAction.KEEP);
 		context.setDepthTest(false, Context3DCompareMode.ALWAYS);
 
-		context.setRenderToBackBuffer();
+		restoreTarget(context, prevTarget, prevDepthStencil, prevAntiAlias, prevSurfaceSelector);
 		// leave no samplers bound into the compositor's state
 		context.setTextureAt(0, null);
 
@@ -391,6 +400,14 @@ class Context3DVectorGraphics
 	}
 
 	#if (js && html5)
+	// Restore a previously-saved Context3D render target: the cache texture we
+	// were rendering into (filter / cacheAsBitmap), or the back buffer if none.
+	private static inline function restoreTarget(context:Context3D, target:TextureBase, depthStencil:Bool, antiAlias:Int, surfaceSelector:Int):Void
+	{
+		if (target != null) context.setRenderToTexture(target, depthStencil, antiAlias, surfaceSelector);
+		else context.setRenderToBackBuffer();
+	}
+
 	private static function initGL(context:Context3D):Bool
 	{
 		if (inited) return supported;
