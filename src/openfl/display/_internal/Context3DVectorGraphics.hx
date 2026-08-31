@@ -345,6 +345,17 @@ class Context3DVectorGraphics
 		renderStrokeBatches(context);
 		data.destroy();
 
+		// Restore benign pipeline state before handing back to the compositor:
+		// our stencil-cover leaves the stencil test at NOT_EQUAL/ZERO, which would
+		// reject every fragment of the compositor's backbuffer draws when the back
+		// buffer has a stencil attachment. Reset to always-pass, full colour mask,
+		// no depth test, so the compositor draws normally.
+		context.setColorMask(true, true, true, true);
+		context.setStencilReferenceValue(0, 0xFF, 0xFF);
+		context.setStencilActions(Context3DTriangleFace.FRONT_AND_BACK, Context3DCompareMode.ALWAYS, Context3DStencilAction.KEEP,
+			Context3DStencilAction.KEEP, Context3DStencilAction.KEEP);
+		context.setDepthTest(false, Context3DCompareMode.ALWAYS);
+
 		context.setRenderToBackBuffer();
 		// leave no samplers bound into the compositor's state
 		context.setTextureAt(0, null);
