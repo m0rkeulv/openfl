@@ -61,6 +61,17 @@ class OpenGLGraphics
 	**/
 	public static var samples:Int = 4;
 
+	/**
+		Rendering backend, for A/B/legacy perf comparison:
+		0 = raw WebGL2 offscreen + readback (this class, full features);
+		1 = Context3D-native texture-resident, colour via vertex ATTRIBUTE (variant A);
+		2 = Context3D-native texture-resident, colour via gl.uniform (variant B).
+		Variants 1/2 (Context3DVectorGraphics) currently handle solid fills only and
+		fall through to this raw-GL path for anything else. Default derives from
+		-D c3d_attr / -D c3d_uniform.
+	**/
+	public static var backend:Int = #if c3d_uniform 2 #elseif c3d_attr 1 #else 0 #end;
+
 	#if (js && html5)
 	private static inline var MODE_SOLID = 0;
 	private static inline var MODE_LINEAR = 1;
@@ -180,6 +191,10 @@ class OpenGLGraphics
 	public static function render(graphics:Graphics, renderer:OpenGLRenderer):Bool
 	{
 		#if (js && html5)
+		// Context3D-native variants (A/B) handle solid fills; fall through here for
+		// anything they don't yet cover.
+		if (backend != 0 && Context3DVectorGraphics.render(graphics, renderer, backend)) return true;
+
 		if (!supported) return false;
 		// scale9-grid shapes are left to the software path.
 		if (graphics.__owner == null || graphics.__owner.__worldScale9Grid != null) return false;
