@@ -14,6 +14,7 @@ import openfl.display.BitmapData;
 import openfl.display3D.Context3D;
 import openfl.display3D.Context3DBlendFactor;
 import openfl.display3D.Context3DBufferUsage;
+import openfl.display3D.Context3DClearMask;
 import openfl.display3D.Context3DCompareMode;
 import openfl.display3D.Context3DMipFilter;
 import openfl.display3D.Context3DProgramFormat;
@@ -622,12 +623,13 @@ class Context3DVectorGraphics
 			flushStrokeBatch(context, batch.verts, batch.r, batch.g, batch.b, batch.a);
 	}
 
-	// Draw a stroke batch's tessellated triangles directly (stencil test off).
-	// Opaque strokes are exact; overdraw at joints/caps is invisible. For
-	// translucent strokes those overlaps blend twice (a minor darkening) -- a
-	// union-coverage stencil would fix that, but the stencil write does not
-	// persist across passes on this Context3D render-to-texture path, so we draw
-	// directly. Gradient/bitmap line styles fall back to the raw-WebGL renderer.
+	// Draw a stroke batch's tessellated triangles with single-pass coverage:
+	// the stroke's segment/joint/cap triangles overlap, so drawing them straight
+	// would blend translucent strokes twice at every overlap. Instead we guard
+	// with the stencil in ONE pass -- draw only where stencil == 0, and increment
+	// on draw -- so each pixel is painted exactly once (union coverage) at the
+	// stroke's true alpha. The stencil is reset to 0 first so each batch is
+	// independent and can overdraw earlier ones.
 	private static function flushStrokeBatch(context:Context3D, verts:Vector<Float>, r:Float, g:Float, b:Float, a:Float):Void
 	{
 		var n = Std.int(verts.length / vbufStride);
@@ -636,10 +638,15 @@ class Context3DVectorGraphics
 		ensureBuffers(context, n);
 		vbuf.uploadFromVector(verts, 0, n);
 
+		// reset just the stencil (fills leave it 0; a prior stroke batch leaves 1s)
+		context.clear(0, 0, 0, 0, 1, 0, Context3DClearMask.STENCIL);
+
 		context.setColorMask(true, true, true, true);
 		context.setStencilReferenceValue(0, 0xFF, 0xFF);
-		context.setStencilActions(Context3DTriangleFace.FRONT_AND_BACK, Context3DCompareMode.ALWAYS, Context3DStencilAction.KEEP,
-			Context3DStencilAction.KEEP, Context3DStencilAction.KEEP);
+		// pass where stencil == 0; on pass, increment to 1 so overlapping
+		// triangles of the same stroke are skipped (single coverage)
+		context.setStencilActions(Context3DTriangleFace.FRONT_AND_BACK, Context3DCompareMode.EQUAL,
+			Context3DStencilAction.INCREMENT_SATURATE, Context3DStencilAction.KEEP, Context3DStencilAction.KEEP);
 		context.setProgram(progSolid);
 		context.setVertexBufferAt(0, vbuf, 0, Context3DVertexBufferFormat.FLOAT_2);
 		context.setVertexBufferAt(1, null);
