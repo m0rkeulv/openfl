@@ -2,7 +2,9 @@ package openfl.display._internal;
 
 #if !flash
 import openfl.display.Graphics;
+import openfl.display.GradientType;
 import openfl.display.OpenGLRenderer;
+import openfl.display.SpreadMethod;
 import openfl.display._internal.DrawCommandReader;
 #if (js && html5)
 import openfl.display.BitmapData;
@@ -10,16 +12,20 @@ import openfl.display3D.Context3D;
 import openfl.display3D.Context3DBlendFactor;
 import openfl.display3D.Context3DBufferUsage;
 import openfl.display3D.Context3DCompareMode;
+import openfl.display3D.Context3DMipFilter;
 import openfl.display3D.Context3DProgramFormat;
 import openfl.display3D.Context3DProgramType;
 import openfl.display3D.Context3DStencilAction;
+import openfl.display3D.Context3DTextureFilter;
 import openfl.display3D.Context3DTextureFormat;
 import openfl.display3D.Context3DTriangleFace;
 import openfl.display3D.Context3DVertexBufferFormat;
+import openfl.display3D.Context3DWrapMode;
 import openfl.display3D.IndexBuffer3D;
 import openfl.display3D.Program3D;
 import openfl.display3D.VertexBuffer3D;
 import openfl.display3D.textures.RectangleTexture;
+import openfl.display3D.textures.TextureBase;
 import openfl.geom.Matrix;
 import openfl.Vector;
 #end
@@ -32,18 +38,17 @@ import openfl.Vector;
 	(no offscreen canvas, no readback), via stencil-then-cover, then hands the
 	texture straight to `graphics.__bitmap.__texture` so the compositor draws it
 	GPU-to-GPU. Everything goes through the Context3D API (setRenderToTexture,
-	setStencilActions, drawTriangles) so it stays one technology and doesn't
-	desync Context3D's state cache.
+	setStencilActions, drawTriangles, setProgramConstantsFromVector, setTextureAt)
+	so it stays one technology and doesn't desync Context3D's state cache.
 
-	Two ways to feed per-fill data to the GLSL shader (OpenFL's constant API does
-	not wire up uploadSources-GLSL uniforms), selected by `variant` for A/B perf
-	testing:
-	  - A (attributes): fill colour travels as a vertex attribute (va1).
-	  - B (uniform): fill colour is a `uColor` uniform set via gl.uniform, named so
-	    Context3D leaves it alone.
+	Fills: solid colour, linear/radial gradients (PAD/REPEAT/REFLECT, sRGB
+	interpolation), and bitmap fills (repeat + smoothing). Per-fill data reaches
+	the GLSL shaders through Context3D fragment constants (fc0..fc2) and samplers
+	(sampler0) -- OpenFL's GLSL-uniform path was completed for this (see Program3D
+	__buildAGALUniformList / __flush / __enable).
 
-	First cut handles SOLID fills only (the perf-critical case); gradient/bitmap/
-	stroke shapes return false so the caller falls back to the other renderer.
+	Stroked shapes (line styles) return false so the caller falls back to the
+	raw-WebGL OpenGLGraphics renderer, which tessellates strokes on the GPU.
 **/
 @:access(openfl.display.Graphics)
 @:access(openfl.display.BitmapData)
@@ -56,31 +61,64 @@ class Context3DVectorGraphics
 	public static inline var VARIANT_ATTR = 1;
 	public static inline var VARIANT_UNIFORM = 2;
 
+	private static inline var MODE_SOLID = 0;
+	private static inline var MODE_LINEAR = 1;
+	private static inline var MODE_RADIAL = 2;
+	private static inline var MODE_BITMAP = 3;
+
 	#if (js && html5)
 	private static var supported:Bool = true;
 	private static var inited:Bool = false;
-	private static var progAttr:Program3D;
 	private static var progStencil:Program3D;
-	private static var progUniform:Program3D;
-	private static var uColorLoc:Dynamic;
+	private static var progSolid:Program3D;
+	private static var progGradient:Program3D;
+	private static var progBitmap:Program3D;
 	private static var vbuf:VertexBuffer3D;
 	private static var vbufCap:Int = 0;
-	private static var vbufStride:Int = 6; // x,y,r,g,b,a
+	private static var vbufStride:Int = 4; // clip.xy, pixel.xy
 	private static var ibuf:IndexBuffer3D;
 	private static var ibufCap:Int = 0;
+	private static var rampTex:RectangleTexture;
+	private static var rampBmd:BitmapData;
 
+	// render transform + inverse (pixel -> shape-local, bounds folded in)
 	private static var _rt:Matrix;
 	private static var _bx:Float;
 	private static var _by:Float;
 	private static var _w:Float;
 	private static var _h:Float;
+	private static var _invA:Float;
+	private static var _invB:Float;
+	private static var _invC:Float;
+	private static var _invD:Float;
+	private static var _invTX:Float;
+	private static var _invTY:Float;
 	private static var _sub:Array<Array<Float>>; // clip-space coords
 	private static var _cur:Array<Float>;
 	private static var _clx:Float;
 	private static var _cly:Float;
+
+	// current fill state
+	private static var _mode:Int = MODE_SOLID;
+	private static var _r:Float = 0;
+	private static var _g:Float = 0;
+	private static var _b:Float = 0;
+	private static var _a:Float = 0;
+	private static var _spread:Float = 0; // 0 pad, 1 reflect, 2 repeat
+	// pixel -> gradient/uv matrix rows: gx = mA*px + mC*py + mTX; gy = mB*px + mD*py + mTY
+	private static var _mA:Float = 1;
+	private static var _mB:Float = 0;
+	private static var _mC:Float = 0;
+	private static var _mD:Float = 1;
+	private static var _mTX:Float = 0;
+	private static var _mTY:Float = 0;
+	private static var _bmp:BitmapData;
+	private static var _bmpRepeat:Bool = false;
+	private static var _bmpSmooth:Bool = false;
 	#end
 
-	// SOLID fills + path ops only (first cut).
+	// Solid / gradient / bitmap fills + path ops. Stroked shapes are rejected so
+	// the caller falls back to the raw-WebGL renderer (which does strokes).
 	public static function isCompatible(graphics:Graphics):Bool
 	{
 		#if (js && html5)
@@ -92,12 +130,13 @@ class Context3DVectorGraphics
 		{
 			switch (type)
 			{
-				case BEGIN_FILL:
+				case BEGIN_FILL, BEGIN_GRADIENT_FILL, BEGIN_BITMAP_FILL:
 					hasFill = true;
 					data.skip(type);
-				case END_FILL, MOVE_TO, LINE_TO, CURVE_TO, CUBIC_CURVE_TO, WINDING_EVEN_ODD:
+				case END_FILL, MOVE_TO, LINE_TO, CURVE_TO, CUBIC_CURVE_TO, WINDING_EVEN_ODD, WINDING_NON_ZERO:
 					data.skip(type);
 				default:
+					// line styles, DRAW_* primitives, shader fills, etc. -> fallback
 					ok = false;
 					data.skip(type);
 			}
@@ -161,8 +200,21 @@ class Context3DVectorGraphics
 		_by = graphics.__bounds.y;
 		_w = width;
 		_h = height;
+
+		// inverse render transform (pixel -> shape-local, bounds folded in)
+		var det = _rt.a * _rt.d - _rt.b * _rt.c;
+		if (det == 0) return false;
+		var idet = 1.0 / det;
+		_invA = _rt.d * idet;
+		_invB = -_rt.b * idet;
+		_invC = -_rt.c * idet;
+		_invD = _rt.a * idet;
+		_invTX = -(_invA * _rt.tx + _invC * _rt.ty) + _bx;
+		_invTY = -(_invB * _rt.tx + _invD * _rt.ty) + _by;
+
 		_sub = [];
 		_cur = null;
+		_mode = MODE_SOLID;
 
 		context.setRenderToTexture(tex, true, OpenGLGraphics.samples);
 		context.clear(0, 0, 0, 0, 1, 0);
@@ -171,26 +223,48 @@ class Context3DVectorGraphics
 
 		var data = new DrawCommandReader(graphics.__commands);
 		var hasFill = false;
-		var fr = 0.0, fg = 0.0, fb = 0.0, fa = 0.0;
 
 		for (type in graphics.__commands.types)
 		{
 			switch (type)
 			{
 				case BEGIN_FILL:
-					if (hasFill) flushFill(context, variant, fr, fg, fb, fa);
+					if (hasFill) flushFill(context);
 					var c = data.readBeginFill();
-					fr = ((c.color >> 16) & 0xFF) / 255.0;
-					fg = ((c.color >> 8) & 0xFF) / 255.0;
-					fb = (c.color & 0xFF) / 255.0;
-					fa = c.alpha;
+					_mode = MODE_SOLID;
+					_r = ((c.color >> 16) & 0xFF) / 255.0;
+					_g = ((c.color >> 8) & 0xFF) / 255.0;
+					_b = (c.color & 0xFF) / 255.0;
+					_a = c.alpha;
+					hasFill = true;
+					_sub = [];
+					_cur = null;
+
+				case BEGIN_GRADIENT_FILL:
+					if (hasFill) flushFill(context);
+					var c = data.readBeginGradientFill();
+					setupGradient(c.type, c.colors, c.alphas, c.ratios, c.matrix, c.spreadMethod);
+					hasFill = true;
+					_sub = [];
+					_cur = null;
+
+				case BEGIN_BITMAP_FILL:
+					if (hasFill) flushFill(context);
+					var c = data.readBeginBitmapFill();
+					if (!setupBitmap(c.bitmap, c.matrix, c.repeat, c.smooth))
+					{
+						// bitmap unavailable -> bail so the caller falls back
+						data.destroy();
+						context.setRenderToBackBuffer();
+						return false;
+					}
 					hasFill = true;
 					_sub = [];
 					_cur = null;
 
 				case END_FILL:
 					data.skip(type);
-					if (hasFill) flushFill(context, variant, fr, fg, fb, fa);
+					if (hasFill) flushFill(context);
 					hasFill = false;
 					_sub = [];
 					_cur = null;
@@ -211,10 +285,12 @@ class Context3DVectorGraphics
 					data.skip(type);
 			}
 		}
-		if (hasFill) flushFill(context, variant, fr, fg, fb, fa);
+		if (hasFill) flushFill(context);
 		data.destroy();
 
 		context.setRenderToBackBuffer();
+		// leave no samplers bound into the compositor's state
+		context.setTextureAt(0, null);
 
 		// hand the texture to a (non-readable) BitmapData for the compositor
 		if (graphics.__bitmap == null || graphics.__bitmap.width != width || graphics.__bitmap.height != height)
@@ -242,22 +318,66 @@ class Context3DVectorGraphics
 		inited = true;
 		try
 		{
-			// stencil pass: position only, no colour output needed (masked off)
+			// stencil pass: position only, no colour output (masked off anyway)
 			progStencil = context.createProgram(Context3DProgramFormat.GLSL);
 			progStencil.uploadSources("attribute vec2 va0;\nvoid main(){ gl_Position = vec4(va0, 0.0, 1.0); }",
 				"void main(){ gl_FragColor = vec4(0.0); }");
 
-			// variant A: colour via vertex attribute va1
-			progAttr = context.createProgram(Context3DProgramFormat.GLSL);
-			progAttr.uploadSources("attribute vec2 va0;\nattribute vec4 va1;\nvarying vec4 vCol;\nvoid main(){ vCol = va1; gl_Position = vec4(va0, 0.0, 1.0); }",
-				"varying vec4 vCol;\nvoid main(){ gl_FragColor = vec4(vCol.rgb * vCol.a, vCol.a); }");
+			// solid: premultiplied colour from fragment constant fc0
+			progSolid = context.createProgram(Context3DProgramFormat.GLSL);
+			progSolid.uploadSources("attribute vec2 va0;\nvoid main(){ gl_Position = vec4(va0, 0.0, 1.0); }", [
+				"uniform vec4 fc0;", // rgb, a (straight)
+				"void main(){ gl_FragColor = vec4(fc0.rgb * fc0.a, fc0.a); }"
+			].join("\n"));
 
-			// variant B: colour via a uColor uniform (set with gl.uniform; named so
-			// Context3D's constant flush ignores it)
-			progUniform = context.createProgram(Context3DProgramFormat.GLSL);
-			progUniform.uploadSources("attribute vec2 va0;\nvoid main(){ gl_Position = vec4(va0, 0.0, 1.0); }",
-				"uniform vec4 uColor;\nvoid main(){ gl_FragColor = vec4(uColor.rgb * uColor.a, uColor.a); }");
-			uColorLoc = context.gl.getUniformLocation(progUniform.__glProgram, "uColor");
+			// gradient: pixel coord -> gradient coord (fc1/fc2 matrix), sample ramp
+			progGradient = context.createProgram(Context3DProgramFormat.GLSL);
+			progGradient.uploadSources([
+				"attribute vec2 va0;",
+				"attribute vec2 va1;",
+				"varying vec2 vPixel;",
+				"void main(){ vPixel = va1; gl_Position = vec4(va0, 0.0, 1.0); }"
+			].join("\n"), [
+				"varying vec2 vPixel;",
+				"uniform vec4 fc0;", // mode, spread, 0, 0
+				"uniform vec4 fc1;", // mA, mB, mC, mD
+				"uniform vec4 fc2;", // mTX, mTY, 0, 0
+				"uniform sampler2D sampler0;",
+				"float sprd(float t, float m){ if(m<0.5) return clamp(t,0.0,1.0); if(m>1.5) return fract(t); float f=fract(t*0.5)*2.0; return f>1.0?2.0-f:f; }",
+				"void main(){",
+				"  float gx = fc1.x*vPixel.x + fc1.z*vPixel.y + fc2.x;",
+				"  float gy = fc1.y*vPixel.x + fc1.w*vPixel.y + fc2.y;",
+				"  vec4 c;",
+				"  if (fc0.x < 1.5) c = texture2D(sampler0, vec2(sprd((gx+819.2)/1638.4, fc0.y), 0.5));",
+				"  else c = texture2D(sampler0, vec2(sprd(length(vec2(gx,gy))/819.2, fc0.y), 0.5));",
+				"  gl_FragColor = vec4(c.rgb*c.a, c.a);",
+				"}"
+			].join("\n"));
+
+			// bitmap: pixel coord -> uv (fc1/fc2 matrix, already normalized), sample
+			progBitmap = context.createProgram(Context3DProgramFormat.GLSL);
+			progBitmap.uploadSources([
+				"attribute vec2 va0;",
+				"attribute vec2 va1;",
+				"varying vec2 vPixel;",
+				"void main(){ vPixel = va1; gl_Position = vec4(va0, 0.0, 1.0); }"
+			].join("\n"), [
+				"varying vec2 vPixel;",
+				"uniform vec4 fc1;", // mA, mB, mC, mD
+				"uniform vec4 fc2;", // mTX, mTY, 0, 0
+				"uniform sampler2D sampler0;",
+				"void main(){",
+				"  float u = fc1.x*vPixel.x + fc1.z*vPixel.y + fc2.x;",
+				"  float v = fc1.y*vPixel.x + fc1.w*vPixel.y + fc2.y;",
+				"  vec4 c = texture2D(sampler0, vec2(u, v));",
+				"  gl_FragColor = vec4(c.rgb*c.a, c.a);",
+				"}"
+			].join("\n"));
+
+			// 256x1 gradient ramp, straight RGBA (shader premultiplies)
+			rampTex = context.createRectangleTexture(256, 1, Context3DTextureFormat.BGRA, false);
+			rampBmd = new BitmapData(256, 1, true, 0xFF000000);
+			rampTex.uploadFromBitmapData(rampBmd);
 
 			ensureBuffers(context, 4096);
 			return true;
@@ -285,11 +405,11 @@ class Context3DVectorGraphics
 		ibufCap = cap;
 	}
 
-	private static function flushFill(context:Context3D, variant:Int, r:Float, g:Float, b:Float, a:Float):Void
+	private static function flushFill(context:Context3D):Void
 	{
 		if (_sub == null || _sub.length == 0) return;
 
-		// build stencil fan triangles (clip coords) with colour interleaved
+		// build stencil fan triangles (clip coords); pixel slots unused here
 		var verts = new Vector<Float>();
 		var n = 0;
 		for (sp in _sub)
@@ -300,9 +420,9 @@ class Context3DVectorGraphics
 			var i = 1;
 			while (i < cnt - 1)
 			{
-				pushV(verts, ax, ay, r, g, b, a);
-				pushV(verts, sp[i * 2], sp[i * 2 + 1], r, g, b, a);
-				pushV(verts, sp[i * 2 + 2], sp[i * 2 + 3], r, g, b, a);
+				pushV(verts, ax, ay, 0, 0);
+				pushV(verts, sp[i * 2], sp[i * 2 + 1], 0, 0);
+				pushV(verts, sp[i * 2 + 2], sp[i * 2 + 3], 0, 0);
 				n += 3;
 				i++;
 			}
@@ -322,14 +442,15 @@ class Context3DVectorGraphics
 		context.setVertexBufferAt(1, null);
 		context.drawTriangles(ibuf, 0, Std.int(n / 3));
 
-		// cover pass: full-screen quad where stencil != 0, reset stencil to 0
+		// cover pass: full-screen quad where stencil != 0, reset stencil to 0.
+		// va1 carries render-target pixel coords for gradient/bitmap shading.
 		var quad = new Vector<Float>();
-		pushV(quad, -1, -1, r, g, b, a);
-		pushV(quad, 1, -1, r, g, b, a);
-		pushV(quad, -1, 1, r, g, b, a);
-		pushV(quad, -1, 1, r, g, b, a);
-		pushV(quad, 1, -1, r, g, b, a);
-		pushV(quad, 1, 1, r, g, b, a);
+		pushV(quad, -1, -1, 0, _h);
+		pushV(quad, 1, -1, _w, _h);
+		pushV(quad, -1, 1, 0, 0);
+		pushV(quad, -1, 1, 0, 0);
+		pushV(quad, 1, -1, _w, _h);
+		pushV(quad, 1, 1, _w, 0);
 		vbuf.uploadFromVector(quad, 0, 6);
 
 		context.setColorMask(true, true, true, true);
@@ -337,36 +458,199 @@ class Context3DVectorGraphics
 		context.setStencilActions(Context3DTriangleFace.FRONT_AND_BACK, Context3DCompareMode.NOT_EQUAL, Context3DStencilAction.ZERO,
 			Context3DStencilAction.KEEP, Context3DStencilAction.KEEP);
 
-		if (variant == VARIANT_UNIFORM)
-		{
-			context.setProgram(progUniform);
-			context.setVertexBufferAt(0, vbuf, 0, Context3DVertexBufferFormat.FLOAT_2);
-			context.setVertexBufferAt(1, null);
-			// force the program to bind, then set the uniform directly
-			context.__flushGLProgram();
-			var gl = context.gl;
-			gl.uniform4f(uColorLoc, r, g, b, a);
-		}
-		else
-		{
-			context.setProgram(progAttr);
-			context.setVertexBufferAt(0, vbuf, 0, Context3DVertexBufferFormat.FLOAT_2);
-			context.setVertexBufferAt(1, vbuf, 2, Context3DVertexBufferFormat.FLOAT_4);
-		}
+		coverPass(context);
 		context.drawTriangles(ibuf, 0, 2);
 
 		_sub = [];
 		_cur = null;
 	}
 
-	private static inline function pushV(v:Vector<Float>, x:Float, y:Float, r:Float, g:Float, b:Float, a:Float):Void
+	private static function coverPass(context:Context3D):Void
+	{
+		var consts = new Vector<Float>();
+		switch (_mode)
+		{
+			case MODE_SOLID:
+				context.setProgram(progSolid);
+				context.setVertexBufferAt(0, vbuf, 0, Context3DVertexBufferFormat.FLOAT_2);
+				context.setVertexBufferAt(1, null);
+				consts.push(_r);
+				consts.push(_g);
+				consts.push(_b);
+				consts.push(_a);
+				context.setProgramConstantsFromVector(Context3DProgramType.FRAGMENT, 0, consts);
+
+			case MODE_LINEAR, MODE_RADIAL:
+				context.setProgram(progGradient);
+				context.setVertexBufferAt(0, vbuf, 0, Context3DVertexBufferFormat.FLOAT_2);
+				context.setVertexBufferAt(1, vbuf, 2, Context3DVertexBufferFormat.FLOAT_2);
+				// fc0 = mode, spread
+				consts.push(_mode == MODE_RADIAL ? 2.0 : 1.0);
+				consts.push(_spread);
+				consts.push(0);
+				consts.push(0);
+				// fc1 = mA, mB, mC, mD
+				consts.push(_mA);
+				consts.push(_mB);
+				consts.push(_mC);
+				consts.push(_mD);
+				// fc2 = mTX, mTY
+				consts.push(_mTX);
+				consts.push(_mTY);
+				consts.push(0);
+				consts.push(0);
+				context.setProgramConstantsFromVector(Context3DProgramType.FRAGMENT, 0, consts);
+				context.setTextureAt(0, rampTex);
+				context.setSamplerStateAt(0, Context3DWrapMode.CLAMP, Context3DTextureFilter.LINEAR, Context3DMipFilter.MIPNONE);
+
+			case MODE_BITMAP:
+				context.setProgram(progBitmap);
+				context.setVertexBufferAt(0, vbuf, 0, Context3DVertexBufferFormat.FLOAT_2);
+				context.setVertexBufferAt(1, vbuf, 2, Context3DVertexBufferFormat.FLOAT_2);
+				// fc0 unused; fc1 = matrix, fc2 = translation
+				consts.push(0);
+				consts.push(0);
+				consts.push(0);
+				consts.push(0);
+				consts.push(_mA);
+				consts.push(_mB);
+				consts.push(_mC);
+				consts.push(_mD);
+				consts.push(_mTX);
+				consts.push(_mTY);
+				consts.push(0);
+				consts.push(0);
+				context.setProgramConstantsFromVector(Context3DProgramType.FRAGMENT, 0, consts);
+				var bt:TextureBase = _bmp.getTexture(context);
+				context.setTextureAt(0, bt);
+				context.setSamplerStateAt(0, _bmpRepeat ? Context3DWrapMode.REPEAT : Context3DWrapMode.CLAMP,
+					_bmpSmooth ? Context3DTextureFilter.LINEAR : Context3DTextureFilter.NEAREST, Context3DMipFilter.MIPNONE);
+		}
+	}
+
+	// pixel -> gradient-local matrix + ramp, matching OpenGLGraphics.setupGradient
+	private static function setupGradient(type:GradientType, colors:Array<Int>, alphas:Array<Float>, ratios:Array<Int>, matrix:Matrix,
+			spread:SpreadMethod):Void
+	{
+		_mode = (type == RADIAL) ? MODE_RADIAL : MODE_LINEAR;
+		_spread = switch (spread)
+		{
+			case REFLECT: 1;
+			case REPEAT: 2;
+			default: 0; // PAD
+		}
+
+		// inverse of gradient matrix (shape-local -> gradient-local)
+		var ga = 1.0, gb = 0.0, gc = 0.0, gd = 1.0, gtx = 0.0, gty = 0.0;
+		if (matrix != null)
+		{
+			var det = matrix.a * matrix.d - matrix.b * matrix.c;
+			if (det != 0)
+			{
+				var id = 1.0 / det;
+				ga = matrix.d * id;
+				gb = -matrix.b * id;
+				gc = -matrix.c * id;
+				gd = matrix.a * id;
+				gtx = -(ga * matrix.tx + gc * matrix.ty);
+				gty = -(gb * matrix.tx + gd * matrix.ty);
+			}
+		}
+
+		// compose gInv (after) with invRender (first)
+		_mA = ga * _invA + gc * _invB;
+		_mC = ga * _invC + gc * _invD;
+		_mTX = ga * _invTX + gc * _invTY + gtx;
+		_mB = gb * _invA + gd * _invB;
+		_mD = gb * _invC + gd * _invD;
+		_mTY = gb * _invTX + gd * _invTY + gty;
+
+		buildRamp(colors, alphas, ratios);
+	}
+
+	// Build a 256x1 straight-RGBA ramp from the colour stops and upload it.
+	private static function buildRamp(colors:Array<Int>, alphas:Array<Float>, ratios:Array<Int>):Void
+	{
+		var n = colors.length;
+		var si = 0;
+		for (i in 0...256)
+		{
+			var t = i / 255.0;
+			while (si < n - 1 && (ratios[si + 1] / 255.0) < t)
+				si++;
+			var r0 = ratios[si] / 255.0;
+			var c0 = colors[si], a0 = alphas[si];
+			var r:Float, g:Float, b:Float, a:Float;
+			if (si >= n - 1 || t <= r0)
+			{
+				r = (c0 >> 16) & 0xFF;
+				g = (c0 >> 8) & 0xFF;
+				b = c0 & 0xFF;
+				a = a0 * 255;
+			}
+			else
+			{
+				var r1 = ratios[si + 1] / 255.0;
+				var c1 = colors[si + 1], a1 = alphas[si + 1];
+				var f = (r1 > r0) ? (t - r0) / (r1 - r0) : 0.0;
+				r = ((c0 >> 16) & 0xFF) + (((c1 >> 16) & 0xFF) - ((c0 >> 16) & 0xFF)) * f;
+				g = ((c0 >> 8) & 0xFF) + (((c1 >> 8) & 0xFF) - ((c0 >> 8) & 0xFF)) * f;
+				b = (c0 & 0xFF) + ((c1 & 0xFF) - (c0 & 0xFF)) * f;
+				a = (a0 + (a1 - a0) * f) * 255;
+			}
+			var ai = Std.int(a);
+			var col = (ai << 24) | (Std.int(r) << 16) | (Std.int(g) << 8) | Std.int(b);
+			rampBmd.setPixel32(i, 0, col);
+		}
+		rampTex.uploadFromBitmapData(rampBmd);
+	}
+
+	// pixel -> normalized uv matrix for a bitmap fill; returns false if the
+	// bitmap can't provide a texture (caller falls back to software).
+	private static function setupBitmap(bitmap:BitmapData, matrix:Matrix, repeat:Bool, smooth:Bool):Bool
+	{
+		if (bitmap == null) return false;
+
+		_mode = MODE_BITMAP;
+		_bmp = bitmap;
+		_bmpRepeat = repeat;
+		_bmpSmooth = smooth;
+
+		var tw = bitmap.width, th = bitmap.height;
+		if (tw < 1 || th < 1) return false;
+
+		// inverse of bitmap matrix (shape-local -> bitmap pixels)
+		var ba = 1.0, bb = 0.0, bc = 0.0, bd = 1.0, btx = 0.0, bty = 0.0;
+		if (matrix != null)
+		{
+			var det = matrix.a * matrix.d - matrix.b * matrix.c;
+			if (det != 0)
+			{
+				var id = 1.0 / det;
+				ba = matrix.d * id;
+				bb = -matrix.b * id;
+				bc = -matrix.c * id;
+				bd = matrix.a * id;
+				btx = -(ba * matrix.tx + bc * matrix.ty);
+				bty = -(bb * matrix.tx + bd * matrix.ty);
+			}
+		}
+		// compose bInv ∘ invRender, then scale rows by 1/size for uv
+		_mA = (ba * _invA + bc * _invB) / tw;
+		_mC = (ba * _invC + bc * _invD) / tw;
+		_mTX = (ba * _invTX + bc * _invTY + btx) / tw;
+		_mB = (bb * _invA + bd * _invB) / th;
+		_mD = (bb * _invC + bd * _invD) / th;
+		_mTY = (bb * _invTX + bd * _invTY + bty) / th;
+		return true;
+	}
+
+	private static inline function pushV(v:Vector<Float>, x:Float, y:Float, px:Float, py:Float):Void
 	{
 		v.push(x);
 		v.push(y);
-		v.push(r);
-		v.push(g);
-		v.push(b);
-		v.push(a);
+		v.push(px);
+		v.push(py);
 	}
 
 	private static inline function pushClip(lx:Float, ly:Float):Void
