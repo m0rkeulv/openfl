@@ -6,43 +6,41 @@ import openfl.display._internal.DrawCommandReader;
 #if (js && html5)
 import openfl.display.BitmapData;
 import openfl.display.CanvasRenderer;
+import openfl.display.GradientType;
+import openfl.display.SpreadMethod;
 import openfl.geom.Matrix;
 import js.Browser;
 import js.html.CanvasElement;
 import js.lib.Float32Array;
+import js.lib.Uint8Array;
 #end
 
 /**
 	OpenGLGraphics -- the MSAA vector-fill path.
 
 	Sibling of `CairoGraphics` (native software FSAA) and `CanvasGraphics` (html5
-	software FSAA). Where those emulate coverage-correct anti-aliasing by
-	supersampling and downsampling, this renders a shape's solid fills on the GPU
-	with **true MSAA**, so abutting fills partition coverage exactly -- no
-	background bleed (the Cairo/Canvas conflation artifact) and no ~N^2 cost.
+	software FSAA). Renders a shape's fills on the GPU with **true MSAA** so
+	abutting fills partition coverage exactly -- no background bleed (the
+	Cairo/Canvas conflation artifact) and no ~N^2 cost.
 
-	Pipeline (WebGL2, one multisampled framebuffer per shape):
+	Pipeline (WebGL2, one multisampled framebuffer per shape). Each fill is drawn
+	with **stencil-then-cover**, which fills an arbitrary path (concave, holes,
+	self-intersecting) without CPU triangulation:
+	  - stencil pass: draw an anchor-fan of the fill's flattened subpaths into the
+	    stencil buffer with op=INVERT (even-odd; holes cancel);
+	  - cover pass: draw a full-screen quad where stencil != 0, resetting the
+	    stencil to 0, shading each pixel by the fill (solid / gradient / bitmap).
+	Because the framebuffer is multisampled, coverage is per-sample, so interior
+	seams resolve exactly and the silhouette gets clean AA in one resolve.
 
-	  * Each fill is drawn with **stencil-then-cover**, which fills an arbitrary
-	    path (concave, holes, self-intersecting) without CPU triangulation:
-	      - stencil pass: draw a triangle fan (anchor -> each flattened edge) of
-	        all the fill's subpaths into the stencil buffer with op=INVERT, so the
-	        even-odd interior ends up with a non-zero stencil (holes cancel);
-	      - cover pass: draw a full-screen quad with the fill colour where
-	        stencil != 0, resetting the stencil to 0 as it goes.
-	  * Because the framebuffer is multisampled, the stencil (and therefore
-	    coverage) is per-sample, so interior seams between abutting fills resolve
-	    exactly and the silhouette gets clean AA -- all in one resolve.
-
-	Only solid-colour vector fills are handled for now (`isCompatible`); anything
-	else (gradients, bitmap/shader fills, thick line styles, non-zero winding,
-	the DRAW_* primitives) returns false so the caller falls back to the software
-	path. Curves are flattened; even-odd winding (OpenFL's Canvas default) is
-	assumed.
+	Supported fills: solid colour, linear and radial gradients, and bitmap fills.
+	Falls back to the software path for shader fills, thick line strokes, and
+	non-zero winding. Curves are flattened; even-odd winding (OpenFL's Canvas
+	default) is assumed. Gradients use sRGB interpolation and PAD/REPEAT/REFLECT
+	spread; radial focal point is treated as concentric (focal ~0).
 
 	Selected on html5 with `-D openfl_canvas_msaa` (dispatched from
 	`CanvasGraphics.render`). The same approach is reusable by native GL targets.
-	Kept deliberately separate; can fold into `Context3DGraphics` later.
 **/
 @:access(openfl.display.Graphics)
 @:access(openfl.display.BitmapData)
@@ -57,14 +55,26 @@ class OpenGLGraphics
 	public static var samples:Int = 4;
 
 	#if (js && html5)
+	private static inline var MODE_SOLID = 0;
+	private static inline var MODE_LINEAR = 1;
+	private static inline var MODE_RADIAL = 2;
+	private static inline var MODE_BITMAP = 3;
+
 	private static var supported:Bool = true;
 	private static var inited:Bool = false;
 	private static var glCanvas:CanvasElement;
 	private static var gl:Dynamic; // WebGL2RenderingContext
 	private static var prog:Dynamic;
 	private static var locPos:Int = -1;
-	private static var locColor:Dynamic;
+	private static var uMode:Dynamic;
+	private static var uColor:Dynamic;
+	private static var uRamp:Dynamic;
+	private static var uTex:Dynamic;
+	private static var uMat:Dynamic;
+	private static var uSpread:Dynamic;
+	private static var uWH:Dynamic;
 	private static var vbo:Dynamic;
+	private static var rampTex:Dynamic;
 	private static var msFBO:Dynamic;
 	private static var msColor:Dynamic;
 	private static var msDepthStencil:Dynamic;
@@ -74,20 +84,37 @@ class OpenGLGraphics
 
 	// Per-render working state (main thread only, like DrawCommandReader).
 	private static var _rt:Matrix;
+	private static var _invA:Float; // inverse render transform (pixel -> shape-local)
+	private static var _invB:Float;
+	private static var _invC:Float;
+	private static var _invD:Float;
+	private static var _invTX:Float;
+	private static var _invTY:Float;
 	private static var _w:Float;
 	private static var _h:Float;
+	private static var _bx:Float; // bounds origin, subtracted from local coords (as playCommands does)
+	private static var _by:Float;
 	private static var _sub:Array<Array<Float>>;
 	private static var _cur:Array<Float>;
 	private static var _clx:Float;
 	private static var _cly:Float;
 
+	// Current fill descriptor.
+	private static var _mode:Int = MODE_SOLID;
+	private static var _r:Float = 0;
+	private static var _g:Float = 0;
+	private static var _b:Float = 0;
+	private static var _a:Float = 0;
+	private static var _spread:Int = 0;
+	private static var _mat:Float32Array; // pixel -> gradient-local (mat3 col-major)
+
 	private static final QUAD:Array<Float> = [-1.0, -1.0, 1.0, -1.0, -1.0, 1.0, 1.0, 1.0];
 	#end
 
 	/**
-		Whether this path can currently render `graphics`: solid-colour vector
-		fills only (path ops + BEGIN_FILL/END_FILL, no stroke, even-odd winding).
-		Returns false for anything else so the caller uses the software path.
+		Whether this path can currently render `graphics`: solid-colour or
+		gradient (linear/radial) or bitmap vector fills, no stroke, even-odd
+		winding. Returns false for anything else so the caller uses software.
 	**/
 	public static function isCompatible(graphics:Graphics):Bool
 	{
@@ -100,7 +127,7 @@ class OpenGLGraphics
 		{
 			switch (type)
 			{
-				case BEGIN_FILL:
+				case BEGIN_FILL, BEGIN_GRADIENT_FILL, BEGIN_BITMAP_FILL:
 					hasAnyFill = true;
 					data.skip(type);
 
@@ -108,16 +135,12 @@ class OpenGLGraphics
 					data.skip(type);
 
 				case LINE_STYLE:
-					// A visible stroke isn't handled by this path yet.
 					var c = data.readLineStyle();
-					if (c.thickness != null)
-					{
-						ok = false;
-					}
+					if (c.thickness != null) ok = false; // visible stroke not handled yet
 
 				default:
-					// bitmap/gradient/shader fills, DRAW_* primitives, non-zero
-					// winding, overrides, unknown -> not handled.
+					// shader fills, DRAW_* primitives, non-zero winding, overrides,
+					// unknown -> not handled.
 					ok = false;
 					data.skip(type);
 			}
@@ -132,8 +155,7 @@ class OpenGLGraphics
 
 	/**
 		Render `graphics` via MSAA into `graphics.__canvas` (same contract as
-		`CanvasGraphics.render`: 2D canvas at normal size, `__bitmapScaleX/Y = 1`).
-		Returns true if handled, false to fall back to the software path.
+		`CanvasGraphics.render`). Returns true if handled, false to fall back.
 	**/
 	public static function render(graphics:Graphics, renderer:CanvasRenderer):Bool
 	{
@@ -148,6 +170,23 @@ class OpenGLGraphics
 		if (!ensureTarget(width, height)) return false;
 
 		_rt = graphics.__renderTransform;
+		// __renderTransform is scale-only; the bounds origin is applied by
+		// subtracting bounds.x/y from every local coord (as CanvasGraphics'
+		// playCommands does). Keep it here for the geometry + inverse.
+		_bx = (graphics.__bounds != null) ? graphics.__bounds.x : 0;
+		_by = (graphics.__bounds != null) ? graphics.__bounds.y : 0;
+		// inverse render transform for gradient/bitmap coords. pixel = _rt *
+		// (local - bounds), so pixel -> local adds bounds back into the
+		// translation (below).
+		var det = _rt.a * _rt.d - _rt.b * _rt.c;
+		if (det == 0) return false;
+		var idet = 1.0 / det;
+		_invA = _rt.d * idet;
+		_invB = -_rt.b * idet;
+		_invC = -_rt.c * idet;
+		_invD = _rt.a * idet;
+		_invTX = -(_invA * _rt.tx + _invC * _rt.ty) + _bx;
+		_invTY = -(_invB * _rt.tx + _invD * _rt.ty) + _by;
 		_w = width;
 		_h = height;
 		_sub = [];
@@ -158,8 +197,7 @@ class OpenGLGraphics
 		gl.disable(gl.DEPTH_TEST);
 		gl.enable(gl.STENCIL_TEST);
 		gl.enable(gl.BLEND);
-		// premultiplied over (shader outputs premultiplied colour)
-		gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+		gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA); // premultiplied over
 		gl.clearColor(0, 0, 0, 0);
 		gl.clearStencil(0);
 		gl.clear(gl.COLOR_BUFFER_BIT | gl.STENCIL_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
@@ -168,29 +206,51 @@ class OpenGLGraphics
 		gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
 		gl.enableVertexAttribArray(locPos);
 		gl.vertexAttribPointer(locPos, 2, gl.FLOAT, false, 0, 0);
+		gl.uniform2f(uWH, width, height);
 
 		var data = new DrawCommandReader(graphics.__commands);
 		var hasFill = false;
-		var fr = 0.0, fg = 0.0, fb = 0.0, fa = 0.0;
 
 		for (type in graphics.__commands.types)
 		{
 			switch (type)
 			{
 				case BEGIN_FILL:
-					if (hasFill) flushFill(fr, fg, fb, fa);
+					if (hasFill) flushFill();
 					var c = data.readBeginFill();
-					fr = ((c.color >> 16) & 0xFF) / 255.0;
-					fg = ((c.color >> 8) & 0xFF) / 255.0;
-					fb = (c.color & 0xFF) / 255.0;
-					fa = c.alpha;
+					_mode = MODE_SOLID;
+					_r = ((c.color >> 16) & 0xFF) / 255.0;
+					_g = ((c.color >> 8) & 0xFF) / 255.0;
+					_b = (c.color & 0xFF) / 255.0;
+					_a = c.alpha;
+					hasFill = true;
+					_sub = [];
+					_cur = null;
+
+				case BEGIN_GRADIENT_FILL:
+					if (hasFill) flushFill();
+					var c = data.readBeginGradientFill();
+					setupGradient(c.type, c.colors, c.alphas, c.ratios, c.matrix, c.spreadMethod);
+					hasFill = true;
+					_sub = [];
+					_cur = null;
+
+				case BEGIN_BITMAP_FILL:
+					if (hasFill) flushFill();
+					var c = data.readBeginBitmapFill();
+					if (!setupBitmap(c.bitmap, c.matrix, c.repeat, c.smooth))
+					{
+						// couldn't prepare texture -> abandon MSAA, fall back
+						data.destroy();
+						return false;
+					}
 					hasFill = true;
 					_sub = [];
 					_cur = null;
 
 				case END_FILL:
 					data.skip(type);
-					if (hasFill) flushFill(fr, fg, fb, fa);
+					if (hasFill) flushFill();
 					hasFill = false;
 					_sub = [];
 					_cur = null;
@@ -218,11 +278,9 @@ class OpenGLGraphics
 					data.skip(type);
 			}
 		}
-		if (hasFill) flushFill(fr, fg, fb, fa);
+		if (hasFill) flushFill();
 		data.destroy();
 
-		// Resolve the multisampled buffer into the (single-sample) default
-		// framebuffer of glCanvas, then snapshot it into graphics.__canvas.
 		gl.bindFramebuffer(gl.READ_FRAMEBUFFER, msFBO);
 		gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
 		gl.clearColor(0, 0, 0, 0);
@@ -264,6 +322,169 @@ class OpenGLGraphics
 	}
 
 	#if (js && html5)
+	// Compose pixel->gradient-local: apply inverse render (pixel->shape) then
+	// inverse of `matrix` (shape->gradient-local). Stored as a mat3 (col-major).
+	private static function setupGradient(type:GradientType, colors:Array<Int>, alphas:Array<Float>, ratios:Array<Int>, matrix:Matrix,
+			spread:SpreadMethod):Void
+	{
+		_mode = (type == RADIAL) ? MODE_RADIAL : MODE_LINEAR;
+		_spread = switch (spread)
+		{
+			case REFLECT: 1;
+			case REPEAT: 2;
+			default: 0; // PAD
+		}
+
+		// inverse of gradient matrix (shape-local -> gradient-local)
+		var ga = 1.0, gb = 0.0, gc = 0.0, gd = 1.0, gtx = 0.0, gty = 0.0;
+		if (matrix != null)
+		{
+			var det = matrix.a * matrix.d - matrix.b * matrix.c;
+			if (det != 0)
+			{
+				var id = 1.0 / det;
+				ga = matrix.d * id;
+				gb = -matrix.b * id;
+				gc = -matrix.c * id;
+				gd = matrix.a * id;
+				gtx = -(ga * matrix.tx + gc * matrix.ty);
+				gty = -(gb * matrix.tx + gd * matrix.ty);
+			}
+		}
+
+		// compose gInv (after) with invRender (first): C = gInv ∘ invRender
+		var A = ga * _invA + gc * _invB;
+		var C = ga * _invC + gc * _invD;
+		var TX = ga * _invTX + gc * _invTY + gtx;
+		var B = gb * _invA + gd * _invB;
+		var D = gb * _invC + gd * _invD;
+		var TY = gb * _invTX + gd * _invTY + gty;
+		_mat = new Float32Array(cast [A, B, 0.0, C, D, 0.0, TX, TY, 1.0]);
+
+		buildRamp(colors, alphas, ratios);
+	}
+
+	// Build a 256x1 straight-RGBA ramp from the colour stops and upload it.
+	private static function buildRamp(colors:Array<Int>, alphas:Array<Float>, ratios:Array<Int>):Void
+	{
+		var px = new Uint8Array(256 * 4);
+		var n = colors.length;
+		var si = 0;
+		for (i in 0...256)
+		{
+			var t = i / 255.0;
+			// advance to the stop interval containing t
+			while (si < n - 1 && (ratios[si + 1] / 255.0) < t)
+				si++;
+			var r0 = ratios[si] / 255.0;
+			var c0 = colors[si], a0 = alphas[si];
+			var r:Float, g:Float, b:Float, a:Float;
+			if (si >= n - 1 || t <= r0)
+			{
+				r = (c0 >> 16) & 0xFF;
+				g = (c0 >> 8) & 0xFF;
+				b = c0 & 0xFF;
+				a = a0 * 255;
+			}
+			else
+			{
+				var r1 = ratios[si + 1] / 255.0;
+				var c1 = colors[si + 1], a1 = alphas[si + 1];
+				var f = (r1 > r0) ? (t - r0) / (r1 - r0) : 0.0;
+				r = ((c0 >> 16) & 0xFF) + (((c1 >> 16) & 0xFF) - ((c0 >> 16) & 0xFF)) * f;
+				g = ((c0 >> 8) & 0xFF) + (((c1 >> 8) & 0xFF) - ((c0 >> 8) & 0xFF)) * f;
+				b = (c0 & 0xFF) + ((c1 & 0xFF) - (c0 & 0xFF)) * f;
+				a = (a0 + (a1 - a0) * f) * 255;
+			}
+			var o = i * 4;
+			px[o] = Std.int(r);
+			px[o + 1] = Std.int(g);
+			px[o + 2] = Std.int(b);
+			px[o + 3] = Std.int(a);
+		}
+		gl.bindTexture(gl.TEXTURE_2D, rampTex);
+		gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 256, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, px);
+	}
+
+	// Prepare a bitmap fill (texture + pixel->uv matrix). Returns false if the
+	// bitmap can't be turned into a texture (caller falls back to software).
+	private static function setupBitmap(bitmap:BitmapData, matrix:Matrix, repeat:Bool, smooth:Bool):Bool
+	{
+		if (bitmap == null || bitmap.image == null) return false;
+		var el:Dynamic = null;
+		try
+		{
+			lime._internal.graphics.ImageCanvasUtil.convertToCanvas(bitmap.image);
+			el = bitmap.image.src; // backing canvas/image in the html5 backend
+		}
+		catch (e:Dynamic) {}
+		if (el == null) return false;
+
+		_mode = MODE_BITMAP;
+		_spread = 0;
+
+		var tw = bitmap.width, th = bitmap.height;
+
+		// inverse of bitmap matrix (shape-local -> bitmap pixels), then /size -> uv
+		var ba = 1.0, bb = 0.0, bc = 0.0, bd = 1.0, btx = 0.0, bty = 0.0;
+		if (matrix != null)
+		{
+			var det = matrix.a * matrix.d - matrix.b * matrix.c;
+			if (det != 0)
+			{
+				var id = 1.0 / det;
+				ba = matrix.d * id;
+				bb = -matrix.b * id;
+				bc = -matrix.c * id;
+				bd = matrix.a * id;
+				btx = -(ba * matrix.tx + bc * matrix.ty);
+				bty = -(bb * matrix.tx + bd * matrix.ty);
+			}
+		}
+		// compose bInv ∘ invRender, then scale rows by 1/size for uv
+		var A = (ba * _invA + bc * _invB) / tw;
+		var C = (ba * _invC + bc * _invD) / tw;
+		var TX = (ba * _invTX + bc * _invTY + btx) / tw;
+		var B = (bb * _invA + bd * _invB) / th;
+		var D = (bb * _invC + bd * _invD) / th;
+		var TY = (bb * _invTX + bd * _invTY + bty) / th;
+		_mat = new Float32Array(cast [A, B, 0.0, C, D, 0.0, TX, TY, 1.0]);
+
+		gl.activeTexture(gl.TEXTURE1);
+		gl.bindTexture(gl.TEXTURE_2D, getBitmapTexture(bitmap, el));
+		var wrap = repeat ? gl.REPEAT : gl.CLAMP_TO_EDGE;
+		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, wrap);
+		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, wrap);
+		var filt = smooth ? gl.LINEAR : gl.NEAREST;
+		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filt);
+		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filt);
+		return true;
+	}
+
+	// Upload/reuse a GL texture for a BitmapData, keyed on the object, refreshed
+	// when its image version changes.
+	private static function getBitmapTexture(bitmap:BitmapData, el:Dynamic):Dynamic
+	{
+		var ver = -1;
+		try
+		{
+			ver = bitmap.image.version;
+		}
+		catch (e:Dynamic) {}
+		var tex = untyped bitmap.__oglTex;
+		if (tex != null && untyped bitmap.__oglTexVer == ver) return tex;
+		if (tex == null)
+		{
+			tex = gl.createTexture();
+			untyped bitmap.__oglTex = tex;
+		}
+		gl.bindTexture(gl.TEXTURE_2D, tex);
+		gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+		gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, el);
+		untyped bitmap.__oglTexVer = ver;
+		return tex;
+	}
+
 	private static function initGL():Bool
 	{
 		if (inited) return gl != null;
@@ -278,9 +499,34 @@ class OpenGLGraphics
 				return false;
 			}
 
-			var vs = compile(gl.VERTEX_SHADER, "#version 300 es\nin vec2 p;\nvoid main(){ gl_Position = vec4(p, 0.0, 1.0); }");
-			var fs = compile(gl.FRAGMENT_SHADER,
-				"#version 300 es\nprecision highp float;\nuniform vec4 uColor;\nout vec4 o;\nvoid main(){ o = vec4(uColor.rgb * uColor.a, uColor.a); }");
+			var vs = compile(gl.VERTEX_SHADER,
+				"#version 300 es\nin vec2 p;\nuniform vec2 uWH;\nout vec2 vPixel;\nvoid main(){ vPixel = vec2((p.x+1.0)*0.5*uWH.x, (1.0-p.y)*0.5*uWH.y); gl_Position = vec4(p, 0.0, 1.0); }");
+			var fs = compile(gl.FRAGMENT_SHADER, [
+				"#version 300 es",
+				"precision highp float;",
+				"uniform int uMode;",
+				"uniform vec4 uColor;",
+				"uniform sampler2D uRamp;",
+				"uniform sampler2D uTex;",
+				"uniform mat3 uMat;",
+				"uniform int uSpread;",
+				"in vec2 vPixel;",
+				"out vec4 o;",
+				"float spread(float t){",
+				"  if(uSpread==0) return clamp(t,0.0,1.0);",
+				"  if(uSpread==2) return fract(t);",
+				"  float f=fract(t*0.5)*2.0; return f>1.0?2.0-f:f;",
+				"}",
+				"void main(){",
+				"  vec4 c;",
+				"  if(uMode==0){ c=uColor; }",
+				"  else { vec3 g=uMat*vec3(vPixel,1.0);",
+				"    if(uMode==1){ c=texture(uRamp, vec2(spread((g.x+819.2)/1638.4),0.5)); }",
+				"    else if(uMode==2){ c=texture(uRamp, vec2(spread(length(g.xy)/819.2),0.5)); }",
+				"    else { c=texture(uTex, g.xy); } }",
+				"  o=vec4(c.rgb*c.a, c.a);",
+				"}"
+			].join("\n"));
 			prog = gl.createProgram();
 			gl.attachShader(prog, vs);
 			gl.attachShader(prog, fs);
@@ -291,8 +537,25 @@ class OpenGLGraphics
 				return false;
 			}
 			locPos = gl.getAttribLocation(prog, "p");
-			locColor = gl.getUniformLocation(prog, "uColor");
+			uMode = gl.getUniformLocation(prog, "uMode");
+			uColor = gl.getUniformLocation(prog, "uColor");
+			uRamp = gl.getUniformLocation(prog, "uRamp");
+			uTex = gl.getUniformLocation(prog, "uTex");
+			uMat = gl.getUniformLocation(prog, "uMat");
+			uSpread = gl.getUniformLocation(prog, "uSpread");
+			uWH = gl.getUniformLocation(prog, "uWH");
 			vbo = gl.createBuffer();
+
+			rampTex = gl.createTexture();
+			gl.bindTexture(gl.TEXTURE_2D, rampTex);
+			gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+			gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+			gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+			gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+			gl.useProgram(prog);
+			gl.uniform1i(uRamp, 0);
+			gl.uniform1i(uTex, 1);
 			return true;
 		}
 		catch (e:Dynamic)
@@ -314,7 +577,6 @@ class OpenGLGraphics
 		return s;
 	}
 
-	// Create/reuse the multisampled colour + depth-stencil framebuffer.
 	private static function ensureTarget(w:Int, h:Int):Bool
 	{
 		var s = samples;
@@ -358,22 +620,21 @@ class OpenGLGraphics
 		return true;
 	}
 
-	// local coord -> clip space (y flipped so local-top maps to the top row)
 	private static inline function pushClip(lx:Float, ly:Float):Void
 	{
-		var px = _rt.a * lx + _rt.c * ly + _rt.tx;
-		var py = _rt.b * lx + _rt.d * ly + _rt.ty;
+		var x = lx - _bx, y = ly - _by;
+		var px = _rt.a * x + _rt.c * y + _rt.tx;
+		var py = _rt.b * x + _rt.d * y + _rt.ty;
 		_cur.push(px / _w * 2 - 1);
 		_cur.push(1 - py / _h * 2);
 	}
 
-	// segment count for a curve, from its transformed chord length
 	private static inline function segsFor(ax:Float, ay:Float, bx:Float, by:Float):Int
 	{
-		var pax = _rt.a * ax + _rt.c * ay + _rt.tx;
-		var pay = _rt.b * ax + _rt.d * ay + _rt.ty;
-		var pbx = _rt.a * bx + _rt.c * by + _rt.tx;
-		var pby = _rt.b * bx + _rt.d * by + _rt.ty;
+		var pax = _rt.a * (ax - _bx) + _rt.c * (ay - _by) + _rt.tx;
+		var pay = _rt.b * (ax - _bx) + _rt.d * (ay - _by) + _rt.ty;
+		var pbx = _rt.a * (bx - _bx) + _rt.c * (by - _by) + _rt.tx;
+		var pby = _rt.b * (bx - _bx) + _rt.d * (by - _by) + _rt.ty;
 		var dx = pbx - pax, dy = pby - pay;
 		var n = Math.ceil(Math.sqrt(dx * dx + dy * dy) / 4);
 		if (n < 4) n = 4;
@@ -392,10 +653,7 @@ class OpenGLGraphics
 
 	private static function emitLine(lx:Float, ly:Float):Void
 	{
-		if (_cur == null)
-		{
-			emitMove(lx, ly);
-		}
+		if (_cur == null) emitMove(lx, ly);
 		else
 		{
 			pushClip(lx, ly);
@@ -412,8 +670,7 @@ class OpenGLGraphics
 		var i = 1;
 		while (i <= n)
 		{
-			var t = i / n;
-			var mt = 1 - t;
+			var t = i / n, mt = 1 - t;
 			pushClip(mt * mt * x0 + 2 * mt * t * cx + t * t * ax, mt * mt * y0 + 2 * mt * t * cy + t * t * ay);
 			i++;
 		}
@@ -429,8 +686,7 @@ class OpenGLGraphics
 		var i = 1;
 		while (i <= n)
 		{
-			var t = i / n;
-			var mt = 1 - t;
+			var t = i / n, mt = 1 - t;
 			var b0 = mt * mt * mt, b1 = 3 * mt * mt * t, b2 = 3 * mt * t * t, b3 = t * t * t;
 			pushClip(b0 * x0 + b1 * c1x + b2 * c2x + b3 * ax, b0 * y0 + b1 * c1y + b2 * c2y + b3 * ay);
 			i++;
@@ -440,7 +696,7 @@ class OpenGLGraphics
 	}
 
 	// Render one fill: stencil pass (even-odd INVERT) then cover pass.
-	private static function flushFill(r:Float, g:Float, b:Float, a:Float):Void
+	private static function flushFill():Void
 	{
 		if (_sub == null || _sub.length == 0) return;
 
@@ -469,20 +725,30 @@ class OpenGLGraphics
 			return;
 		}
 
-		// stencil pass: no colour, toggle stencil per covered sample
+		// stencil pass
 		gl.colorMask(false, false, false, false);
 		gl.stencilMask(0xFF);
 		gl.stencilFunc(gl.ALWAYS, 0, 0xFF);
 		gl.stencilOp(gl.KEEP, gl.KEEP, gl.INVERT);
-		gl.uniform4f(locColor, 0, 0, 0, 0);
+		gl.uniform1i(uMode, MODE_SOLID);
+		gl.uniform4f(uColor, 0, 0, 0, 0);
 		gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(cast verts), gl.STREAM_DRAW);
 		gl.drawArrays(gl.TRIANGLES, 0, Std.int(verts.length / 2));
 
-		// cover pass: paint colour where stencil != 0, reset stencil to 0
+		// cover pass
 		gl.colorMask(true, true, true, true);
 		gl.stencilFunc(gl.NOTEQUAL, 0, 0xFF);
 		gl.stencilOp(gl.KEEP, gl.KEEP, gl.ZERO);
-		gl.uniform4f(locColor, r, g, b, a);
+		gl.uniform1i(uMode, _mode);
+		if (_mode == MODE_SOLID)
+		{
+			gl.uniform4f(uColor, _r, _g, _b, _a);
+		}
+		else
+		{
+			gl.uniformMatrix3fv(uMat, false, _mat);
+			gl.uniform1i(uSpread, _spread);
+		}
 		gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(cast QUAD), gl.STREAM_DRAW);
 		gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
