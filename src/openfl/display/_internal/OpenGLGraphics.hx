@@ -6,7 +6,10 @@ import openfl.display._internal.DrawCommandReader;
 #if (js && html5)
 import openfl.display.BitmapData;
 import openfl.display.CanvasRenderer;
+import openfl.display.CapsStyle;
 import openfl.display.GradientType;
+import openfl.display.JointStyle;
+import openfl.display.LineScaleMode;
 import openfl.display.SpreadMethod;
 import openfl.geom.Matrix;
 import js.Browser;
@@ -108,6 +111,20 @@ class OpenGLGraphics
 	private static var _spread:Int = 0;
 	private static var _mat:Float32Array; // pixel -> gradient-local (mat3 col-major)
 
+	// Current stroke (line) descriptor. Strokes are tessellated to fill geometry
+	// and rendered on the GPU too, so this renderer stays GPU-only.
+	private static var _hasStroke:Bool = false;
+	private static var _shw:Float = 0; // half thickness, in pixels
+	private static var _scaps:Int = 0; // 0 butt, 1 round, 2 square
+	private static var _sjoints:Int = 0; // 0 bevel, 1 miter, 2 round
+	private static var _smiter:Float = 3;
+	private static var _slr:Float = 0;
+	private static var _slg:Float = 0;
+	private static var _slb:Float = 0;
+	private static var _sla:Float = 0;
+	// Collected stroke batches (rendered after all fills, so strokes sit on top).
+	private static var _strokeBatches:Array<{verts:Array<Float>, r:Float, g:Float, b:Float, a:Float}>;
+
 	private static final QUAD:Array<Float> = [-1.0, -1.0, 1.0, -1.0, -1.0, 1.0, 1.0, 1.0];
 	#end
 
@@ -131,16 +148,15 @@ class OpenGLGraphics
 					hasAnyFill = true;
 					data.skip(type);
 
-				case END_FILL, MOVE_TO, LINE_TO, CURVE_TO, CUBIC_CURVE_TO, WINDING_EVEN_ODD:
+				case END_FILL, MOVE_TO, LINE_TO, CURVE_TO, CUBIC_CURVE_TO, WINDING_EVEN_ODD, LINE_STYLE:
+					// solid strokes are tessellated on the GPU; gradient/bitmap line
+					// styles are separate commands (LINE_GRADIENT_STYLE / _BITMAP_STYLE)
+					// and fall through to the default reject below.
 					data.skip(type);
 
-				case LINE_STYLE:
-					var c = data.readLineStyle();
-					if (c.thickness != null) ok = false; // visible stroke not handled yet
-
 				default:
-					// shader fills, DRAW_* primitives, non-zero winding, overrides,
-					// unknown -> not handled.
+					// shader fills, gradient/bitmap strokes, DRAW_* primitives,
+					// non-zero winding, overrides, unknown -> not handled.
 					ok = false;
 					data.skip(type);
 			}
@@ -191,6 +207,8 @@ class OpenGLGraphics
 		_h = height;
 		_sub = [];
 		_cur = null;
+		_hasStroke = false;
+		_strokeBatches = [];
 
 		gl.bindFramebuffer(gl.FRAMEBUFFER, msFBO);
 		gl.viewport(0, 0, width, height);
@@ -224,6 +242,7 @@ class OpenGLGraphics
 					_b = (c.color & 0xFF) / 255.0;
 					_a = c.alpha;
 					hasFill = true;
+					collectStrokes();
 					_sub = [];
 					_cur = null;
 
@@ -232,6 +251,7 @@ class OpenGLGraphics
 					var c = data.readBeginGradientFill();
 					setupGradient(c.type, c.colors, c.alphas, c.ratios, c.matrix, c.spreadMethod);
 					hasFill = true;
+					collectStrokes();
 					_sub = [];
 					_cur = null;
 
@@ -245,6 +265,7 @@ class OpenGLGraphics
 						return false;
 					}
 					hasFill = true;
+					collectStrokes();
 					_sub = [];
 					_cur = null;
 
@@ -252,6 +273,7 @@ class OpenGLGraphics
 					data.skip(type);
 					if (hasFill) flushFill();
 					hasFill = false;
+					collectStrokes();
 					_sub = [];
 					_cur = null;
 
@@ -272,13 +294,44 @@ class OpenGLGraphics
 					emitCubic(c.controlX1, c.controlY1, c.controlX2, c.controlY2, c.anchorX, c.anchorY);
 
 				case LINE_STYLE:
-					data.readLineStyle(); // thickness==null guaranteed by isCompatible
+					var c = data.readLineStyle();
+					if (c.thickness == null)
+					{
+						_hasStroke = false;
+					}
+					else
+					{
+						_hasStroke = true;
+						var sc = (c.scaleMode == LineScaleMode.NONE) ? 1.0 : Math.sqrt(Math.abs(_rt.a * _rt.d - _rt.b * _rt.c));
+						var pxw = c.thickness * sc;
+						if (pxw < 1) pxw = 1; // hairline / min 1px
+						_shw = pxw / 2;
+						_slr = ((c.color >> 16) & 0xFF) / 255.0;
+						_slg = ((c.color >> 8) & 0xFF) / 255.0;
+						_slb = (c.color & 0xFF) / 255.0;
+						_sla = c.alpha;
+						_scaps = switch (c.caps)
+						{
+							case ROUND: 1;
+							case SQUARE: 2;
+							default: 0; // NONE = butt
+						}
+						_sjoints = switch (c.joints)
+						{
+							case MITER: 1;
+							case ROUND: 2;
+							default: 0; // BEVEL
+						}
+						_smiter = (c.miterLimit != null && c.miterLimit > 1) ? c.miterLimit : 3;
+					}
 
 				default:
 					data.skip(type);
 			}
 		}
 		if (hasFill) flushFill();
+		collectStrokes();
+		renderStrokeBatches();
 		data.destroy();
 
 		gl.bindFramebuffer(gl.READ_FRAMEBUFFER, msFBO);
@@ -623,10 +676,20 @@ class OpenGLGraphics
 	private static inline function pushClip(lx:Float, ly:Float):Void
 	{
 		var x = lx - _bx, y = ly - _by;
-		var px = _rt.a * x + _rt.c * y + _rt.tx;
-		var py = _rt.b * x + _rt.d * y + _rt.ty;
-		_cur.push(px / _w * 2 - 1);
-		_cur.push(1 - py / _h * 2);
+		// store PIXEL coords (shared by fills and stroke tessellation); the
+		// fill/stroke passes convert to clip space at emit time.
+		_cur.push(_rt.a * x + _rt.c * y + _rt.tx);
+		_cur.push(_rt.b * x + _rt.d * y + _rt.ty);
+	}
+
+	private static inline function clipX(px:Float):Float
+	{
+		return px / _w * 2 - 1;
+	}
+
+	private static inline function clipY(py:Float):Float
+	{
+		return 1 - py / _h * 2;
 	}
 
 	private static inline function segsFor(ax:Float, ay:Float, bx:Float, by:Float):Int
@@ -705,25 +768,20 @@ class OpenGLGraphics
 		{
 			var n = sp.length >> 1;
 			if (n < 3) continue;
-			var ax = sp[0], ay = sp[1];
+			var ax = clipX(sp[0]), ay = clipY(sp[1]);
 			var i = 1;
 			while (i < n - 1)
 			{
 				verts.push(ax);
 				verts.push(ay);
-				verts.push(sp[i * 2]);
-				verts.push(sp[i * 2 + 1]);
-				verts.push(sp[i * 2 + 2]);
-				verts.push(sp[i * 2 + 3]);
+				verts.push(clipX(sp[i * 2]));
+				verts.push(clipY(sp[i * 2 + 1]));
+				verts.push(clipX(sp[i * 2 + 2]));
+				verts.push(clipY(sp[i * 2 + 3]));
 				i++;
 			}
 		}
-		if (verts.length == 0)
-		{
-			_sub = [];
-			_cur = null;
-			return;
-		}
+		if (verts.length == 0) return;
 
 		// stencil pass
 		gl.colorMask(false, false, false, false);
@@ -751,9 +809,206 @@ class OpenGLGraphics
 		}
 		gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(cast QUAD), gl.STREAM_DRAW);
 		gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+		// NOTE: does not reset _sub -- the caller does, after collectStrokes(),
+		// so the same path can be both filled and stroked.
+	}
 
-		_sub = [];
-		_cur = null;
+	// ---- strokes: tessellated to fill geometry, rendered on the GPU too ----
+
+	// Build stroke triangles for every subpath currently in _sub (under the
+	// active line style) into a batch, drawn after all fills so strokes sit on
+	// top. NOTE: a line-style change mid-path applies the final style to the
+	// whole group (rare); set lineStyle before the path for exact results.
+	private static function collectStrokes():Void
+	{
+		if (!_hasStroke || _sub == null || _sub.length == 0) return;
+		var out = new Array<Float>();
+		for (sp in _sub)
+			strokeSubpath(sp, out);
+		if (out.length > 0) _strokeBatches.push({verts: out, r: _slr, g: _slg, b: _slb, a: _sla});
+	}
+
+	private static function renderStrokeBatches():Void
+	{
+		if (_strokeBatches == null) return;
+		for (b in _strokeBatches)
+			flushStrokeBatch(b.verts, b.r, b.g, b.b, b.a);
+	}
+
+	// Union-coverage stencil (stroke pieces overlap at joints/caps) then cover,
+	// so overlaps and translucent strokes stay single-coverage.
+	private static function flushStrokeBatch(verts:Array<Float>, r:Float, g:Float, b:Float, a:Float):Void
+	{
+		if (verts.length == 0) return;
+
+		gl.colorMask(false, false, false, false);
+		gl.stencilMask(0xFF);
+		gl.stencilFunc(gl.ALWAYS, 1, 0xFF);
+		gl.stencilOp(gl.KEEP, gl.KEEP, gl.REPLACE); // union: any covered sample -> 1
+		gl.uniform1i(uMode, MODE_SOLID);
+		gl.uniform4f(uColor, 0, 0, 0, 0);
+		gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(cast verts), gl.STREAM_DRAW);
+		gl.drawArrays(gl.TRIANGLES, 0, Std.int(verts.length / 2));
+
+		gl.colorMask(true, true, true, true);
+		gl.stencilFunc(gl.NOTEQUAL, 0, 0xFF);
+		gl.stencilOp(gl.KEEP, gl.KEEP, gl.ZERO);
+		gl.uniform1i(uMode, MODE_SOLID);
+		gl.uniform4f(uColor, r, g, b, a);
+		gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(cast QUAD), gl.STREAM_DRAW);
+		gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+	}
+
+	private static inline function sTri(out:Array<Float>, ax:Float, ay:Float, bx:Float, by:Float, cx:Float, cy:Float):Void
+	{
+		out.push(clipX(ax));
+		out.push(clipY(ay));
+		out.push(clipX(bx));
+		out.push(clipY(by));
+		out.push(clipX(cx));
+		out.push(clipY(cy));
+	}
+
+	private static function sDisc(out:Array<Float>, cx:Float, cy:Float, r:Float):Void
+	{
+		var seg = 16, i = 0;
+		while (i < seg)
+		{
+			var a0 = i / seg * 2 * Math.PI, a1 = (i + 1) / seg * 2 * Math.PI;
+			sTri(out, cx, cy, cx + Math.cos(a0) * r, cy + Math.sin(a0) * r, cx + Math.cos(a1) * r, cy + Math.sin(a1) * r);
+			i++;
+		}
+	}
+
+	// Tessellate one subpath (pixel coords in sp) into stroke triangles (clip in out).
+	private static function strokeSubpath(sp:Array<Float>, out:Array<Float>):Void
+	{
+		var hw = _shw;
+		var xs = new Array<Float>(), ys = new Array<Float>();
+		var m = sp.length >> 1, k = 0;
+		while (k < m)
+		{
+			var px = sp[k * 2], py = sp[k * 2 + 1];
+			if (xs.length == 0 || Math.abs(px - xs[xs.length - 1]) > 0.001 || Math.abs(py - ys[ys.length - 1]) > 0.001)
+			{
+				xs.push(px);
+				ys.push(py);
+			}
+			k++;
+		}
+		var n = xs.length;
+		if (n < 2)
+		{
+			if (n == 1 && _scaps == 1) sDisc(out, xs[0], ys[0], hw);
+			return;
+		}
+
+		var closed = (Math.abs(xs[0] - xs[n - 1]) < 0.01 && Math.abs(ys[0] - ys[n - 1]) < 0.01);
+		if (closed)
+		{
+			xs.pop();
+			ys.pop();
+			n--;
+			if (n < 2) return;
+		}
+
+		var segCount = closed ? n : n - 1, i = 0;
+		while (i < segCount)
+		{
+			var j = (i + 1) % n;
+			sSeg(out, xs[i], ys[i], xs[j], ys[j], hw);
+			i++;
+		}
+
+		var jStart = closed ? 0 : 1, jEnd = closed ? n : n - 1;
+		i = jStart;
+		while (i < jEnd)
+		{
+			var p = (i - 1 + n) % n, q = (i + 1) % n;
+			sJoint(out, xs[p], ys[p], xs[i], ys[i], xs[q], ys[q], hw);
+			i++;
+		}
+
+		if (!closed)
+		{
+			sCap(out, xs[0], ys[0], xs[1], ys[1], hw);
+			sCap(out, xs[n - 1], ys[n - 1], xs[n - 2], ys[n - 2], hw);
+		}
+	}
+
+	private static function sSeg(out:Array<Float>, ax:Float, ay:Float, bx:Float, by:Float, hw:Float):Void
+	{
+		var dx = bx - ax, dy = by - ay;
+		var len = Math.sqrt(dx * dx + dy * dy);
+		if (len < 1e-6) return;
+		var nx = -dy / len * hw, ny = dx / len * hw;
+		sTri(out, ax + nx, ay + ny, ax - nx, ay - ny, bx + nx, by + ny);
+		sTri(out, bx + nx, by + ny, ax - nx, ay - ny, bx - nx, by - ny);
+	}
+
+	private static function sJoint(out:Array<Float>, px:Float, py:Float, vx:Float, vy:Float, qx:Float, qy:Float, hw:Float):Void
+	{
+		var d0x = vx - px, d0y = vy - py;
+		var l0 = Math.sqrt(d0x * d0x + d0y * d0y);
+		var d1x = qx - vx, d1y = qy - vy;
+		var l1 = Math.sqrt(d1x * d1x + d1y * d1y);
+		if (l0 < 1e-6 || l1 < 1e-6) return;
+		d0x /= l0;
+		d0y /= l0;
+		d1x /= l1;
+		d1y /= l1;
+		var n0x = -d0y * hw, n0y = d0x * hw;
+		var n1x = -d1y * hw, n1y = d1x * hw;
+
+		if (_sjoints == 2)
+		{
+			sDisc(out, vx, vy, hw); // round joint
+			return;
+		}
+
+		// bevel both sides (inner overlaps segments harmlessly with union stencil)
+		sTri(out, vx, vy, vx + n0x, vy + n0y, vx + n1x, vy + n1y);
+		sTri(out, vx, vy, vx - n0x, vy - n0y, vx - n1x, vy - n1y);
+
+		if (_sjoints == 1)
+		{
+			// miter: extend the outer corner to the apex within the limit
+			var mx = n0x + n1x, my = n0y + n1y;
+			var ml = Math.sqrt(mx * mx + my * my);
+			if (ml < 1e-4) return;
+			var mnx = mx / ml, mny = my / ml;
+			var cosA = (n0x * mnx + n0y * mny) / hw;
+			if (cosA < 1e-3) return;
+			var ratio = 1 / cosA;
+			if (ratio > _smiter) return;
+			var apex = hw * ratio;
+			var cross = d0x * d1y - d0y * d1x;
+			var s = (cross > 0) ? -1.0 : 1.0;
+			var apx = vx + s * mnx * apex, apy = vy + s * mny * apex;
+			sTri(out, vx, vy, vx + s * n0x, vy + s * n0y, apx, apy);
+			sTri(out, vx, vy, apx, apy, vx + s * n1x, vy + s * n1y);
+		}
+	}
+
+	// Cap at endpoint E; (tx,ty) is the neighbouring point, so E-toward is outward.
+	private static function sCap(out:Array<Float>, ex:Float, ey:Float, tx:Float, ty:Float, hw:Float):Void
+	{
+		if (_scaps == 0) return; // butt
+		var dx = ex - tx, dy = ey - ty;
+		var len = Math.sqrt(dx * dx + dy * dy);
+		if (len < 1e-6) return;
+		dx /= len;
+		dy /= len;
+		if (_scaps == 1)
+		{
+			sDisc(out, ex, ey, hw); // round cap ~ disc at endpoint
+			return;
+		}
+		// square: extend by hw along the outward direction
+		var nx = -dy * hw, ny = dx * hw;
+		var gx = ex + dx * hw, gy = ey + dy * hw;
+		sTri(out, ex + nx, ey + ny, ex - nx, ey - ny, gx + nx, gy + ny);
+		sTri(out, gx + nx, gy + ny, ex - nx, ey - ny, gx - nx, gy - ny);
 	}
 	#end
 }
