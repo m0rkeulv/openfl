@@ -1,8 +1,11 @@
 package openfl.display._internal;
 
 #if !flash
+import openfl.display.CapsStyle;
 import openfl.display.Graphics;
 import openfl.display.GradientType;
+import openfl.display.JointStyle;
+import openfl.display.LineScaleMode;
 import openfl.display.OpenGLRenderer;
 import openfl.display.SpreadMethod;
 import openfl.display._internal.DrawCommandReader;
@@ -42,13 +45,15 @@ import openfl.Vector;
 	so it stays one technology and doesn't desync Context3D's state cache.
 
 	Fills: solid colour, linear/radial gradients (PAD/REPEAT/REFLECT, sRGB
-	interpolation), and bitmap fills (repeat + smoothing). Per-fill data reaches
-	the GLSL shaders through Context3D fragment constants (fc0..fc2) and samplers
-	(sampler0) -- OpenFL's GLSL-uniform path was completed for this (see Program3D
-	__buildAGALUniformList / __flush / __enable).
+	interpolation), and bitmap fills (repeat + smoothing). Solid strokes are
+	tessellated to fill geometry (segment quads + joints + caps) and drawn with a
+	union-coverage stencil after all fills, so they sit on top. Per-fill data
+	reaches the GLSL shaders through Context3D fragment constants (fc0..fc2) and
+	samplers (sampler0) -- OpenFL's GLSL-uniform path was completed for this (see
+	Program3D __buildAGALUniformList / __flush / __enable).
 
-	Stroked shapes (line styles) return false so the caller falls back to the
-	raw-WebGL OpenGLGraphics renderer, which tessellates strokes on the GPU.
+	Shapes with gradient/bitmap line styles (rare) return false so the caller
+	falls back to the raw-WebGL OpenGLGraphics renderer.
 **/
 @:access(openfl.display.Graphics)
 @:access(openfl.display.BitmapData)
@@ -93,7 +98,7 @@ class Context3DVectorGraphics
 	private static var _invD:Float;
 	private static var _invTX:Float;
 	private static var _invTY:Float;
-	private static var _sub:Array<Array<Float>>; // clip-space coords
+	private static var _sub:Array<Array<Float>>; // PIXEL coords (fills+strokes share)
 	private static var _cur:Array<Float>;
 	private static var _clx:Float;
 	private static var _cly:Float;
@@ -115,35 +120,48 @@ class Context3DVectorGraphics
 	private static var _bmp:BitmapData;
 	private static var _bmpRepeat:Bool = false;
 	private static var _bmpSmooth:Bool = false;
+
+	// current stroke (line) descriptor -- tessellated to fill geometry
+	private static var _hasStroke:Bool = false;
+	private static var _shw:Float = 0; // half thickness, pixels
+	private static var _scaps:Int = 0; // 0 butt, 1 round, 2 square
+	private static var _sjoints:Int = 0; // 0 bevel, 1 miter, 2 round
+	private static var _smiter:Float = 3;
+	private static var _slr:Float = 0;
+	private static var _slg:Float = 0;
+	private static var _slb:Float = 0;
+	private static var _sla:Float = 1;
+	// stroke batches, rendered after all fills so strokes sit on top
+	private static var _strokeBatches:Array<{verts:Vector<Float>, r:Float, g:Float, b:Float, a:Float}>;
 	#end
 
-	// Solid / gradient / bitmap fills + path ops. Stroked shapes are rejected so
-	// the caller falls back to the raw-WebGL renderer (which does strokes).
+	// Solid / gradient / bitmap fills + solid strokes + path ops. Shapes with
+	// gradient/bitmap line styles are rejected so the caller falls back.
 	public static function isCompatible(graphics:Graphics):Bool
 	{
 		#if (js && html5)
 		if (graphics.__commands == null) return false;
-		var hasFill = false;
+		var hasContent = false;
 		var data = new DrawCommandReader(graphics.__commands);
 		var ok = true;
 		for (type in graphics.__commands.types)
 		{
 			switch (type)
 			{
-				case BEGIN_FILL, BEGIN_GRADIENT_FILL, BEGIN_BITMAP_FILL:
-					hasFill = true;
+				case BEGIN_FILL, BEGIN_GRADIENT_FILL, BEGIN_BITMAP_FILL, LINE_STYLE:
+					hasContent = true;
 					data.skip(type);
 				case END_FILL, MOVE_TO, LINE_TO, CURVE_TO, CUBIC_CURVE_TO, WINDING_EVEN_ODD, WINDING_NON_ZERO:
 					data.skip(type);
 				default:
-					// line styles, DRAW_* primitives, shader fills, etc. -> fallback
+					// line gradient/bitmap styles, DRAW_* primitives, shader fills -> fallback
 					ok = false;
 					data.skip(type);
 			}
 			if (!ok) break;
 		}
 		data.destroy();
-		return ok && hasFill;
+		return ok && hasContent;
 		#else
 		return false;
 		#end
@@ -215,6 +233,8 @@ class Context3DVectorGraphics
 		_sub = [];
 		_cur = null;
 		_mode = MODE_SOLID;
+		_hasStroke = false;
+		_strokeBatches = [];
 
 		context.setRenderToTexture(tex, true, OpenGLGraphics.samples);
 		context.clear(0, 0, 0, 0, 1, 0);
@@ -237,6 +257,7 @@ class Context3DVectorGraphics
 					_b = (c.color & 0xFF) / 255.0;
 					_a = c.alpha;
 					hasFill = true;
+					collectStrokes();
 					_sub = [];
 					_cur = null;
 
@@ -245,6 +266,7 @@ class Context3DVectorGraphics
 					var c = data.readBeginGradientFill();
 					setupGradient(c.type, c.colors, c.alphas, c.ratios, c.matrix, c.spreadMethod);
 					hasFill = true;
+					collectStrokes();
 					_sub = [];
 					_cur = null;
 
@@ -253,12 +275,12 @@ class Context3DVectorGraphics
 					var c = data.readBeginBitmapFill();
 					if (!setupBitmap(c.bitmap, c.matrix, c.repeat, c.smooth))
 					{
-						// bitmap unavailable -> bail so the caller falls back
 						data.destroy();
 						context.setRenderToBackBuffer();
 						return false;
 					}
 					hasFill = true;
+					collectStrokes();
 					_sub = [];
 					_cur = null;
 
@@ -266,8 +288,41 @@ class Context3DVectorGraphics
 					data.skip(type);
 					if (hasFill) flushFill(context);
 					hasFill = false;
+					collectStrokes();
 					_sub = [];
 					_cur = null;
+
+				case LINE_STYLE:
+					var c = data.readLineStyle();
+					if (c.thickness == null)
+					{
+						_hasStroke = false;
+					}
+					else
+					{
+						_hasStroke = true;
+						var sc = (c.scaleMode == LineScaleMode.NONE) ? 1.0 : Math.sqrt(Math.abs(_rt.a * _rt.d - _rt.b * _rt.c));
+						var pxw = c.thickness * sc;
+						if (pxw < 1) pxw = 1; // hairline / min 1px
+						_shw = pxw / 2;
+						_slr = ((c.color >> 16) & 0xFF) / 255.0;
+						_slg = ((c.color >> 8) & 0xFF) / 255.0;
+						_slb = (c.color & 0xFF) / 255.0;
+						_sla = c.alpha;
+						_scaps = switch (c.caps)
+						{
+							case ROUND: 1;
+							case SQUARE: 2;
+							default: 0; // NONE = butt
+						}
+						_sjoints = switch (c.joints)
+						{
+							case MITER: 1;
+							case ROUND: 2;
+							default: 0; // BEVEL
+						}
+						_smiter = (c.miterLimit != null && c.miterLimit > 1) ? c.miterLimit : 3;
+					}
 
 				case MOVE_TO:
 					var c = data.readMoveTo();
@@ -286,6 +341,8 @@ class Context3DVectorGraphics
 			}
 		}
 		if (hasFill) flushFill(context);
+		collectStrokes();
+		renderStrokeBatches(context);
 		data.destroy();
 
 		context.setRenderToBackBuffer();
@@ -409,20 +466,20 @@ class Context3DVectorGraphics
 	{
 		if (_sub == null || _sub.length == 0) return;
 
-		// build stencil fan triangles (clip coords); pixel slots unused here
+		// build stencil fan triangles (pixel coords -> clip); pixel slots unused here
 		var verts = new Vector<Float>();
 		var n = 0;
 		for (sp in _sub)
 		{
 			var cnt = sp.length >> 1;
 			if (cnt < 3) continue;
-			var ax = sp[0], ay = sp[1];
+			var ax = clipX(sp[0]), ay = clipY(sp[1]);
 			var i = 1;
 			while (i < cnt - 1)
 			{
 				pushV(verts, ax, ay, 0, 0);
-				pushV(verts, sp[i * 2], sp[i * 2 + 1], 0, 0);
-				pushV(verts, sp[i * 2 + 2], sp[i * 2 + 3], 0, 0);
+				pushV(verts, clipX(sp[i * 2]), clipY(sp[i * 2 + 1]), 0, 0);
+				pushV(verts, clipX(sp[i * 2 + 2]), clipY(sp[i * 2 + 3]), 0, 0);
 				n += 3;
 				i++;
 			}
@@ -444,14 +501,7 @@ class Context3DVectorGraphics
 
 		// cover pass: full-screen quad where stencil != 0, reset stencil to 0.
 		// va1 carries render-target pixel coords for gradient/bitmap shading.
-		var quad = new Vector<Float>();
-		pushV(quad, -1, -1, 0, _h);
-		pushV(quad, 1, -1, _w, _h);
-		pushV(quad, -1, 1, 0, 0);
-		pushV(quad, -1, 1, 0, 0);
-		pushV(quad, 1, -1, _w, _h);
-		pushV(quad, 1, 1, _w, 0);
-		vbuf.uploadFromVector(quad, 0, 6);
+		uploadCoverQuad(context);
 
 		context.setColorMask(true, true, true, true);
 		context.setStencilReferenceValue(0, 0xFF, 0xFF);
@@ -460,9 +510,20 @@ class Context3DVectorGraphics
 
 		coverPass(context);
 		context.drawTriangles(ibuf, 0, 2);
+		// NOTE: does not reset _sub -- the caller resets after collectStrokes(),
+		// so the same path can be both filled and stroked.
+	}
 
-		_sub = [];
-		_cur = null;
+	private static inline function uploadCoverQuad(context:Context3D):Void
+	{
+		var quad = new Vector<Float>();
+		pushV(quad, -1, -1, 0, _h);
+		pushV(quad, 1, -1, _w, _h);
+		pushV(quad, -1, 1, 0, 0);
+		pushV(quad, -1, 1, 0, 0);
+		pushV(quad, 1, -1, _w, _h);
+		pushV(quad, 1, 1, _w, 0);
+		vbuf.uploadFromVector(quad, 0, 6);
 	}
 
 	private static function coverPass(context:Context3D):Void
@@ -484,17 +545,14 @@ class Context3DVectorGraphics
 				context.setProgram(progGradient);
 				context.setVertexBufferAt(0, vbuf, 0, Context3DVertexBufferFormat.FLOAT_2);
 				context.setVertexBufferAt(1, vbuf, 2, Context3DVertexBufferFormat.FLOAT_2);
-				// fc0 = mode, spread
 				consts.push(_mode == MODE_RADIAL ? 2.0 : 1.0);
 				consts.push(_spread);
 				consts.push(0);
 				consts.push(0);
-				// fc1 = mA, mB, mC, mD
 				consts.push(_mA);
 				consts.push(_mB);
 				consts.push(_mC);
 				consts.push(_mD);
-				// fc2 = mTX, mTY
 				consts.push(_mTX);
 				consts.push(_mTY);
 				consts.push(0);
@@ -507,7 +565,6 @@ class Context3DVectorGraphics
 				context.setProgram(progBitmap);
 				context.setVertexBufferAt(0, vbuf, 0, Context3DVertexBufferFormat.FLOAT_2);
 				context.setVertexBufferAt(1, vbuf, 2, Context3DVertexBufferFormat.FLOAT_2);
-				// fc0 unused; fc1 = matrix, fc2 = translation
 				consts.push(0);
 				consts.push(0);
 				consts.push(0);
@@ -526,6 +583,207 @@ class Context3DVectorGraphics
 				context.setSamplerStateAt(0, _bmpRepeat ? Context3DWrapMode.REPEAT : Context3DWrapMode.CLAMP,
 					_bmpSmooth ? Context3DTextureFilter.LINEAR : Context3DTextureFilter.NEAREST, Context3DMipFilter.MIPNONE);
 		}
+	}
+
+	// ---- strokes: tessellated to fill geometry, union-stencil coverage ----
+
+	// Build stroke triangles for every subpath currently in _sub (under the
+	// active line style) into a batch, drawn after all fills so strokes sit on
+	// top. A line-style change mid-path applies the final style to the group.
+	private static function collectStrokes():Void
+	{
+		if (!_hasStroke || _sub == null || _sub.length == 0) return;
+		var out = new Vector<Float>();
+		for (sp in _sub)
+			strokeSubpath(sp, out);
+		if (out.length > 0) _strokeBatches.push({verts: out, r: _slr, g: _slg, b: _slb, a: _sla});
+	}
+
+	private static function renderStrokeBatches(context:Context3D):Void
+	{
+		if (_strokeBatches == null) return;
+		for (batch in _strokeBatches)
+			flushStrokeBatch(context, batch.verts, batch.r, batch.g, batch.b, batch.a);
+	}
+
+	// Draw a stroke batch's tessellated triangles directly (stencil test off).
+	// Opaque strokes are exact; overdraw at joints/caps is invisible. For
+	// translucent strokes those overlaps blend twice (a minor darkening) -- a
+	// union-coverage stencil would fix that, but the stencil write does not
+	// persist across passes on this Context3D render-to-texture path, so we draw
+	// directly. Gradient/bitmap line styles fall back to the raw-WebGL renderer.
+	private static function flushStrokeBatch(context:Context3D, verts:Vector<Float>, r:Float, g:Float, b:Float, a:Float):Void
+	{
+		var n = Std.int(verts.length / vbufStride);
+		if (n < 3) return;
+
+		ensureBuffers(context, n);
+		vbuf.uploadFromVector(verts, 0, n);
+
+		context.setColorMask(true, true, true, true);
+		context.setStencilReferenceValue(0, 0xFF, 0xFF);
+		context.setStencilActions(Context3DTriangleFace.FRONT_AND_BACK, Context3DCompareMode.ALWAYS, Context3DStencilAction.KEEP,
+			Context3DStencilAction.KEEP, Context3DStencilAction.KEEP);
+		context.setProgram(progSolid);
+		context.setVertexBufferAt(0, vbuf, 0, Context3DVertexBufferFormat.FLOAT_2);
+		context.setVertexBufferAt(1, null);
+		var consts = new Vector<Float>();
+		consts.push(r);
+		consts.push(g);
+		consts.push(b);
+		consts.push(a);
+		context.setProgramConstantsFromVector(Context3DProgramType.FRAGMENT, 0, consts);
+		context.drawTriangles(ibuf, 0, Std.int(n / 3));
+	}
+
+	// push a clip-space triangle (pixel coords in), stride-4 with unused pixel slots
+	private static inline function sTri(out:Vector<Float>, ax:Float, ay:Float, bx:Float, by:Float, cx:Float, cy:Float):Void
+	{
+		pushV(out, clipX(ax), clipY(ay), 0, 0);
+		pushV(out, clipX(bx), clipY(by), 0, 0);
+		pushV(out, clipX(cx), clipY(cy), 0, 0);
+	}
+
+	private static function sDisc(out:Vector<Float>, cx:Float, cy:Float, r:Float):Void
+	{
+		var seg = 16, i = 0;
+		while (i < seg)
+		{
+			var a0 = i / seg * 2 * Math.PI, a1 = (i + 1) / seg * 2 * Math.PI;
+			sTri(out, cx, cy, cx + Math.cos(a0) * r, cy + Math.sin(a0) * r, cx + Math.cos(a1) * r, cy + Math.sin(a1) * r);
+			i++;
+		}
+	}
+
+	// Tessellate one subpath (pixel coords in sp) into stroke triangles.
+	private static function strokeSubpath(sp:Array<Float>, out:Vector<Float>):Void
+	{
+		var hw = _shw;
+		var xs = new Array<Float>(), ys = new Array<Float>();
+		var m = sp.length >> 1, k = 0;
+		while (k < m)
+		{
+			var px = sp[k * 2], py = sp[k * 2 + 1];
+			if (xs.length == 0 || Math.abs(px - xs[xs.length - 1]) > 0.001 || Math.abs(py - ys[ys.length - 1]) > 0.001)
+			{
+				xs.push(px);
+				ys.push(py);
+			}
+			k++;
+		}
+		var n = xs.length;
+		if (n < 2)
+		{
+			if (n == 1 && _scaps == 1) sDisc(out, xs[0], ys[0], hw);
+			return;
+		}
+
+		var closed = (Math.abs(xs[0] - xs[n - 1]) < 0.01 && Math.abs(ys[0] - ys[n - 1]) < 0.01);
+		if (closed)
+		{
+			xs.pop();
+			ys.pop();
+			n--;
+			if (n < 2) return;
+		}
+
+		var segCount = closed ? n : n - 1, i = 0;
+		while (i < segCount)
+		{
+			var j = (i + 1) % n;
+			sSeg(out, xs[i], ys[i], xs[j], ys[j], hw);
+			i++;
+		}
+
+		var jStart = closed ? 0 : 1, jEnd = closed ? n : n - 1;
+		i = jStart;
+		while (i < jEnd)
+		{
+			var p = (i - 1 + n) % n, q = (i + 1) % n;
+			sJoint(out, xs[p], ys[p], xs[i], ys[i], xs[q], ys[q], hw);
+			i++;
+		}
+
+		if (!closed)
+		{
+			sCap(out, xs[0], ys[0], xs[1], ys[1], hw);
+			sCap(out, xs[n - 1], ys[n - 1], xs[n - 2], ys[n - 2], hw);
+		}
+	}
+
+	private static function sSeg(out:Vector<Float>, ax:Float, ay:Float, bx:Float, by:Float, hw:Float):Void
+	{
+		var dx = bx - ax, dy = by - ay;
+		var len = Math.sqrt(dx * dx + dy * dy);
+		if (len < 1e-6) return;
+		var nx = -dy / len * hw, ny = dx / len * hw;
+		sTri(out, ax + nx, ay + ny, ax - nx, ay - ny, bx + nx, by + ny);
+		sTri(out, bx + nx, by + ny, ax - nx, ay - ny, bx - nx, by - ny);
+	}
+
+	private static function sJoint(out:Vector<Float>, px:Float, py:Float, vx:Float, vy:Float, qx:Float, qy:Float, hw:Float):Void
+	{
+		var d0x = vx - px, d0y = vy - py;
+		var l0 = Math.sqrt(d0x * d0x + d0y * d0y);
+		var d1x = qx - vx, d1y = qy - vy;
+		var l1 = Math.sqrt(d1x * d1x + d1y * d1y);
+		if (l0 < 1e-6 || l1 < 1e-6) return;
+		d0x /= l0;
+		d0y /= l0;
+		d1x /= l1;
+		d1y /= l1;
+		var n0x = -d0y * hw, n0y = d0x * hw;
+		var n1x = -d1y * hw, n1y = d1x * hw;
+
+		if (_sjoints == 2)
+		{
+			sDisc(out, vx, vy, hw); // round joint
+			return;
+		}
+
+		// bevel both sides (inner overlaps segments harmlessly with union stencil)
+		sTri(out, vx, vy, vx + n0x, vy + n0y, vx + n1x, vy + n1y);
+		sTri(out, vx, vy, vx - n0x, vy - n0y, vx - n1x, vy - n1y);
+
+		if (_sjoints == 1)
+		{
+			// miter: extend the outer corner to the apex within the limit
+			var mx = n0x + n1x, my = n0y + n1y;
+			var ml = Math.sqrt(mx * mx + my * my);
+			if (ml < 1e-4) return;
+			var mnx = mx / ml, mny = my / ml;
+			var cosA = (n0x * mnx + n0y * mny) / hw;
+			if (cosA < 1e-3) return;
+			var ratio = 1 / cosA;
+			if (ratio > _smiter) return;
+			var apex = hw * ratio;
+			var cross = d0x * d1y - d0y * d1x;
+			var s = (cross > 0) ? -1.0 : 1.0;
+			var apx = vx + s * mnx * apex, apy = vy + s * mny * apex;
+			sTri(out, vx, vy, vx + s * n0x, vy + s * n0y, apx, apy);
+			sTri(out, vx, vy, apx, apy, vx + s * n1x, vy + s * n1y);
+		}
+	}
+
+	// Cap at endpoint E; (tx,ty) is the neighbouring point, so E-toward is outward.
+	private static function sCap(out:Vector<Float>, ex:Float, ey:Float, tx:Float, ty:Float, hw:Float):Void
+	{
+		if (_scaps == 0) return; // butt
+		var dx = ex - tx, dy = ey - ty;
+		var len = Math.sqrt(dx * dx + dy * dy);
+		if (len < 1e-6) return;
+		dx /= len;
+		dy /= len;
+		if (_scaps == 1)
+		{
+			sDisc(out, ex, ey, hw); // round cap ~ disc at endpoint
+			return;
+		}
+		// square: extend by hw along the outward direction
+		var nx = -dy * hw, ny = dx * hw;
+		var gx = ex + dx * hw, gy = ey + dy * hw;
+		sTri(out, ex + nx, ey + ny, ex - nx, ey - ny, gx + nx, gy + ny);
+		sTri(out, gx + nx, gy + ny, ex - nx, ey - ny, gx - nx, gy - ny);
 	}
 
 	// pixel -> gradient-local matrix + ramp, matching OpenGLGraphics.setupGradient
@@ -653,13 +911,23 @@ class Context3DVectorGraphics
 		v.push(py);
 	}
 
+	private static inline function clipX(px:Float):Float
+	{
+		return px / _w * 2 - 1;
+	}
+
+	private static inline function clipY(py:Float):Float
+	{
+		return 1 - py / _h * 2;
+	}
+
+	// store PIXEL coords (shared by fills and stroke tessellation); the
+	// fill/stroke passes convert to clip space at emit time.
 	private static inline function pushClip(lx:Float, ly:Float):Void
 	{
 		var x = lx - _bx, y = ly - _by;
-		var px = _rt.a * x + _rt.c * y + _rt.tx;
-		var py = _rt.b * x + _rt.d * y + _rt.ty;
-		_cur.push(px / _w * 2 - 1);
-		_cur.push(1 - py / _h * 2);
+		_cur.push(_rt.a * x + _rt.c * y + _rt.tx);
+		_cur.push(_rt.b * x + _rt.d * y + _rt.ty);
 	}
 
 	private static inline function segsFor(ax:Float, ay:Float, bx:Float, by:Float):Int
