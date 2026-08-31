@@ -2200,6 +2200,19 @@ class CanvasGraphics
 		}
 		else
 		{
+			#if openfl_canvas_msaa
+			// MSAA vector-fill path (true coverage-correct AA, no conflation).
+			// Handles solid-fill shapes; anything else falls through to the
+			// software (FSAA/legacy) path below.
+			if (!renderer.__isDOM && OpenGLGraphics.render(graphics, renderer))
+			{
+				graphics.__softwareDirty = false;
+				graphics.__dirty = false;
+				CanvasGraphics.graphics = null;
+				return;
+			}
+			#end
+
 			if (graphics.__canvas == null)
 			{
 				graphics.__canvas = cast Browser.document.createElement("canvas");
