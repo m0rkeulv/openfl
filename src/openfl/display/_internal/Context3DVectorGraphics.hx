@@ -240,6 +240,9 @@ class Context3DVectorGraphics
 		context.clear(0, 0, 0, 0, 1, 0);
 		context.setDepthTest(false, Context3DCompareMode.ALWAYS);
 		context.setBlendFactors(Context3DBlendFactor.ONE, Context3DBlendFactor.ONE_MINUS_SOURCE_ALPHA);
+		// tessellation has mixed winding and the clip Y is not flipped; disable
+		// face culling so nothing drops out.
+		context.setCulling(Context3DTriangleFace.NONE);
 
 		var data = new DrawCommandReader(graphics.__commands);
 		var hasFill = false;
@@ -528,12 +531,14 @@ class Context3DVectorGraphics
 	private static inline function uploadCoverQuad(context:Context3D):Void
 	{
 		var quad = new Vector<Float>();
-		pushV(quad, -1, -1, 0, _h);
-		pushV(quad, 1, -1, _w, _h);
-		pushV(quad, -1, 1, 0, 0);
-		pushV(quad, -1, 1, 0, 0);
-		pushV(quad, 1, -1, _w, _h);
-		pushV(quad, 1, 1, _w, 0);
+		// va1 = render-target pixel (top-down). With clipY no longer flipped,
+		// clip y = -1 is the shape's top (py=0) and clip y = +1 its bottom (py=_h).
+		pushV(quad, -1, -1, 0, 0);
+		pushV(quad, 1, -1, _w, 0);
+		pushV(quad, -1, 1, 0, _h);
+		pushV(quad, -1, 1, 0, _h);
+		pushV(quad, 1, -1, _w, 0);
+		pushV(quad, 1, 1, _w, _h);
 		vbuf.uploadFromVector(quad, 0, 6);
 	}
 
@@ -929,7 +934,10 @@ class Context3DVectorGraphics
 
 	private static inline function clipY(py:Float):Float
 	{
-		return 1 - py / _h * 2;
+		// NO vertical flip: render-target row 0 must hold the shape's TOP (py=0)
+		// so the texture is top-down, matching how the compositor samples it. A
+		// GL framebuffer's row 0 is clip y = -1, so py=0 -> clip y = -1.
+		return py / _h * 2 - 1;
 	}
 
 	// store PIXEL coords (shared by fills and stroke tessellation); the
