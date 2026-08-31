@@ -70,6 +70,11 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 @:final class BlurFilter extends BitmapFilter
 {
 	@:noCompletion private static var __blurShader:BlurShader = new BlurShader();
+	#if flash_box_blur
+	// Flash-faithful fractional box blur (Ruffle-style), gated behind
+	// -Dflash_box_blur. Default build keeps the 7-tap Gaussian above.
+	@:noCompletion private static var __boxBlurShader:BoxBlurShader = new BoxBlurShader();
+	#end
 
 	/**
 		The amount of horizontal blur. Valid values are from 0 to 255(floating
@@ -194,6 +199,41 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 
 	@:noCompletion private override function __initShader(renderer:DisplayObjectRenderer, pass:Int, sourceBitmapData:BitmapData):Shader
 	{
+		#if flash_box_blur
+		#if !macro
+		// Passes alternate horizontal / vertical; each applies one full box blur
+		// for its axis, iterated `quality` times (separable box passes commute).
+		var horizontal = (pass % 2 == 0);
+		var v = horizontal ? blurX : blurY;
+		var fullSize = v > 255 ? 255.0 : v;
+		__boxBlurShader.uDir.value = horizontal ? [1.0, 0.0] : [0.0, 1.0];
+		if (fullSize <= 1)
+		{
+			// noop pass: sample the centre pixel unchanged
+			__boxBlurShader.uFullSize.value = [1.0];
+			__boxBlurShader.uM.value = [0.0];
+			__boxBlurShader.uM2.value = [0.0];
+			__boxBlurShader.uFirstWeight.value = [0.0];
+			__boxBlurShader.uLastOffset.value = [0.0];
+			__boxBlurShader.uLastWeight.value = [1.0];
+		}
+		else
+		{
+			var radius = (fullSize - 1) / 2;
+			var m = Math.ceil(radius) - 1;
+			if (m < 0) m = 0;
+			// fractional edge weight, 8-bit quantised to imitate Flash's fixed point
+			var alpha = Math.floor((radius - m) * 255) / 255;
+			__boxBlurShader.uFullSize.value = [fullSize];
+			__boxBlurShader.uM.value = [m];
+			__boxBlurShader.uM2.value = [m * 2];
+			__boxBlurShader.uFirstWeight.value = [alpha];
+			__boxBlurShader.uLastOffset.value = [alpha / (alpha + 1)];
+			__boxBlurShader.uLastWeight.value = [alpha + 1];
+		}
+		#end
+		return __boxBlurShader;
+		#else
 		#if !macro
 		if (pass < __horizontalPasses)
 		{
@@ -210,6 +250,7 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 		#end
 
 		return __blurShader;
+		#end
 	}
 
 	@:noCompletion inline function __padFor(value:Float):Int
@@ -272,10 +313,18 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 	{
 		// TODO: Quality effect with fewer passes?
 
+		#if flash_box_blur
+		// one horizontal + one vertical box pass per quality iteration
+		var passes = (value > 0) ? value : 1;
+		__horizontalPasses = passes;
+		__verticalPasses = passes;
+		__numShaderPasses = passes * 2;
+		#else
 		__horizontalPasses = (__blurX <= 0) ? 0 : Math.round(__blurX * (value / 4)) + 1;
 		__verticalPasses = (__blurY <= 0) ? 0 : Math.round(__blurY * (value / 4)) + 1;
 
 		__numShaderPasses = __horizontalPasses + __verticalPasses;
+		#end
 
 		if (value != __quality) __renderDirty = true;
 		__quality = value;
@@ -350,6 +399,82 @@ private class BlurShader extends BitmapFilterShader
 		super.__update();
 	}
 }
+
+#if flash_box_blur
+// Flash-faithful fractional box blur, one axis per pass (Ruffle-style). Kernel:
+// full_size = blur (<=255); radius = (full_size-1)/2; m = ceil(radius)-1 interior
+// double-weighted bilinear pairs; alpha = frac edge weight (8-bit quantised);
+// normalise by full_size; 8-bit round each pass to imitate Flash's fixed point.
+#if !openfl_debug
+@:fileXml('tags="haxe,release"')
+@:noDebug
+#end
+private class BoxBlurShader extends BitmapFilterShader
+{
+	@:glVertexSource("#pragma header
+
+		void main(void) {
+
+			#pragma body
+
+		}")
+	@:glFragmentSource("#pragma header
+
+		uniform vec2 uTextureSize;
+		uniform vec2 uDir;
+		uniform float uFullSize;
+		uniform float uM;
+		uniform float uM2;
+		uniform float uFirstWeight;
+		uniform float uLastOffset;
+		uniform float uLastWeight;
+
+		void main(void) {
+
+			vec2 direction = uDir / uTextureSize;
+			vec2 base = openfl_TextureCoordv - direction * uM;
+
+			vec4 total = texture2D(openfl_Texture, base - direction) * uFirstWeight;
+
+			vec4 center = vec4(0.0);
+			for (int i = 0; i < 64; i++) {
+				float fi = float(i) * 2.0 + 0.5;
+				if (fi >= uM2) break;
+				center += texture2D(openfl_Texture, base + direction * fi);
+			}
+			total += center * 2.0;
+
+			total += texture2D(openfl_Texture, base + direction * (uM2 + uLastOffset)) * uLastWeight;
+
+			vec4 result = total / uFullSize;
+			gl_FragColor = floor(result * 255.0) / 255.0;
+
+		}")
+	public function new()
+	{
+		super();
+
+		#if !macro
+		uDir.value = [1.0, 0.0];
+		uFullSize.value = [1.0];
+		uM.value = [0.0];
+		uM2.value = [0.0];
+		uFirstWeight.value = [0.0];
+		uLastOffset.value = [0.0];
+		uLastWeight.value = [1.0];
+		#end
+	}
+
+	@:noCompletion private override function __update():Void
+	{
+		#if !macro
+		uTextureSize.value = [__texture.input.width, __texture.input.height];
+		#end
+
+		super.__update();
+	}
+}
+#end
 #else
 typedef BlurFilter = flash.filters.BlurFilter;
 #end
