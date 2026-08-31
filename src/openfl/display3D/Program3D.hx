@@ -82,16 +82,17 @@ import lime.utils.BytePointer;
 		__context = context3D;
 		__format = format;
 
-		if (__format == AGAL)
-		{
-			// __memUsage = 0;
-			__agalSamplerUsageMask = 0;
-			__agalUniforms = new List<Uniform>();
-			__agalSamplerUniforms = new List<Uniform>();
-			__agalAlphaSamplerUniforms = new List<Uniform>();
-			__agalAlphaSamplerEnabled = new Array<Uniform>();
-		}
-		else
+		// The register-backed uniform/sampler lists are used by BOTH AGAL and
+		// GLSL (uploadSources) programs now (see __buildAGALUniformList), so always
+		// initialize them.
+		// __memUsage = 0;
+		__agalSamplerUsageMask = 0;
+		__agalUniforms = new List<Uniform>();
+		__agalSamplerUniforms = new List<Uniform>();
+		__agalAlphaSamplerUniforms = new List<Uniform>();
+		__agalAlphaSamplerEnabled = new Array<Uniform>();
+
+		if (__format != AGAL)
 		{
 			__glslAttribNames = new Array();
 			__glslAttribTypes = new Array();
@@ -475,12 +476,18 @@ import lime.utils.BytePointer;
 			location = gl.getUniformLocation(__glProgram, uniformNames[i]);
 			__glslUniformLocations[i] = location;
 		}
+
+		// Build the register-backed uniform maps + sampler lists so that
+		// setProgramConstantsFromVector / setTextureAt drive uploadSources GLSL
+		// programs (with vc/fc/sampler-named uniforms) just like AGAL ones.
+		__buildAGALUniformList();
 	}
 
 	@:noCompletion private function __buildAGALUniformList():Void
 	{
-		if (__format == GLSL) return;
-
+		// Also runs for hand-written GLSL (uploadSources): it reads the linked
+		// program's active uniforms, so vc/fc/sampler-named uniforms get the same
+		// register-backed uniform maps + sampler lists as AGAL programs.
 		#if lime
 		var gl = __context.gl;
 
@@ -652,7 +659,11 @@ import lime.utils.BytePointer;
 		var gl = __context.gl;
 		gl.useProgram(__glProgram);
 
-		if (__format == AGAL)
+		// Drive the register-backed uniform maps + samplers for any program that
+		// built them: AGAL-converted programs and hand-written GLSL (uploadSources)
+		// with vc/fc/sampler-named uniforms. Programs that manage their own uniforms
+		// (e.g. openfl.display.Shader) leave the map null and are skipped.
+		if (__agalVertexUniformMap != null)
 		{
 			__agalVertexUniformMap.markAllDirty();
 			__agalFragmentUniformMap.markAllDirty();
@@ -681,65 +692,17 @@ import lime.utils.BytePointer;
 				}
 			}
 		}
-		else
-		{
-			// var textureCount = 0;
-
-			// var gl = __context.gl;
-
-			// for (input in __glslInputBitmapData) {
-
-			// 	gl.uniform1i (input.index, textureCount);
-			// 	textureCount++;
-
-			// }
-
-			// if (__context.__context.type == OPENGL && textureCount > 0) {
-
-			// 	gl.enable (gl.TEXTURE_2D);
-
-			// }
-		}
 	}
 
 	@:noCompletion private function __flush():Void
 	{
-		if (__format == AGAL)
+		// GLSL (uploadSources) programs use the same uniform maps as AGAL, so
+		// upload their constants the same way instead of the old TODO stub.
+		// Skip programs that manage their own uniforms (null map).
+		if (__agalVertexUniformMap != null)
 		{
 			__agalVertexUniformMap.flush();
 			__agalFragmentUniformMap.flush();
-		}
-		else
-		{
-			// TODO
-			return;
-
-			// var textureCount = 0;
-
-			// for (input in __glslInputBitmapData) {
-
-			// 	input.__updateGL (__context, textureCount);
-			// 	textureCount++;
-
-			// }
-
-			// for (parameter in __glslParamBool) {
-
-			// 	parameter.__updateGL (__context);
-
-			// }
-
-			// for (parameter in __glslParamFloat) {
-
-			// 	parameter.__updateGL (__context);
-
-			// }
-
-			// for (parameter in __glslParamInt) {
-
-			// 	parameter.__updateGL (__context);
-
-			// }
 		}
 	}
 
@@ -750,7 +713,9 @@ import lime.utils.BytePointer;
 
 	@:noCompletion private function __markDirty(isVertex:Bool, index:Int, count:Int):Void
 	{
-		if (__format == GLSL) return;
+		// GLSL programs share the AGAL uniform maps; mark them dirty too. Programs
+		// that manage their own uniforms leave the map null and are skipped.
+		if (__agalVertexUniformMap == null) return;
 
 		if (isVertex)
 		{

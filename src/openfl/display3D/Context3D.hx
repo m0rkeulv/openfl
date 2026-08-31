@@ -1618,33 +1618,33 @@ import lime.math.Vector2;
 	{
 		if (numRegisters == 0) return;
 
-		if (__state.program != null && __state.program.__format == GLSL) {}
-		else
+		// Store into the shared constant registers for BOTH AGAL and GLSL
+		// (uploadSources) programs -- the GLSL uniform maps read from the same
+		// arrays, so this now feeds hand-written GLSL shaders too (previously a
+		// no-op for GLSL).
+		if (numRegisters == -1)
 		{
-			if (numRegisters == -1)
-			{
-				numRegisters = (data.length >> 2);
-			}
+			numRegisters = (data.length >> 2);
+		}
 
-			var isVertex = (programType == VERTEX);
-			var dest = isVertex ? __vertexConstants : __fragmentConstants;
-			var source = data;
+		var isVertex = (programType == VERTEX);
+		var dest = isVertex ? __vertexConstants : __fragmentConstants;
+		var source = data;
 
-			var sourceIndex = 0;
-			var destIndex = firstRegister * 4;
+		var sourceIndex = 0;
+		var destIndex = firstRegister * 4;
 
-			for (i in 0...numRegisters)
-			{
-				dest[destIndex++] = source[sourceIndex++];
-				dest[destIndex++] = source[sourceIndex++];
-				dest[destIndex++] = source[sourceIndex++];
-				dest[destIndex++] = source[sourceIndex++];
-			}
+		for (i in 0...numRegisters)
+		{
+			dest[destIndex++] = source[sourceIndex++];
+			dest[destIndex++] = source[sourceIndex++];
+			dest[destIndex++] = source[sourceIndex++];
+			dest[destIndex++] = source[sourceIndex++];
+		}
 
-			if (__state.program != null)
-			{
-				__state.program.__markDirty(isVertex, firstRegister, numRegisters);
-			}
+		if (__state.program != null)
+		{
+			__state.program.__markDirty(isVertex, firstRegister, numRegisters);
 		}
 	}
 
