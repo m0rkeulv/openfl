@@ -45,8 +45,8 @@ class CanvasGraphics
 		(background bleed between abutting fills) rather than eliminating it: the
 		graphic is rendered into an NxN-larger scratch canvas and downsampled with
 		high-quality smoothing, which shrinks the leftover magenta/salmon seam
-		~1/N but never to zero. The MSAA path (see OpenGLGraphics, selected with
-		`-D openfl_canvas_msaa`) is the truly-clean alternative.
+		~1/N but never to zero. The GPU renderer (see OpenGLGraphics, selected with
+		`-D openfl_gpu_graphics`) is the truly-clean alternative.
 
 		The default value 0 means "derive the factor from `Stage.quality`" via
 		`__qualityToSupersample` (LOW=1, MEDIUM=2, HIGH=3, BEST=4). A value > 0
@@ -2200,10 +2200,14 @@ class CanvasGraphics
 		}
 		else
 		{
-			#if openfl_canvas_msaa
-			// MSAA vector-fill path (true coverage-correct AA, no conflation).
-			// Handles solid-fill shapes; anything else falls through to the
-			// software (FSAA/legacy) path below.
+			#if (openfl_gpu_graphics && !openfl_force_sw_graphics && !force_sw_graphics)
+			// Opt-in GPU (WebGL MSAA) vector renderer -- enabled only by
+			// `-D openfl_gpu_graphics`, and compiled out entirely when software
+			// rendering is forced (`openfl_force_sw_graphics` / `force_sw_graphics`)
+			// so those builds stay 100% software. Handles solid/gradient/bitmap
+			// fills and strokes with true coverage-correct AA (no conflation);
+			// anything it can't do (or if WebGL2 is unavailable) falls through to
+			// the software FSAA/legacy path below.
 			if (!renderer.__isDOM && OpenGLGraphics.render(graphics, renderer))
 			{
 				graphics.__softwareDirty = false;

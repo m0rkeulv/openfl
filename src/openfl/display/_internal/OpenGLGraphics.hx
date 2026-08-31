@@ -42,8 +42,11 @@ import js.lib.Uint8Array;
 	default) is assumed. Gradients use sRGB interpolation and PAD/REPEAT/REFLECT
 	spread; radial focal point is treated as concentric (focal ~0).
 
-	Selected on html5 with `-D openfl_canvas_msaa` (dispatched from
-	`CanvasGraphics.render`). The same approach is reusable by native GL targets.
+	Opt-in on html5 with `-D openfl_gpu_graphics` (dispatched from
+	`CanvasGraphics.render`); it is compiled out when software rendering is forced
+	(`openfl_force_sw_graphics` / `force_sw_graphics`), and if WebGL2 is
+	unavailable at runtime it reports "not handled" so the software path is used.
+	The same approach is reusable by native GL targets (item 4).
 **/
 @:access(openfl.display.Graphics)
 @:access(openfl.display.BitmapData)
