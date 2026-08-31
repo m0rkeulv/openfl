@@ -2200,23 +2200,6 @@ class CanvasGraphics
 		}
 		else
 		{
-			#if (openfl_gpu_graphics && !openfl_force_sw_graphics && !force_sw_graphics)
-			// Opt-in GPU (WebGL MSAA) vector renderer -- enabled only by
-			// `-D openfl_gpu_graphics`, and compiled out entirely when software
-			// rendering is forced (`openfl_force_sw_graphics` / `force_sw_graphics`)
-			// so those builds stay 100% software. Handles solid/gradient/bitmap
-			// fills and strokes with true coverage-correct AA (no conflation);
-			// anything it can't do (or if WebGL2 is unavailable) falls through to
-			// the software FSAA/legacy path below.
-			if (!renderer.__isDOM && OpenGLGraphics.render(graphics, renderer))
-			{
-				graphics.__softwareDirty = false;
-				graphics.__dirty = false;
-				CanvasGraphics.graphics = null;
-				return;
-			}
-			#end
-
 			if (graphics.__canvas == null)
 			{
 				graphics.__canvas = cast Browser.document.createElement("canvas");
