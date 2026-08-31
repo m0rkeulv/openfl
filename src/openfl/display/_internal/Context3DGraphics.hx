@@ -666,11 +666,20 @@ class Context3DGraphics
 				renderer.__softwareRenderer.__worldTransform = renderer.__worldTransform;
 			}
 
-			#if (js && html5)
-			CanvasGraphics.render(graphics, cast renderer.__softwareRenderer);
-			#elseif lime_cairo
-			CairoGraphics.render(graphics, cast renderer.__softwareRenderer);
+			#if (openfl_gpu_graphics && !openfl_force_sw_graphics && !force_sw_graphics)
+			// Opt-in GPU (MSAA) vector-graphics renderer. Runs first; returns true
+			// when it produced the bitmap, else falls through to the software list
+			// below. Compiled out entirely when software rendering is forced, so
+			// those builds keep the exact software behaviour.
+			if (!OpenGLGraphics.render(graphics, renderer))
 			#end
+			{
+				#if (js && html5)
+				CanvasGraphics.render(graphics, cast renderer.__softwareRenderer);
+				#elseif lime_cairo
+				CairoGraphics.render(graphics, cast renderer.__softwareRenderer);
+				#end
+			}
 
 			renderer.__softwareRenderer.__worldTransform = cacheTransform;
 		}

@@ -2,10 +2,10 @@ package openfl.display._internal;
 
 #if !flash
 import openfl.display.Graphics;
+import openfl.display.OpenGLRenderer;
 import openfl.display._internal.DrawCommandReader;
 #if (js && html5)
 import openfl.display.BitmapData;
-import openfl.display.CanvasRenderer;
 import openfl.display.CapsStyle;
 import openfl.display.GradientType;
 import openfl.display.JointStyle;
@@ -50,6 +50,7 @@ import js.lib.Uint8Array;
 **/
 @:access(openfl.display.Graphics)
 @:access(openfl.display.BitmapData)
+@:access(openfl.display.DisplayObject)
 @SuppressWarnings("checkstyle:FieldDocComment")
 class OpenGLGraphics
 {
@@ -176,15 +177,41 @@ class OpenGLGraphics
 		Render `graphics` via MSAA into `graphics.__canvas` (same contract as
 		`CanvasGraphics.render`). Returns true if handled, false to fall back.
 	**/
-	public static function render(graphics:Graphics, renderer:CanvasRenderer):Bool
+	public static function render(graphics:Graphics, renderer:OpenGLRenderer):Bool
 	{
 		#if (js && html5)
 		if (!supported) return false;
+		// scale9-grid shapes are left to the software path.
+		if (graphics.__owner == null || graphics.__owner.__worldScale9Grid != null) return false;
+		if (!isCompatible(graphics)) return false;
+
+		// This is now the dispatch point (called from Context3DGraphics before the
+		// software list), so do the same setup CanvasGraphics.render did.
+		#if (openfl_disable_hdpi || openfl_disable_hdpi_graphics)
+		var pixelRatio = 1;
+		#else
+		var pixelRatio = renderer.__pixelRatio;
+		#end
+		graphics.__update(renderer.__worldTransform, pixelRatio);
+
+		// not dirty (or managed) -> keep the cached GPU bitmap, skip re-render.
+		// Returns true so the software list does NOT run and clobber it.
+		if (!graphics.__softwareDirty || graphics.__managed) return true;
+
+		graphics.__bitmapScaleX = 1;
+		graphics.__bitmapScaleY = 1;
 
 		var width = graphics.__width;
 		var height = graphics.__height;
-		if (width < 1 || height < 1) return false;
-		if (!isCompatible(graphics)) return false;
+		if (!graphics.__visible || graphics.__commands.length == 0 || graphics.__bounds == null || width < 1 || height < 1)
+		{
+			graphics.__canvas = null;
+			graphics.__context = null;
+			graphics.__bitmap = null;
+			graphics.__softwareDirty = false;
+			graphics.__dirty = false;
+			return true; // nothing to draw, but this graphic is ours
+		}
 		if (!initGL()) return false;
 		if (!ensureTarget(width, height)) return false;
 
@@ -359,9 +386,6 @@ class OpenGLGraphics
 		ctx.clearRect(0, 0, width, height);
 		ctx.drawImage(glCanvas, 0, 0, width, height, 0, 0, width, height);
 
-		graphics.__bitmapScaleX = 1;
-		graphics.__bitmapScaleY = 1;
-
 		if (graphics.__bitmap == null || graphics.__bitmap.width != width || graphics.__bitmap.height != height)
 		{
 			graphics.__bitmap = BitmapData.fromCanvas(graphics.__canvas);
@@ -371,6 +395,8 @@ class OpenGLGraphics
 			graphics.__bitmap.image.version++;
 		}
 
+		graphics.__softwareDirty = false;
+		graphics.__dirty = false;
 		return true;
 		#else
 		return false;
