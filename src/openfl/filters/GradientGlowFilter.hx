@@ -183,10 +183,20 @@ import openfl.geom.Rectangle;
 	{
 		__offsetX = Std.int(__distance * Math.cos(__angle * Math.PI / 180));
 		__offsetY = Std.int(__distance * Math.sin(__angle * Math.PI / 180));
-		__topExtension = Math.ceil((__offsetY < 0 ? -__offsetY : 0) + __blurY * 1.5);
-		__bottomExtension = Math.ceil((__offsetY > 0 ? __offsetY : 0) + __blurY * 1.5);
-		__leftExtension = Math.ceil((__offsetX < 0 ? -__offsetX : 0) + __blurX * 1.5);
-		__rightExtension = Math.ceil((__offsetX > 0 ? __offsetX : 0) + __blurX * 1.5);
+		#if flash_box_blur
+		// Box blur reach grows to ~quality*blur/2 per side (see DropShadowFilter);
+		// reserve the full spread so the gradient glow isn't clipped at high quality.
+		var qext = (__quality > 0) ? __quality : 1;
+		var exX = Math.ceil(__blurX * 0.5 * qext) + 4;
+		var exY = Math.ceil(__blurY * 0.5 * qext) + 4;
+		#else
+		var exX = Math.ceil(__blurX * 1.5);
+		var exY = Math.ceil(__blurY * 1.5);
+		#end
+		__topExtension = (__offsetY < 0 ? -__offsetY : 0) + exY;
+		__bottomExtension = (__offsetY > 0 ? __offsetY : 0) + exY;
+		__leftExtension = (__offsetX < 0 ? -__offsetX : 0) + exX;
+		__rightExtension = (__offsetX > 0 ? __offsetX : 0) + exX;
 
 		#if flash_box_blur
 		var q = (__quality > 0) ? __quality : 1;

@@ -356,9 +356,17 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 
 	@:noCompletion private function __updateSize():Void
 	{
+		#if flash_box_blur
+		// Box blur reach grows to ~quality*blur/2 per side (see DropShadowFilter);
+		// reserve the full spread so the glow isn't clipped at high quality.
+		var q = (__quality > 0) ? __quality : 1;
+		__leftExtension = (__blurX > 0 ? Math.ceil(__blurX * 0.5 * q) + 4 : 0);
+		__topExtension = (__blurY > 0 ? Math.ceil(__blurY * 0.5 * q) + 4 : 0);
+		#else
 		__leftExtension = (__blurX > 0 ? Math.ceil(__blurX * 1.5) : 0);
-		__rightExtension = __leftExtension;
 		__topExtension = (__blurY > 0 ? Math.ceil(__blurY * 1.5) : 0);
+		#end
+		__rightExtension = __leftExtension;
 		__bottomExtension = __topExtension;
 		__calculateNumShaderPasses();
 	}
@@ -512,7 +520,8 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 		if (value != __quality)
 		{
 			__renderDirty = true;
-			__calculateNumShaderPasses();
+			__quality = value;
+			__updateSize(); // passes & extension both depend on quality
 		}
 		return __quality = value;
 	}

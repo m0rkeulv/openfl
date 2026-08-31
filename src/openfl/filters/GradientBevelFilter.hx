@@ -179,8 +179,16 @@ import openfl.geom.Rectangle;
 	@:noCompletion private function __updateSize():Void
 	{
 		var d = (__distance < 0 ? -__distance : __distance);
+		#if flash_box_blur
+		// Box blur reach grows to ~quality*blur/2 per side (see DropShadowFilter);
+		// reserve the full spread so the gradient bevel isn't clipped at high quality.
+		var qext = (__quality > 0) ? __quality : 1;
+		__leftExtension = __rightExtension = Math.ceil(__blurX * 0.5 * qext + d) + 4;
+		__topExtension = __bottomExtension = Math.ceil(__blurY * 0.5 * qext + d) + 4;
+		#else
 		__leftExtension = __rightExtension = Math.ceil(__blurX * 1.5 + d);
 		__topExtension = __bottomExtension = Math.ceil(__blurY * 1.5 + d);
+		#end
 
 		#if flash_box_blur
 		var q = (__quality > 0) ? __quality : 1;
