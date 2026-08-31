@@ -399,10 +399,22 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 	{
 		__offsetX = Std.int(__distance * Math.cos(__angle * Math.PI / 180));
 		__offsetY = Std.int(__distance * Math.sin(__angle * Math.PI / 180));
-		__topExtension = Math.ceil((__offsetY < 0 ? -__offsetY : 0) + __blurY);
-		__bottomExtension = Math.ceil((__offsetY > 0 ? __offsetY : 0) + __blurY);
-		__leftExtension = Math.ceil((__offsetX < 0 ? -__offsetX : 0) + __blurX);
-		__rightExtension = Math.ceil((__offsetX > 0 ? __offsetX : 0) + __blurX);
+		#if flash_box_blur
+		// Box blur applies `quality` passes; each pass widens the shadow's
+		// support by ~half the blur, so the reach grows to ~quality*blur/2. If we
+		// only reserve one blur radius the shadow is hard-clipped to a rectangle
+		// at high quality (Flash reserves room for the full spread).
+		var q = (__quality > 0) ? __quality : 1;
+		var exX = Math.ceil(__blurX * 0.5 * q) + 4;
+		var exY = Math.ceil(__blurY * 0.5 * q) + 4;
+		#else
+		var exX = Math.ceil(__blurX);
+		var exY = Math.ceil(__blurY);
+		#end
+		__topExtension = Std.int((__offsetY < 0 ? -__offsetY : 0) + exY);
+		__bottomExtension = Std.int((__offsetY > 0 ? __offsetY : 0) + exY);
+		__leftExtension = Std.int((__offsetX < 0 ? -__offsetX : 0) + exX);
+		__rightExtension = Std.int((__offsetX > 0 ? __offsetX : 0) + exX);
 		__calculateNumShaderPasses();
 	}
 
@@ -549,7 +561,12 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 
 	@:noCompletion private function set_quality(value:Int):Int
 	{
-		if (value != __quality) __renderDirty = true;
+		if (value != __quality)
+		{
+			__renderDirty = true;
+			__quality = value;
+			__updateSize(); // passes & extension both depend on quality
+		}
 		return __quality = value;
 	}
 

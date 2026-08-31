@@ -362,6 +362,8 @@ import lime._internal.graphics.ImageDataUtil;
 		__numShaderPasses = __horizontalPasses + __verticalPasses + 1;
 
 		if (value != __quality) __renderDirty = true;
+		__quality = value;
+		__updateSize(); // extension depends on quality (box-blur reach)
 		return __quality = value;
 	}
 
@@ -455,10 +457,20 @@ import lime._internal.graphics.ImageDataUtil;
 	{
 		var offsetX:Int = __type != "inner" ? Math.ceil(__distance * Math.cos(__angle * Math.PI / 180)) : 0;
 		var offsetY:Int = __type != "inner" ? Math.ceil(__distance * Math.sin(__angle * Math.PI / 180)) : 0;
-		__topExtension = Math.ceil((offsetY < 0 ? -offsetY : 0) + __blurY);
-		__bottomExtension = Math.ceil((offsetY > 0 ? offsetY : 0) + __blurY);
-		__leftExtension = Math.ceil((offsetX < 0 ? -offsetX : 0) + __blurX);
-		__rightExtension = Math.ceil((offsetX > 0 ? offsetX : 0) + __blurX);
+		#if flash_box_blur
+		// Box blur reach grows to ~quality*blur/2 per side (see DropShadowFilter);
+		// reserve the full spread so the bevel isn't clipped at high quality.
+		var q = (__quality > 0) ? __quality : 1;
+		var exX = Math.ceil(__blurX * 0.5 * q) + 4;
+		var exY = Math.ceil(__blurY * 0.5 * q) + 4;
+		#else
+		var exX = Math.ceil(__blurX);
+		var exY = Math.ceil(__blurY);
+		#end
+		__topExtension = (offsetY < 0 ? -offsetY : 0) + exY;
+		__bottomExtension = (offsetY > 0 ? offsetY : 0) + exY;
+		__leftExtension = (offsetX < 0 ? -offsetX : 0) + exX;
+		__rightExtension = (offsetX > 0 ? offsetX : 0) + exX;
 	}
 }
 
