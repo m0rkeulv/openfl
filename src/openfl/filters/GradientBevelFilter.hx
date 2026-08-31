@@ -178,17 +178,29 @@ import openfl.geom.Rectangle;
 
 	@:noCompletion private function __updateSize():Void
 	{
-		var d = (__distance < 0 ? -__distance : __distance);
+		// The bevel field (bL-bR) is exactly zero beyond the box-blur support
+		// (quality*blur/2) offset by the transform (distance). Because the ramp's
+		// middle stop is usually opaque, flat regions map to the middle colour and
+		// the *visible* band edge sits at the texture boundary — so the extension
+		// must equal the true bevel extent (support + directional offset), with no
+		// safety margin, or the middle colour over-fills past where Flash stops.
+		// This mirrors BevelFilter's asymmetric extension (which matches Flash),
+		// minus the margin that filter can afford only because its band fades out.
+		var rad = __angle * Math.PI / 180;
+		// magnitude of the transform offset per axis (band reaches support + |offset|
+		// on every side); ceil the absolute value so negative angles don't lose a pixel
+		var offsetX:Int = (__type != INNER) ? Math.ceil(Math.abs(__distance * Math.cos(rad))) : 0;
+		var offsetY:Int = (__type != INNER) ? Math.ceil(Math.abs(__distance * Math.sin(rad))) : 0;
 		#if flash_box_blur
-		// Box blur reach grows to ~quality*blur/2 per side (see DropShadowFilter);
-		// reserve the full spread so the gradient bevel isn't clipped at high quality.
 		var qext = (__quality > 0) ? __quality : 1;
-		__leftExtension = __rightExtension = Math.ceil(__blurX * 0.5 * qext + d) + 4;
-		__topExtension = __bottomExtension = Math.ceil(__blurY * 0.5 * qext + d) + 4;
+		var exX = Math.ceil(__blurX * 0.5 * qext);
+		var exY = Math.ceil(__blurY * 0.5 * qext);
 		#else
-		__leftExtension = __rightExtension = Math.ceil(__blurX * 1.5 + d);
-		__topExtension = __bottomExtension = Math.ceil(__blurY * 1.5 + d);
+		var exX = Math.ceil(__blurX * 1.5);
+		var exY = Math.ceil(__blurY * 1.5);
 		#end
+		__leftExtension = __rightExtension = exX + offsetX;
+		__topExtension = __bottomExtension = exY + offsetY;
 
 		#if flash_box_blur
 		var q = (__quality > 0) ? __quality : 1;
