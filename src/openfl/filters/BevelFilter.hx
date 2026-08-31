@@ -173,6 +173,10 @@ import lime._internal.graphics.ImageDataUtil;
 		var numBlurPasses = __horizontalPasses + __verticalPasses;
 		if (blurPass < numBlurPasses)
 		{
+			#if flash_box_blur
+			var horizontal = pass < __horizontalPasses;
+			return BlurFilter.__setupBoxBlur(horizontal, horizontal ? blurX : blurY);
+			#else
 			var shader = BlurFilter.__blurShader;
 			if (pass < __horizontalPasses)
 			{
@@ -187,6 +191,7 @@ import lime._internal.graphics.ImageDataUtil;
 				shader.uRadius.value[1] = blurY * scale;
 			}
 			return shader;
+			#end
 		}
 
 		__bevelShader.sourceBitmap.input = sourceBitmapData;
@@ -346,8 +351,13 @@ import lime._internal.graphics.ImageDataUtil;
 		value = value < 1 ? 1 : value;
 		value = value > 15 ? 15 : value;
 
+		#if flash_box_blur
+		__horizontalPasses = (__blurX <= 0) ? 0 : value;
+		__verticalPasses = (__blurY <= 0) ? 0 : value;
+		#else
 		__horizontalPasses = (__blurX <= 0) ? 0 : Math.round(__blurX * (value / 4));
 		__verticalPasses = (__blurY <= 0) ? 0 : Math.round(__blurY * (value / 4));
+		#end
 
 		__numShaderPasses = __horizontalPasses + __verticalPasses + 1;
 
