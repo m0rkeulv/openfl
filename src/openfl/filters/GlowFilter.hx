@@ -350,36 +350,15 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 		__numShaderPasses = __horizontalPasses + __verticalPasses + (__inner ? 2 : 1);
 	}
 
-	// Configure the shared box-blur-alpha shader for one axis/pass (used by both
-	// GlowFilter and DropShadowFilter). Same kernel math as BlurFilter's box blur.
+	// Configure the box-blur-alpha shader for one axis/pass (used by both GlowFilter
+	// and DropShadowFilter). All the box math lives in the shader; we hand it the
+	// axis, the box width (= the blur amount), the colour and the strength.
 	@:noCompletion private static function __setupBlurAlphaShader(horizontal:Bool, v:Float, color:Int, alpha:Float, strength:Float):BitmapFilterShader
 	{
 		var s = __blurAlphaShader;
-		var fullSize = v > 255 ? 255.0 : v;
 		s.uDir.value[0] = horizontal ? 1.0 : 0.0;
 		s.uDir.value[1] = horizontal ? 0.0 : 1.0;
-		if (fullSize <= 1)
-		{
-			s.uFullSize.value[0] = 1.0;
-			s.uM.value[0] = 0.0;
-			s.uM2.value[0] = 0.0;
-			s.uFirstWeight.value[0] = 0.0;
-			s.uLastOffset.value[0] = 0.0;
-			s.uLastWeight.value[0] = 1.0;
-		}
-		else
-		{
-			var radius = (fullSize - 1) / 2;
-			var m = Math.ceil(radius) - 1;
-			if (m < 0) m = 0;
-			var frac = Math.floor((radius - m) * 255) / 255;
-			s.uFullSize.value[0] = fullSize;
-			s.uM.value[0] = m;
-			s.uM2.value[0] = m * 2;
-			s.uFirstWeight.value[0] = frac;
-			s.uLastOffset.value[0] = frac / (frac + 1);
-			s.uLastWeight.value[0] = frac + 1;
-		}
+		s.uFullSize.value[0] = v > 255 ? 255.0 : v;
 		s.uColor.value[0] = ((color >> 16) & 0xFF) / 255;
 		s.uColor.value[1] = ((color >> 8) & 0xFF) / 255;
 		s.uColor.value[2] = (color & 0xFF) / 255;
@@ -537,6 +516,10 @@ private class InvertAlphaShader extends BitmapFilterShader
 @:fileXml('tags="haxe,release"')
 @:noDebug
 #end
+// The alpha-channel twin of BlurFilter's BoxBlurShader: the same per-texel
+// fractional box (2n+1 full interior texels + a fractional-weight edge texel per
+// side), accumulated on .a, then colourised by uColor * clamp(a * strength) for
+// glow / drop shadow. All the box math is in the shader.
 private class BoxBlurAlphaShader extends BitmapFilterShader
 {
 	@:glFragmentSource("#pragma header
@@ -544,32 +527,37 @@ private class BoxBlurAlphaShader extends BitmapFilterShader
 		uniform vec4 uColor;
 		uniform float uStrength;
 		uniform vec2 uTextureSize;
-		uniform vec2 uDir;
-		uniform float uFullSize;
-		uniform float uM;
-		uniform float uM2;
-		uniform float uFirstWeight;
-		uniform float uLastOffset;
-		uniform float uLastWeight;
+		uniform vec2 uDir;          // blur axis: (1,0) horizontal, (0,1) vertical
+		uniform float uFullSize;    // box width = the blur amount
 
 		void main(void)
 		{
 			vec2 direction = uDir / uTextureSize;
-			vec2 base = openfl_TextureCoordv - direction * uM;
+			float fullSize = min(uFullSize, 255.0);
+			float a;
 
-			float total = texture2D(openfl_Texture, base - direction).a * uFirstWeight;
+			if (fullSize <= 1.0) {
+				a = texture2D(openfl_Texture, openfl_TextureCoordv).a;
+			} else {
+				float halfW = fullSize * 0.5;
+				int   n     = int(floor(halfW - 0.5));
+				float frac  = halfW - (float(n) + 0.5);
+				frac = floor(frac * 255.0) / 255.0;
 
-			float center = 0.0;
-			for (int i = 0; i < 64; i++) {
-				float fi = float(i) * 2.0 + 0.5;
-				if (fi >= uM2) break;
-				center += texture2D(openfl_Texture, base + direction * fi).a;
+				float sum = texture2D(openfl_Texture, openfl_TextureCoordv).a;   // centre
+				for (int i = 1; i <= 128; i++) {                                // full interior
+					if (i > n) break;
+					vec2 off = float(i) * direction;
+					sum += texture2D(openfl_Texture, openfl_TextureCoordv + off).a;
+					sum += texture2D(openfl_Texture, openfl_TextureCoordv - off).a;
+				}
+				vec2 edge = float(n + 1) * direction;                          // fractional edges
+				sum += texture2D(openfl_Texture, openfl_TextureCoordv + edge).a * frac;
+				sum += texture2D(openfl_Texture, openfl_TextureCoordv - edge).a * frac;
+
+				a = sum / fullSize;
 			}
-			total += center * 2.0;
 
-			total += texture2D(openfl_Texture, base + direction * (uM2 + uLastOffset)).a * uLastWeight;
-
-			float a = total / uFullSize;
 			gl_FragColor = uColor * clamp(a * uStrength, 0.0, 1.0);
 		}")
 	@:glVertexSource("#pragma header
@@ -587,11 +575,6 @@ private class BoxBlurAlphaShader extends BitmapFilterShader
 		uStrength.value = [1];
 		uDir.value = [1, 0];
 		uFullSize.value = [1];
-		uM.value = [0];
-		uM2.value = [0];
-		uFirstWeight.value = [0];
-		uLastOffset.value = [0];
-		uLastWeight.value = [1];
 		#end
 	}
 

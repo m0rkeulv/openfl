@@ -206,37 +206,15 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 		#end
 	}
 
-	// Configure the shared box-blur shader for one axis of one pass. Reused by
-	// BevelFilter (which blurs the source before deriving highlight/shadow).
+	// Configure the box-blur shader for one axis of one pass. Reused by BevelFilter
+	// and the gradient filters. All the box math lives in the shader, so we only
+	// hand it the axis and the box width (= the blur amount).
 	@:noCompletion private static function __setupBlurShader(horizontal:Bool, v:Float):BitmapFilterShader
 	{
 		var s = __boxBlurShader;
-		var fullSize = v > 255 ? 255.0 : v;
 		s.uDir.value[0] = horizontal ? 1.0 : 0.0;
 		s.uDir.value[1] = horizontal ? 0.0 : 1.0;
-		if (fullSize <= 1)
-		{
-			s.uFullSize.value[0] = 1.0;
-			s.uM.value[0] = 0.0;
-			s.uM2.value[0] = 0.0;
-			s.uFirstWeight.value[0] = 0.0;
-			s.uLastOffset.value[0] = 0.0;
-			s.uLastWeight.value[0] = 1.0;
-		}
-		else
-		{
-			var radius = (fullSize - 1) / 2;
-			var m = Math.ceil(radius) - 1;
-			if (m < 0) m = 0;
-			// fractional edge weight, 8-bit quantised to imitate Flash's fixed point
-			var frac = Math.floor((radius - m) * 255) / 255;
-			s.uFullSize.value[0] = fullSize;
-			s.uM.value[0] = m;
-			s.uM2.value[0] = m * 2;
-			s.uFirstWeight.value[0] = frac;
-			s.uLastOffset.value[0] = frac / (frac + 1);
-			s.uLastWeight.value[0] = frac + 1;
-		}
+		s.uFullSize.value[0] = v > 255 ? 255.0 : v;
 		return s;
 	}
 
@@ -314,10 +292,12 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 	}
 }
 
-// Flash-faithful fractional box blur, one axis per pass (Ruffle-style). Kernel:
-// full_size = blur (<=255); radius = (full_size-1)/2; m = ceil(radius)-1 interior
-// double-weighted bilinear pairs; alpha = frac edge weight (8-bit quantised);
-// normalise by full_size; 8-bit round each pass to imitate Flash's fixed point.
+// Flash-faithful fractional box blur, one axis per pass. Builds a box of width
+// uFullSize (= the blur amount) straight from per-texel samples: (2n+1) full-weight
+// interior texels + one fractional-weight texel per edge, divided by the width, and
+// 8-bit rounded per pass to imitate Flash's fixed point. Weights match Ruffle's box
+// filter, but computed directly rather than via its fused bilinear pairs -- which
+// also keeps it correct above blur 127, where the paired form's 64-tap loop truncates.
 #if !openfl_debug
 @:fileXml('tags="haxe,release"')
 @:noDebug
@@ -334,33 +314,37 @@ private class BoxBlurShader extends BitmapFilterShader
 	@:glFragmentSource("#pragma header
 
 		uniform vec2 uTextureSize;
-		uniform vec2 uDir;
-		uniform float uFullSize;
-		uniform float uM;
-		uniform float uM2;
-		uniform float uFirstWeight;
-		uniform float uLastOffset;
-		uniform float uLastWeight;
+		uniform vec2 uDir;          // blur axis: (1,0) horizontal, (0,1) vertical
+		uniform float uFullSize;    // box width = the blur amount
 
 		void main(void) {
 
 			vec2 direction = uDir / uTextureSize;
-			vec2 base = openfl_TextureCoordv - direction * uM;
+			float fullSize = min(uFullSize, 255.0);
 
-			vec4 total = texture2D(openfl_Texture, base - direction) * uFirstWeight;
-
-			vec4 center = vec4(0.0);
-			for (int i = 0; i < 64; i++) {
-				float fi = float(i) * 2.0 + 0.5;
-				if (fi >= uM2) break;
-				center += texture2D(openfl_Texture, base + direction * fi);
+			if (fullSize <= 1.0) {
+				gl_FragColor = texture2D(openfl_Texture, openfl_TextureCoordv);
+				return;
 			}
-			total += center * 2.0;
 
-			total += texture2D(openfl_Texture, base + direction * (uM2 + uLastOffset)) * uLastWeight;
+			float halfW = fullSize * 0.5;
+			int   n     = int(floor(halfW - 0.5));           // full interior texels per side
+			float frac  = halfW - (float(n) + 0.5);          // fractional edge weight
+			frac = floor(frac * 255.0) / 255.0;              // 8-bit weight (Flash fixed point)
 
-			vec4 result = total / uFullSize;
-			gl_FragColor = floor(result * 255.0) / 255.0;
+			vec4 sum = texture2D(openfl_Texture, openfl_TextureCoordv);   // centre
+			for (int i = 1; i <= 128; i++) {                             // full interior pairs
+				if (i > n) break;
+				vec2 off = float(i) * direction;
+				sum += texture2D(openfl_Texture, openfl_TextureCoordv + off);
+				sum += texture2D(openfl_Texture, openfl_TextureCoordv - off);
+			}
+			vec2 edge = float(n + 1) * direction;                        // fractional edges
+			sum += texture2D(openfl_Texture, openfl_TextureCoordv + edge) * frac;
+			sum += texture2D(openfl_Texture, openfl_TextureCoordv - edge) * frac;
+
+			vec4 result = sum / fullSize;
+			gl_FragColor = floor(result * 255.0) / 255.0;               // 8-bit round each pass
 
 		}")
 	public function new()
@@ -370,11 +354,6 @@ private class BoxBlurShader extends BitmapFilterShader
 		#if !macro
 		uDir.value = [1.0, 0.0];
 		uFullSize.value = [1.0];
-		uM.value = [0.0];
-		uM2.value = [0.0];
-		uFirstWeight.value = [0.0];
-		uLastOffset.value = [0.0];
-		uLastWeight.value = [1.0];
 		#end
 	}
 
