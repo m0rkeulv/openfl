@@ -68,8 +68,6 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 @:final class GlowFilter extends BitmapFilter
 {
 	@:noCompletion private static var __invertAlphaShader = new InvertAlphaShader();
-	// Flash-faithful fractional box blur of the alpha channel (Ruffle-style),
-	// colourised. Shared by GlowFilter + DropShadowFilter.
 	@:noCompletion private static var __blurAlphaShader = new BoxBlurAlphaShader();
 	@:noCompletion private static var __combineShader = new CombineShader();
 	@:noCompletion private static var __innerCombineShader = new InnerCombineShader();
@@ -332,7 +330,6 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 	@:noCompletion private function __updateSize():Void
 	{
 		// Box blur reach grows to ~quality*blur/2 per side (see DropShadowFilter);
-		// reserve the full spread so the glow isn't clipped at high quality.
 		var q = (__quality > 0) ? __quality : 1;
 		__leftExtension = (__blurX > 0 ? Math.ceil(__blurX * 0.5 * q) + 4 : 0);
 		__topExtension = (__blurY > 0 ? Math.ceil(__blurY * 0.5 * q) + 4 : 0);
@@ -350,9 +347,6 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 		__numShaderPasses = __horizontalPasses + __verticalPasses + (__inner ? 2 : 1);
 	}
 
-	// Configure the box-blur-alpha shader for one axis/pass (used by both GlowFilter
-	// and DropShadowFilter). All the box math lives in the shader; we hand it the
-	// axis, the box width (= the blur amount), the colour and the strength.
 	@:noCompletion private static function __setupBlurAlphaShader(horizontal:Bool, v:Float, color:Int, alpha:Float, strength:Float):BitmapFilterShader
 	{
 		var s = __blurAlphaShader;
@@ -516,10 +510,6 @@ private class InvertAlphaShader extends BitmapFilterShader
 @:fileXml('tags="haxe,release"')
 @:noDebug
 #end
-// The alpha-channel twin of BlurFilter's BoxBlurShader: the same per-texel
-// fractional box (2n+1 full interior texels + a fractional-weight edge texel per
-// side), accumulated on .a, then colourised by uColor * clamp(a * strength) for
-// glow / drop shadow. All the box math is in the shader.
 private class BoxBlurAlphaShader extends BitmapFilterShader
 {
 	@:glFragmentSource("#pragma header

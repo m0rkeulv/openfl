@@ -341,7 +341,7 @@ import lime._internal.graphics.ImageDataUtil;
 
 		if (value != __quality) __renderDirty = true;
 		__quality = value;
-		__updateSize(); // extension depends on quality (box-blur reach)
+		__updateSize(); // depends on filter's quality settings
 		return __quality = value;
 	}
 

@@ -69,8 +69,6 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 @:access(openfl.geom.Rectangle)
 @:final class BlurFilter extends BitmapFilter
 {
-	// Flash-faithful fractional box blur (Ruffle-style). Shared by the bevel and
-	// gradient filters, which blur the source alpha before deriving their effect.
 	@:noCompletion private static var __blurShader:BoxBlurShader = new BoxBlurShader();
 
 	/**
@@ -197,8 +195,7 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 	@:noCompletion private override function __initShader(renderer:DisplayObjectRenderer, pass:Int, sourceBitmapData:BitmapData):Shader
 	{
 		#if !macro
-		// passes alternate horizontal / vertical; each applies one full box blur
-		// for its axis, iterated `quality` times (separable box passes commute)
+		// passes alternate horizontal / vertical, each applies one full box blur for its axis, iterated `quality` times
 		var horizontal = (pass % 2 == 0);
 		return __setupBlurShader(horizontal, horizontal ? blurX : blurY);
 		#else
@@ -206,9 +203,7 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 		#end
 	}
 
-	// Configure the box-blur shader for one axis of one pass. Reused by BevelFilter
-	// and the gradient filters. All the box math lives in the shader, so we only
-	// hand it the axis and the box width (= the blur amount).
+	// Configure the box-blur shader for one axis of one pass.
 	@:noCompletion private static function __setupBlurShader(horizontal:Bool, v:Float):BitmapFilterShader
 	{
 		var s = __blurShader;
@@ -292,12 +287,6 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 	}
 }
 
-// Flash-faithful fractional box blur, one axis per pass. Builds a box of width
-// uFullSize (= the blur amount) straight from per-texel samples: (2n+1) full-weight
-// interior texels + one fractional-weight texel per edge, divided by the width, and
-// 8-bit rounded per pass to imitate Flash's fixed point. Weights match Ruffle's box
-// filter, but computed directly rather than via its fused bilinear pairs -- which
-// also keeps it correct above blur 127, where the paired form's 64-tap loop truncates.
 #if !openfl_debug
 @:fileXml('tags="haxe,release"')
 @:noDebug

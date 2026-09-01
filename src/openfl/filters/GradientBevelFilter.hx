@@ -8,15 +8,8 @@ import openfl.geom.Point;
 import openfl.geom.Rectangle;
 
 /**
-	The GradientBevelFilter class lets you apply a gradient bevel effect to
-	display objects. The bevel's colours come from a gradient (defined by
-	`colors`/`alphas`/`ratios`) instead of separate highlight/shadow colours:
-	ratio 0 is one edge, 255 the other, and 128 is the base (usually
-	transparent), which appears where there is no bevel.
-
-	Not present in stock OpenFL; implemented here for the non-flash targets by
-	sampling the blurred alpha at +/- the bevel offset to build a signed
-	distance field and indexing a 256-entry ramp built from the stops.
+	The GradientBevelFilter class lets you apply a gradient bevel effect to display objects.
+	The bevel's colours come from a gradient defined by `colors`/`alphas`/`ratios` instead of separate highlight/shadow colours.
 **/
 #if !openfl_debug
 @:fileXml('tags="haxe,release"')
@@ -90,7 +83,8 @@ import openfl.geom.Rectangle;
 
 	@:noCompletion private override function __applyFilter(bitmapData:BitmapData, sourceBitmapData:BitmapData, sourceRect:Rectangle, destPoint:Point):BitmapData
 	{
-		// software path not implemented yet (GL shader path below is used on-screen)
+		// software path not implemented yet
+		// return the source unchanged so nothing crashes.
 		return sourceBitmapData;
 	}
 
@@ -121,62 +115,74 @@ import openfl.geom.Rectangle;
 		#end
 	}
 
-	// Build the 256x1 straight-ARGB ramp from (colors, alphas, ratios).
+	// Build the 256-entry straight-ARGB gradient ramp (one texel per output index
+	// 0..255) from the (colors, alphas, ratios) stops. Each index is the colour and
+	// alpha linearly interpolated between the two stops it falls between.
 	@:noCompletion private function __buildRamp():Void
 	{
 		if (__ramp == null) __ramp = new BitmapData(256, 1, true, 0);
-		var n = __colors.length;
-		var si = 0;
-		for (i in 0...256)
+		var stopCount = __colors.length;
+		var stop = 0; // the stop at or just before the current ramp index
+
+		for (index in 0...256)
 		{
-			while (si < n - 1 && __ratios[si + 1] < i)
-				si++;
-			var r0 = __ratios[si];
-			var c0 = __colors[si];
-			var a0 = __alphas[si];
-			var rr:Float, gg:Float, bb:Float, aa:Float;
-			if (si >= n - 1 || i <= r0)
+			// advance to the stop pair whose ratio range contains `index`
+			while (stop < stopCount - 1 && __ratios[stop + 1] < index)
+				stop++;
+
+			var colorLo = __colors[stop];
+			var alphaLo = __alphas[stop];
+			var r:Float, g:Float, b:Float, a:Float;
+
+			if (stop >= stopCount - 1 || index <= __ratios[stop])
 			{
-				rr = (c0 >> 16) & 0xFF;
-				gg = (c0 >> 8) & 0xFF;
-				bb = c0 & 0xFF;
-				aa = a0 * 255;
+				// before the first stop, or past the last one: hold this stop's colour flat
+				r = (colorLo >> 16) & 0xFF;
+				g = (colorLo >> 8) & 0xFF;
+				b = colorLo & 0xFF;
+				a = alphaLo * 255;
 			}
 			else
 			{
-				var r1 = __ratios[si + 1];
-				var c1 = __colors[si + 1];
-				var a1 = __alphas[si + 1];
-				var f = (r1 > r0) ? (i - r0) / (r1 - r0) : 0.0;
-				rr = ((c0 >> 16) & 0xFF) + (((c1 >> 16) & 0xFF) - ((c0 >> 16) & 0xFF)) * f;
-				gg = ((c0 >> 8) & 0xFF) + (((c1 >> 8) & 0xFF) - ((c0 >> 8) & 0xFF)) * f;
-				bb = (c0 & 0xFF) + ((c1 & 0xFF) - (c0 & 0xFF)) * f;
-				aa = (a0 + (a1 - a0) * f) * 255;
+				var ratioLo = __ratios[stop];
+				var ratioHi = __ratios[stop + 1];
+				var colorHi = __colors[stop + 1];
+				var alphaHi = __alphas[stop + 1];
+
+				// blend = how far `index` sits between the two stops (0 at the low
+				// stop, 1 at the high stop)
+				var blend = (ratioHi > ratioLo) ? (index - ratioLo) / (ratioHi - ratioLo) : 0.0;
+
+				r = lerp((colorLo >> 16) & 0xFF, (colorHi >> 16) & 0xFF, blend);
+				g = lerp((colorLo >> 8) & 0xFF, (colorHi >> 8) & 0xFF, blend);
+				b = lerp(colorLo & 0xFF, colorHi & 0xFF, blend);
+				a = lerp(alphaLo, alphaHi, blend) * 255;
 			}
-			var col = (Std.int(aa) << 24) | (Std.int(rr) << 16) | (Std.int(gg) << 8) | Std.int(bb);
-			__ramp.setPixel32(i, 0, col);
+
+			var argb = (Std.int(a) << 24) | (Std.int(r) << 16) | (Std.int(g) << 8) | Std.int(b);
+			__ramp.setPixel32(index, 0, argb);
 		}
 		__rampDirty = false;
 	}
 
+	@:noCompletion private static inline function lerp(a:Float, b:Float, t:Float):Float
+	{
+		return a + (b - a) * t;
+	}
+
 	@:noCompletion private function __updateSize():Void
 	{
-		// The bevel field (bL-bR) is exactly zero beyond the box-blur support
-		// (quality*blur/2) offset by the transform (distance). Because the ramp's
-		// middle stop is usually opaque, flat regions map to the middle colour and
-		// the *visible* band edge sits at the texture boundary — so the extension
-		// must equal the true bevel extent (support + directional offset), with no
-		// safety margin, or the middle colour over-fills past where Flash stops.
-		// This mirrors BevelFilter's asymmetric extension (which matches Flash),
-		// minus the margin that filter can afford only because its band fades out.
+		// size calculation: box-blur support ( quality * blur/2 ) + transform offset(abs(distance*cos/sin)).
+
 		var rad = __angle * Math.PI / 180;
-		// magnitude of the transform offset per axis (band reaches support + |offset|
-		// on every side); ceil the absolute value so negative angles don't lose a pixel
+		// per-axis offset, ceil(abs) so negative angles don't drop a pixel
 		var offsetX:Int = (__type != INNER) ? Math.ceil(Math.abs(__distance * Math.cos(rad))) : 0;
 		var offsetY:Int = (__type != INNER) ? Math.ceil(Math.abs(__distance * Math.sin(rad))) : 0;
+
 		var q = (__quality > 0) ? __quality : 1;
 		var exX = Math.ceil(__blurX * 0.5 * q);
 		var exY = Math.ceil(__blurY * 0.5 * q);
+
 		__leftExtension = __rightExtension = exX + offsetX;
 		__topExtension = __bottomExtension = exY + offsetY;
 
@@ -315,6 +321,7 @@ private class GradientBevelShader extends BitmapFilterShader
 				else gl_FragColor = dest - dest * glow.a + glow;
 			}
 		}")
+
 	@:glVertexSource("attribute vec4 openfl_Position;
 		attribute vec2 openfl_TextureCoord;
 		uniform mat4 openfl_Matrix;
