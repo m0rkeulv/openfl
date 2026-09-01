@@ -71,7 +71,7 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 {
 	// Flash-faithful fractional box blur (Ruffle-style). Shared by the bevel and
 	// gradient filters, which blur the source alpha before deriving their effect.
-	@:noCompletion private static var __boxBlurShader:BoxBlurShader = new BoxBlurShader();
+	@:noCompletion private static var __blurShader:BoxBlurShader = new BoxBlurShader();
 
 	/**
 		The amount of horizontal blur. Valid values are from 0 to 255(floating
@@ -202,7 +202,7 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 		var horizontal = (pass % 2 == 0);
 		return __setupBlurShader(horizontal, horizontal ? blurX : blurY);
 		#else
-		return __boxBlurShader;
+		return __blurShader;
 		#end
 	}
 
@@ -211,7 +211,7 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 	// hand it the axis and the box width (= the blur amount).
 	@:noCompletion private static function __setupBlurShader(horizontal:Bool, v:Float):BitmapFilterShader
 	{
-		var s = __boxBlurShader;
+		var s = __blurShader;
 		s.uDir.value[0] = horizontal ? 1.0 : 0.0;
 		s.uDir.value[1] = horizontal ? 0.0 : 1.0;
 		s.uFullSize.value[0] = v > 255 ? 255.0 : v;
