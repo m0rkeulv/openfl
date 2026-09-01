@@ -174,7 +174,7 @@ import lime._internal.graphics.ImageDataUtil;
 		if (blurPass < numBlurPasses)
 		{
 			var horizontal = pass < __horizontalPasses;
-			return BlurFilter.__setupBoxBlur(horizontal, horizontal ? blurX : blurY);
+			return BlurFilter.__setupBlurShader(horizontal, horizontal ? blurX : blurY);
 		}
 
 		__bevelShader.sourceBitmap.input = sourceBitmapData;

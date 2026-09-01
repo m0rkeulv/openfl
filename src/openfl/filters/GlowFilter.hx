@@ -70,7 +70,7 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 	@:noCompletion private static var __invertAlphaShader = new InvertAlphaShader();
 	// Flash-faithful fractional box blur of the alpha channel (Ruffle-style),
 	// colourised. Shared by GlowFilter + DropShadowFilter.
-	@:noCompletion private static var __boxBlurAlphaShader = new BoxBlurAlphaShader();
+	@:noCompletion private static var __blurAlphaShader = new BoxBlurAlphaShader();
 	@:noCompletion private static var __combineShader = new CombineShader();
 	@:noCompletion private static var __innerCombineShader = new InnerCombineShader();
 	@:noCompletion private static var __combineKnockoutShader = new CombineKnockoutShader();
@@ -290,7 +290,7 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 		{
 			var strength = blurPass == (numBlurPasses - 1) ? __strength : 1.0;
 			var horizontal = blurPass < __horizontalPasses;
-			return __setupBoxBlur(horizontal, horizontal ? blurX : blurY, color, alpha, strength);
+			return __setupBlurAlphaShader(horizontal, horizontal ? blurX : blurY, color, alpha, strength);
 		}
 		if (__inner)
 		{
@@ -352,9 +352,9 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 
 	// Configure the shared box-blur-alpha shader for one axis/pass (used by both
 	// GlowFilter and DropShadowFilter). Same kernel math as BlurFilter's box blur.
-	@:noCompletion private static function __setupBoxBlur(horizontal:Bool, v:Float, color:Int, alpha:Float, strength:Float):BitmapFilterShader
+	@:noCompletion private static function __setupBlurAlphaShader(horizontal:Bool, v:Float, color:Int, alpha:Float, strength:Float):BitmapFilterShader
 	{
-		var s = __boxBlurAlphaShader;
+		var s = __blurAlphaShader;
 		var fullSize = v > 255 ? 255.0 : v;
 		s.uDir.value[0] = horizontal ? 1.0 : 0.0;
 		s.uDir.value[1] = horizontal ? 0.0 : 1.0;

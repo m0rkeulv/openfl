@@ -326,7 +326,7 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 		{
 			var strength = blurPass == (numBlurPasses - 1) ? __strength : 1.0;
 			var horizontal = blurPass < __horizontalPasses;
-			return GlowFilter.__setupBoxBlur(horizontal, horizontal ? blurX : blurY, color, alpha, strength);
+			return GlowFilter.__setupBlurAlphaShader(horizontal, horizontal ? blurX : blurY, color, alpha, strength);
 		}
 		if (__inner)
 		{

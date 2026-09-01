@@ -200,7 +200,7 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 		// passes alternate horizontal / vertical; each applies one full box blur
 		// for its axis, iterated `quality` times (separable box passes commute)
 		var horizontal = (pass % 2 == 0);
-		return __setupBoxBlur(horizontal, horizontal ? blurX : blurY);
+		return __setupBlurShader(horizontal, horizontal ? blurX : blurY);
 		#else
 		return __boxBlurShader;
 		#end
@@ -208,7 +208,7 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 
 	// Configure the shared box-blur shader for one axis of one pass. Reused by
 	// BevelFilter (which blurs the source before deriving highlight/shadow).
-	@:noCompletion private static function __setupBoxBlur(horizontal:Bool, v:Float):BitmapFilterShader
+	@:noCompletion private static function __setupBlurShader(horizontal:Bool, v:Float):BitmapFilterShader
 	{
 		var s = __boxBlurShader;
 		var fullSize = v > 255 ? 255.0 : v;

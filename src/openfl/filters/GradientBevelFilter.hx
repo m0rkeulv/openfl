@@ -101,7 +101,7 @@ import openfl.geom.Rectangle;
 		if (pass < numBlurPasses)
 		{
 			var horizontal = pass < __horizontalPasses;
-			return BlurFilter.__setupBoxBlur(horizontal, horizontal ? __blurX : __blurY);
+			return BlurFilter.__setupBlurShader(horizontal, horizontal ? __blurX : __blurY);
 		}
 
 		if (__rampDirty) __buildRamp();

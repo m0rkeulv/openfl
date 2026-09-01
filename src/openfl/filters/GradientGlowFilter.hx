@@ -104,7 +104,7 @@ import openfl.geom.Rectangle;
 		{
 			// blur the object's alpha into a soft distance field (reuse BlurFilter)
 			var horizontal = pass < __horizontalPasses;
-			return BlurFilter.__setupBoxBlur(horizontal, horizontal ? __blurX : __blurY);
+			return BlurFilter.__setupBlurShader(horizontal, horizontal ? __blurX : __blurY);
 		}
 
 		if (__rampDirty) __buildRamp();
