@@ -184,7 +184,7 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 		#if lime
 		var time = Timer.stamp();
 		var finalImage = ImageDataUtil.gaussianBlur(bitmapData.image, sourceBitmapData.image, sourceRect.__toLimeRectangle(), destPoint.__toLimeVector2(),
-			__blurX, __blurY, __quality);
+			__blurX * __renderScale, __blurY * __renderScale, __quality);
 		var elapsed = Timer.stamp() - time;
 		// trace("blurX: " + __blurX + " blurY: " + __blurY + " quality: " + __quality + " elapsed: " + elapsed * 1000 + "ms");
 		if (finalImage == bitmapData.image) return bitmapData;
@@ -197,7 +197,7 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 		#if !macro
 		// passes alternate horizontal / vertical, each applies one full box blur for its axis, iterated `quality` times
 		var horizontal = (pass % 2 == 0);
-		return __setupBlurShader(horizontal, horizontal ? blurX : blurY);
+		return __setupBlurShader(horizontal, (horizontal ? blurX : blurY) * __renderScale);
 		#else
 		return __blurShader;
 		#end

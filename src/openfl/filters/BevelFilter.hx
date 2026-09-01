@@ -163,11 +163,11 @@ import lime._internal.graphics.ImageDataUtil;
 		// field either side of the light direction. The signed difference drives the
 		// highlight (light side) and the shadow (dark side).
 		var field = BitmapFilter.__alphaField(sourceBitmapData, sourceRect, destPoint, width, height);
-		BitmapFilter.__blurField(field, width, height, __blurX, __blurY, __quality);
+		BitmapFilter.__blurField(field, width, height, __blurX * __renderScale, __blurY * __renderScale, __quality);
 
 		var rad = __angle * Math.PI / 180;
-		var dx = Std.int(Math.round(__distance * Math.cos(rad)));
-		var dy = Std.int(Math.round(__distance * Math.sin(rad)));
+		var dx = Std.int(Math.round(__distance * Math.cos(rad) * __renderScale));
+		var dy = Std.int(Math.round(__distance * Math.sin(rad) * __renderScale));
 
 		var hr = (((__highlightColor >> 16) & 0xFF) / 255.0) * __highlightAlpha;
 		var hg = (((__highlightColor >> 8) & 0xFF) / 255.0) * __highlightAlpha;
@@ -206,9 +206,12 @@ import lime._internal.graphics.ImageDataUtil;
 		if (blurPass < numBlurPasses)
 		{
 			var horizontal = pass < __horizontalPasses;
-			return BlurFilter.__setupBlurShader(horizontal, horizontal ? blurX : blurY);
+			return BlurFilter.__setupBlurShader(horizontal, (horizontal ? blurX : blurY) * __renderScale);
 		}
 
+		// recompute here rather than only in the distance/angle setters: the
+		// transform is scaled by __renderScale, which is not known until render time
+		__updateTransform();
 		__bevelShader.sourceBitmap.input = sourceBitmapData;
 		#end
 
@@ -440,8 +443,8 @@ import lime._internal.graphics.ImageDataUtil;
 	@:noCompletion private function __updateTransform():Void
 	{
 		var rad:Float = __angle * Math.PI / 180;
-		__bevelShader.uTransformX.value[0] = (__distance * Math.cos(rad));
-		__bevelShader.uTransformY.value[0] = (__distance * Math.sin(rad));
+		__bevelShader.uTransformX.value[0] = (__distance * Math.cos(rad)) * __renderScale;
+		__bevelShader.uTransformY.value[0] = (__distance * Math.sin(rad)) * __renderScale;
 	}
 
 	@:noCompletion private function __updateColors():Void

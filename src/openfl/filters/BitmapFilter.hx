@@ -48,8 +48,23 @@ class BitmapFilter
 	**/
 	@:noCompletion private var __softwareComposite:Bool;
 
+	/**
+		The device-pixel scale the filter is being rendered at.
+
+		A filtered object is cached into a bitmap sized and drawn at the renderer's
+		pixel ratio, so on a HiDPI display the object is (say) 1.5x larger in that
+		bitmap. Filter distances -- blur radii and offsets -- are authored in
+		*logical* pixels, so they must be scaled to match, otherwise the effect comes
+		out 1/pixelRatio too small relative to its content.
+
+		The renderer sets this before using the filter. It stays 1 for
+		`BitmapData.applyFilter`, which works on the bitmap's own pixels.
+	**/
+	@:noCompletion private var __renderScale:Float;
+
 	public function new()
 	{
+		__renderScale = 1;
 		__bottomExtension = 0;
 		__leftExtension = 0;
 		__needSecondBitmapData = true;

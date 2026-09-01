@@ -88,14 +88,14 @@ import openfl.geom.Rectangle;
 		var height = bitmapData.height;
 
 		var field = BitmapFilter.__alphaField(sourceBitmapData, sourceRect, destPoint, width, height);
-		BitmapFilter.__blurField(field, width, height, __blurX, __blurY, __quality);
+		BitmapFilter.__blurField(field, width, height, __blurX * __renderScale, __blurY * __renderScale, __quality);
 
 		if (__rampDirty) __buildRamp();
 		var ramp = __rampChannels();
 
 		var rad = __angle * Math.PI / 180;
-		var dx = Std.int(Math.round(__distance * Math.cos(rad)));
-		var dy = Std.int(Math.round(__distance * Math.sin(rad)));
+		var dx = Std.int(Math.round(__distance * Math.cos(rad) * __renderScale));
+		var dy = Std.int(Math.round(__distance * Math.sin(rad) * __renderScale));
 
 		var fxR = new Array<Float>(), fxG = new Array<Float>(), fxB = new Array<Float>(), fxA = new Array<Float>();
 		for (y in 0...height)
@@ -146,7 +146,7 @@ import openfl.geom.Rectangle;
 		if (pass < numBlurPasses)
 		{
 			var horizontal = pass < __horizontalPasses;
-			return BlurFilter.__setupBlurShader(horizontal, horizontal ? __blurX : __blurY);
+			return BlurFilter.__setupBlurShader(horizontal, (horizontal ? __blurX : __blurY) * __renderScale);
 		}
 
 		if (__rampDirty) __buildRamp();
@@ -155,8 +155,8 @@ import openfl.geom.Rectangle;
 		var shader = __gradientShader;
 		shader.sourceBitmap.input = sourceBitmapData;
 		shader.gradientRamp.input = __ramp;
-		shader.uTransformX.value[0] = __distance * Math.cos(rad);
-		shader.uTransformY.value[0] = __distance * Math.sin(rad);
+		shader.uTransformX.value[0] = __distance * Math.cos(rad) * __renderScale;
+		shader.uTransformY.value[0] = __distance * Math.sin(rad) * __renderScale;
 		shader.uStrength.value[0] = __strength;
 		shader.uBevelType.value[0] = (__type == INNER) ? 0.0 : (__type == OUTER ? 1.0 : 2.0);
 		shader.uKnockout.value[0] = __knockout;

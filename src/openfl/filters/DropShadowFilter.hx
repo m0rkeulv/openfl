@@ -306,13 +306,13 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 			for (i in 0...field.length)
 				field[i] = 1 - field[i];
 		}
-		BitmapFilter.__blurField(field, width, height, __blurX, __blurY, __quality);
+		BitmapFilter.__blurField(field, width, height, __blurX * __renderScale, __blurY * __renderScale, __quality);
 
 		var cr = ((__color >> 16) & 0xFF) / 255.0;
 		var cg = ((__color >> 8) & 0xFF) / 255.0;
 		var cb = (__color & 0xFF) / 255.0;
-		var ox = Std.int(__offsetX);
-		var oy = Std.int(__offsetY);
+		var ox = Std.int(__offsetX * __renderScale);
+		var oy = Std.int(__offsetY * __renderScale);
 
 		var fxR = new Array<Float>(), fxG = new Array<Float>(), fxB = new Array<Float>(), fxA = new Array<Float>();
 		for (y in 0...height)
@@ -352,7 +352,7 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 		{
 			var strength = blurPass == (numBlurPasses - 1) ? __strength : 1.0;
 			var horizontal = blurPass < __horizontalPasses;
-			return GlowFilter.__setupBlurAlphaShader(horizontal, horizontal ? blurX : blurY, color, alpha, strength);
+			return GlowFilter.__setupBlurAlphaShader(horizontal, (horizontal ? blurX : blurY) * __renderScale, color, alpha, strength);
 		}
 		if (__inner)
 		{
@@ -360,14 +360,14 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 			{
 				var shader = GlowFilter.__innerCombineKnockoutShader;
 				shader.sourceBitmap.input = sourceBitmapData;
-				shader.offset.value[0] = __offsetX;
-				shader.offset.value[1] = __offsetY;
+				shader.offset.value[0] = __offsetX * __renderScale;
+				shader.offset.value[1] = __offsetY * __renderScale;
 				return shader;
 			}
 			var shader = GlowFilter.__innerCombineShader;
 			shader.sourceBitmap.input = sourceBitmapData;
-			shader.offset.value[0] = __offsetX;
-			shader.offset.value[1] = __offsetY;
+			shader.offset.value[0] = __offsetX * __renderScale;
+			shader.offset.value[1] = __offsetY * __renderScale;
 			return shader;
 		}
 		else
@@ -376,22 +376,22 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 			{
 				var shader = GlowFilter.__combineKnockoutShader;
 				shader.sourceBitmap.input = sourceBitmapData;
-				shader.offset.value[0] = __offsetX;
-				shader.offset.value[1] = __offsetY;
+				shader.offset.value[0] = __offsetX * __renderScale;
+				shader.offset.value[1] = __offsetY * __renderScale;
 				return shader;
 			}
 			else if (__hideObject)
 			{
 				var shader = __hideShader;
 				shader.sourceBitmap.input = sourceBitmapData;
-				shader.offset.value[0] = __offsetX;
-				shader.offset.value[1] = __offsetY;
+				shader.offset.value[0] = __offsetX * __renderScale;
+				shader.offset.value[1] = __offsetY * __renderScale;
 				return shader;
 			}
 			var shader = GlowFilter.__combineShader;
 			shader.sourceBitmap.input = sourceBitmapData;
-			shader.offset.value[0] = __offsetX;
-			shader.offset.value[1] = __offsetY;
+			shader.offset.value[0] = __offsetX * __renderScale;
+			shader.offset.value[1] = __offsetY * __renderScale;
 			return shader;
 		}
 		#else

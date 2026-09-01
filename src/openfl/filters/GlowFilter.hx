@@ -270,7 +270,7 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 			for (i in 0...field.length)
 				field[i] = 1 - field[i];
 		}
-		BitmapFilter.__blurField(field, width, height, __blurX, __blurY, __quality);
+		BitmapFilter.__blurField(field, width, height, __blurX * __renderScale, __blurY * __renderScale, __quality);
 
 		var cr = ((__color >> 16) & 0xFF) / 255.0;
 		var cg = ((__color >> 8) & 0xFF) / 255.0;
@@ -307,7 +307,7 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 		{
 			var strength = blurPass == (numBlurPasses - 1) ? __strength : 1.0;
 			var horizontal = blurPass < __horizontalPasses;
-			return __setupBlurAlphaShader(horizontal, horizontal ? blurX : blurY, color, alpha, strength);
+			return __setupBlurAlphaShader(horizontal, (horizontal ? blurX : blurY) * __renderScale, color, alpha, strength);
 		}
 		if (__inner)
 		{

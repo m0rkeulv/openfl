@@ -92,7 +92,7 @@ import openfl.geom.Rectangle;
 		// blurred source alpha, read back shifted by distance/angle (as the GL path
 		// samples the field at coord - offset)
 		var field = BitmapFilter.__alphaField(sourceBitmapData, sourceRect, destPoint, width, height);
-		BitmapFilter.__blurField(field, width, height, __blurX, __blurY, __quality);
+		BitmapFilter.__blurField(field, width, height, __blurX * __renderScale, __blurY * __renderScale, __quality);
 
 		if (__rampDirty) __buildRamp();
 		var ramp = __rampChannels();
@@ -102,7 +102,7 @@ import openfl.geom.Rectangle;
 		{
 			for (x in 0...width)
 			{
-				var f = BitmapFilter.__fieldAt(field, width, height, x - __offsetX, y - __offsetY) * __strength;
+				var f = BitmapFilter.__fieldAt(field, width, height, x - Std.int(__offsetX * __renderScale), y - Std.int(__offsetY * __renderScale)) * __strength;
 				if (f > 1) f = 1;
 				else if (f < 0) f = 0;
 
@@ -144,7 +144,7 @@ import openfl.geom.Rectangle;
 		{
 			// blur the object's alpha into a soft distance field (reuse BlurFilter)
 			var horizontal = pass < __horizontalPasses;
-			return BlurFilter.__setupBlurShader(horizontal, horizontal ? __blurX : __blurY);
+			return BlurFilter.__setupBlurShader(horizontal, (horizontal ? __blurX : __blurY) * __renderScale);
 		}
 
 		if (__rampDirty) __buildRamp();
@@ -152,8 +152,8 @@ import openfl.geom.Rectangle;
 		var shader = __gradientShader;
 		shader.sourceBitmap.input = sourceBitmapData;
 		shader.gradientRamp.input = __ramp;
-		shader.offset.value[0] = __offsetX;
-		shader.offset.value[1] = __offsetY;
+		shader.offset.value[0] = __offsetX * __renderScale;
+		shader.offset.value[1] = __offsetY * __renderScale;
 		shader.uStrength.value[0] = __strength;
 		shader.uInner.value[0] = (__type == INNER) ? 1.0 : 0.0;
 		shader.uFull.value[0] = (__type == FULL) ? 1.0 : 0.0;
