@@ -282,6 +282,7 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 
 		__needSecondBitmapData = true;
 		__preserveObject = true;
+		__softwareComposite = true;
 		__renderDirty = true;
 	}
 
@@ -292,22 +293,47 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 
 	@:noCompletion private override function __applyFilter(bitmapData:BitmapData, sourceBitmapData:BitmapData, sourceRect:Rectangle, destPoint:Point):BitmapData
 	{
-		// TODO: Support knockout, inner
+		var width = bitmapData.width;
+		var height = bitmapData.height;
 
-		#if lime
-		var r = (__color >> 16) & 0xFF;
-		var g = (__color >> 8) & 0xFF;
-		var b = __color & 0xFF;
+		// blur the source alpha, then read it back shifted by the shadow offset --
+		// the GL path does the same by sampling the glow at (coord - offset).
+		// An inner shadow blurs the *inverted* alpha (the GL path runs
+		// InvertAlphaShader as its first pass) so the shadow falls inside the edge.
+		var field = BitmapFilter.__alphaField(sourceBitmapData, sourceRect, destPoint, width, height);
+		if (__inner)
+		{
+			for (i in 0...field.length)
+				field[i] = 1 - field[i];
+		}
+		BitmapFilter.__blurField(field, width, height, __blurX, __blurY, __quality);
 
-		var point = new Point(destPoint.x + __offsetX, destPoint.y + __offsetY);
+		var cr = ((__color >> 16) & 0xFF) / 255.0;
+		var cg = ((__color >> 8) & 0xFF) / 255.0;
+		var cb = (__color & 0xFF) / 255.0;
+		var ox = Std.int(__offsetX);
+		var oy = Std.int(__offsetY);
 
-		var finalImage = ImageDataUtil.gaussianBlur(bitmapData.image, sourceBitmapData.image, sourceRect.__toLimeRectangle(), point.__toLimeVector2(),
-			__blurX, __blurY, __quality, __strength);
-		finalImage.colorTransform(finalImage.rect, new ColorTransform(0, 0, 0, __alpha, r, g, b, 0).__toLimeColorMatrix());
+		var fxR = new Array<Float>(), fxG = new Array<Float>(), fxB = new Array<Float>(), fxA = new Array<Float>();
+		for (y in 0...height)
+		{
+			for (x in 0...width)
+			{
+				var sx = x - ox;
+				var sy = y - oy;
+				var f = ((sx < 0 || sx >= width || sy < 0 || sy >= height) ? 0.0 : field[sy * width + sx]) * __strength;
+				if (f > 1) f = 1;
+				else if (f < 0) f = 0;
+				fxR.push(cr * f);
+				fxG.push(cg * f);
+				fxB.push(cb * f);
+				fxA.push(__alpha * f);
+			}
+		}
 
-		if (finalImage == bitmapData.image) return bitmapData;
-		#end
-		return sourceBitmapData;
+		// hideObject drops the object just like knockout does
+		return BitmapFilter.__compositeEffect(bitmapData, sourceBitmapData, sourceRect, destPoint, fxR, fxG, fxB, fxA, __inner ? INNER : OUTER,
+			__knockout || __hideObject);
 	}
 
 	@:noCompletion private override function __initShader(renderer:DisplayObjectRenderer, pass:Int, sourceBitmapData:BitmapData):Shader

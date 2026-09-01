@@ -72,6 +72,7 @@ import openfl.geom.Rectangle;
 
 		__needSecondBitmapData = true;
 		__preserveObject = true;
+		__softwareComposite = true;
 		__renderDirty = true;
 
 		__updateSize();
@@ -85,9 +86,54 @@ import openfl.geom.Rectangle;
 
 	@:noCompletion private override function __applyFilter(bitmapData:BitmapData, sourceBitmapData:BitmapData, sourceRect:Rectangle, destPoint:Point):BitmapData
 	{
-		// software path not implemented yet
-		// return the source unchanged so nothing crashes.
-		return sourceBitmapData;
+		var width = bitmapData.width;
+		var height = bitmapData.height;
+
+		// blurred source alpha, read back shifted by distance/angle (as the GL path
+		// samples the field at coord - offset)
+		var field = BitmapFilter.__alphaField(sourceBitmapData, sourceRect, destPoint, width, height);
+		BitmapFilter.__blurField(field, width, height, __blurX, __blurY, __quality);
+
+		if (__rampDirty) __buildRamp();
+		var ramp = __rampChannels();
+
+		var fxR = new Array<Float>(), fxG = new Array<Float>(), fxB = new Array<Float>(), fxA = new Array<Float>();
+		for (y in 0...height)
+		{
+			for (x in 0...width)
+			{
+				var f = BitmapFilter.__fieldAt(field, width, height, x - __offsetX, y - __offsetY) * __strength;
+				if (f > 1) f = 1;
+				else if (f < 0) f = 0;
+
+				// index the ramp by the field, exactly as GradientGlowShader does
+				var i = Std.int(f * 255 + 0.5) * 4;
+				fxR.push(ramp[i]);
+				fxG.push(ramp[i + 1]);
+				fxB.push(ramp[i + 2]);
+				fxA.push(ramp[i + 3]);
+			}
+		}
+
+		return BitmapFilter.__compositeEffect(bitmapData, sourceBitmapData, sourceRect, destPoint, fxR, fxG, fxB, fxA, __type, __knockout);
+	}
+
+	// The 256-entry ramp as flat premultiplied [r,g,b,a] floats, matching how the
+	// ramp BitmapData is premultiplied when uploaded as a texture on the GL path.
+	@:noCompletion private function __rampChannels():Array<Float>
+	{
+		var out = new Array<Float>();
+		var pixels = __ramp.getVector(__ramp.rect);
+		for (i in 0...256)
+		{
+			var argb = pixels[i];
+			var a = ((argb >>> 24) & 0xFF) / 255.0;
+			out.push((((argb >> 16) & 0xFF) / 255.0) * a);
+			out.push((((argb >> 8) & 0xFF) / 255.0) * a);
+			out.push(((argb & 0xFF) / 255.0) * a);
+			out.push(a);
+		}
+		return out;
 	}
 
 	@:noCompletion private override function __initShader(renderer:DisplayObjectRenderer, pass:Int, sourceBitmapData:BitmapData):Shader

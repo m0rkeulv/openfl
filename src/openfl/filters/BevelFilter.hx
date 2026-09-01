@@ -144,6 +144,7 @@ import lime._internal.graphics.ImageDataUtil;
 
 		__needSecondBitmapData = true;
 		__preserveObject = true;
+		__softwareComposite = true;
 		__renderDirty = true;
 	}
 
@@ -155,15 +156,46 @@ import lime._internal.graphics.ImageDataUtil;
 
 	@:noCompletion private override function __applyFilter(bitmapData:BitmapData, sourceBitmapData:BitmapData, sourceRect:Rectangle, destPoint:Point):BitmapData
 	{
-		#if lime
-		var time = Timer.stamp();
-		var finalImage = ImageDataUtil.gaussianBlur(bitmapData.image, sourceBitmapData.image, sourceRect.__toLimeRectangle(), destPoint.__toLimeVector2(),
-			__blurX, __blurY, __quality);
-		var elapsed = Timer.stamp() - time;
-		// trace("blurX: " + __blurX + " blurY: " + __blurY + " quality: " + __quality + " elapsed: " + elapsed * 1000 + "ms");
-		if (finalImage == bitmapData.image) return bitmapData;
-		#end
-		return sourceBitmapData;
+		var width = bitmapData.width;
+		var height = bitmapData.height;
+
+		// Same derivation as BevelShader: blur the source alpha, then compare the
+		// field either side of the light direction. The signed difference drives the
+		// highlight (light side) and the shadow (dark side).
+		var field = BitmapFilter.__alphaField(sourceBitmapData, sourceRect, destPoint, width, height);
+		BitmapFilter.__blurField(field, width, height, __blurX, __blurY, __quality);
+
+		var rad = __angle * Math.PI / 180;
+		var dx = Std.int(Math.round(__distance * Math.cos(rad)));
+		var dy = Std.int(Math.round(__distance * Math.sin(rad)));
+
+		var hr = (((__highlightColor >> 16) & 0xFF) / 255.0) * __highlightAlpha;
+		var hg = (((__highlightColor >> 8) & 0xFF) / 255.0) * __highlightAlpha;
+		var hb = ((__highlightColor & 0xFF) / 255.0) * __highlightAlpha;
+		var sr = (((__shadowColor >> 16) & 0xFF) / 255.0) * __shadowAlpha;
+		var sg = (((__shadowColor >> 8) & 0xFF) / 255.0) * __shadowAlpha;
+		var sb = ((__shadowColor & 0xFF) / 255.0) * __shadowAlpha;
+
+		var fxR = new Array<Float>(), fxG = new Array<Float>(), fxB = new Array<Float>(), fxA = new Array<Float>();
+		for (y in 0...height)
+		{
+			for (x in 0...width)
+			{
+				var bL = BitmapFilter.__fieldAt(field, width, height, x + dx, y + dy);
+				var bR = BitmapFilter.__fieldAt(field, width, height, x - dx, y - dy);
+				var d = (bL - bR) * __strength;
+				var high = d > 1 ? 1.0 : (d < 0 ? 0.0 : d);
+				var shad = -d > 1 ? 1.0 : (-d < 0 ? 0.0 : -d);
+
+				fxR.push(hr * high + sr * shad);
+				fxG.push(hg * high + sg * shad);
+				fxB.push(hb * high + sb * shad);
+				fxA.push(__highlightAlpha * high + __shadowAlpha * shad);
+			}
+		}
+
+		var type:BitmapFilterType = (__type == "inner") ? INNER : ((__type == "outer") ? OUTER : FULL);
+		return BitmapFilter.__compositeEffect(bitmapData, sourceBitmapData, sourceRect, destPoint, fxR, fxG, fxB, fxA, type, __knockout);
 	}
 
 	@:noCompletion private override function __initShader(renderer:DisplayObjectRenderer, pass:Int, sourceBitmapData:BitmapData):Shader

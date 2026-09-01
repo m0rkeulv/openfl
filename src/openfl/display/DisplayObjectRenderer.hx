@@ -792,7 +792,7 @@ class DisplayObjectRenderer extends EventDispatcher
 
 							lastBitmap = filter.__applyFilter(bitmap2, bitmap, bitmap.rect, destPoint);
 
-							if (filter.__preserveObject)
+							if (filter.__preserveObject && !filter.__softwareComposite)
 							{
 								lastBitmap.draw(bitmap3, null,
 									displayObject.__objectTransform != null ? displayObject.__objectTransform.__colorTransform : null);
