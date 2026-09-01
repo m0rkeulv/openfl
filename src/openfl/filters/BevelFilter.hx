@@ -173,25 +173,8 @@ import lime._internal.graphics.ImageDataUtil;
 		var numBlurPasses = __horizontalPasses + __verticalPasses;
 		if (blurPass < numBlurPasses)
 		{
-			#if flash_box_blur
 			var horizontal = pass < __horizontalPasses;
 			return BlurFilter.__setupBoxBlur(horizontal, horizontal ? blurX : blurY);
-			#else
-			var shader = BlurFilter.__blurShader;
-			if (pass < __horizontalPasses)
-			{
-				var scale = Math.pow(0.5, pass >> 1);
-				shader.uRadius.value[0] = blurX * scale;
-				shader.uRadius.value[1] = 0;
-			}
-			else
-			{
-				var scale = Math.pow(0.5, (pass - __horizontalPasses) >> 1);
-				shader.uRadius.value[0] = 0;
-				shader.uRadius.value[1] = blurY * scale;
-			}
-			return shader;
-			#end
 		}
 
 		__bevelShader.sourceBitmap.input = sourceBitmapData;
@@ -351,13 +334,8 @@ import lime._internal.graphics.ImageDataUtil;
 		value = value < 1 ? 1 : value;
 		value = value > 15 ? 15 : value;
 
-		#if flash_box_blur
 		__horizontalPasses = (__blurX <= 0) ? 0 : value;
 		__verticalPasses = (__blurY <= 0) ? 0 : value;
-		#else
-		__horizontalPasses = (__blurX <= 0) ? 0 : Math.round(__blurX * (value / 4));
-		__verticalPasses = (__blurY <= 0) ? 0 : Math.round(__blurY * (value / 4));
-		#end
 
 		__numShaderPasses = __horizontalPasses + __verticalPasses + 1;
 
@@ -457,16 +435,11 @@ import lime._internal.graphics.ImageDataUtil;
 	{
 		var offsetX:Int = __type != "inner" ? Math.ceil(__distance * Math.cos(__angle * Math.PI / 180)) : 0;
 		var offsetY:Int = __type != "inner" ? Math.ceil(__distance * Math.sin(__angle * Math.PI / 180)) : 0;
-		#if flash_box_blur
 		// Box blur reach grows to ~quality*blur/2 per side (see DropShadowFilter);
 		// reserve the full spread so the bevel isn't clipped at high quality.
 		var q = (__quality > 0) ? __quality : 1;
 		var exX = Math.ceil(__blurX * 0.5 * q) + 4;
 		var exY = Math.ceil(__blurY * 0.5 * q) + 4;
-		#else
-		var exX = Math.ceil(__blurX);
-		var exY = Math.ceil(__blurY);
-		#end
 		__topExtension = (offsetY < 0 ? -offsetY : 0) + exY;
 		__bottomExtension = (offsetY > 0 ? offsetY : 0) + exY;
 		__leftExtension = (offsetX < 0 ? -offsetX : 0) + exX;

@@ -101,24 +101,7 @@ import openfl.geom.Rectangle;
 		if (pass < numBlurPasses)
 		{
 			var horizontal = pass < __horizontalPasses;
-			#if flash_box_blur
 			return BlurFilter.__setupBoxBlur(horizontal, horizontal ? __blurX : __blurY);
-			#else
-			var shader = BlurFilter.__blurShader;
-			if (horizontal)
-			{
-				var scale = Math.pow(0.5, pass >> 1);
-				shader.uRadius.value[0] = __blurX * scale;
-				shader.uRadius.value[1] = 0;
-			}
-			else
-			{
-				var scale = Math.pow(0.5, (pass - __horizontalPasses) >> 1);
-				shader.uRadius.value[0] = 0;
-				shader.uRadius.value[1] = __blurY * scale;
-			}
-			return shader;
-			#end
 		}
 
 		if (__rampDirty) __buildRamp();
@@ -191,25 +174,14 @@ import openfl.geom.Rectangle;
 		// on every side); ceil the absolute value so negative angles don't lose a pixel
 		var offsetX:Int = (__type != INNER) ? Math.ceil(Math.abs(__distance * Math.cos(rad))) : 0;
 		var offsetY:Int = (__type != INNER) ? Math.ceil(Math.abs(__distance * Math.sin(rad))) : 0;
-		#if flash_box_blur
-		var qext = (__quality > 0) ? __quality : 1;
-		var exX = Math.ceil(__blurX * 0.5 * qext);
-		var exY = Math.ceil(__blurY * 0.5 * qext);
-		#else
-		var exX = Math.ceil(__blurX * 1.5);
-		var exY = Math.ceil(__blurY * 1.5);
-		#end
+		var q = (__quality > 0) ? __quality : 1;
+		var exX = Math.ceil(__blurX * 0.5 * q);
+		var exY = Math.ceil(__blurY * 0.5 * q);
 		__leftExtension = __rightExtension = exX + offsetX;
 		__topExtension = __bottomExtension = exY + offsetY;
 
-		#if flash_box_blur
-		var q = (__quality > 0) ? __quality : 1;
 		__horizontalPasses = (__blurX <= 0) ? 0 : q;
 		__verticalPasses = (__blurY <= 0) ? 0 : q;
-		#else
-		__horizontalPasses = (__blurX <= 0) ? 0 : Math.round(__blurX * (__quality / 4)) + 1;
-		__verticalPasses = (__blurY <= 0) ? 0 : Math.round(__blurY * (__quality / 4)) + 1;
-		#end
 		__numShaderPasses = __horizontalPasses + __verticalPasses + 1;
 	}
 

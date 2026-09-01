@@ -69,12 +69,9 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 @:access(openfl.geom.Rectangle)
 @:final class BlurFilter extends BitmapFilter
 {
-	@:noCompletion private static var __blurShader:BlurShader = new BlurShader();
-	#if flash_box_blur
-	// Flash-faithful fractional box blur (Ruffle-style), gated behind
-	// -Dflash_box_blur. Default build keeps the 7-tap Gaussian above.
+	// Flash-faithful fractional box blur (Ruffle-style). Shared by the bevel and
+	// gradient filters, which blur the source alpha before deriving their effect.
 	@:noCompletion private static var __boxBlurShader:BoxBlurShader = new BoxBlurShader();
-	#end
 
 	/**
 		The amount of horizontal blur. Valid values are from 0 to 255(floating
@@ -199,7 +196,6 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 
 	@:noCompletion private override function __initShader(renderer:DisplayObjectRenderer, pass:Int, sourceBitmapData:BitmapData):Shader
 	{
-		#if flash_box_blur
 		#if !macro
 		// passes alternate horizontal / vertical; each applies one full box blur
 		// for its axis, iterated `quality` times (separable box passes commute)
@@ -208,27 +204,8 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 		#else
 		return __boxBlurShader;
 		#end
-		#else
-		#if !macro
-		if (pass < __horizontalPasses)
-		{
-			var scale = Math.pow(0.5, pass >> 1);
-			__blurShader.uRadius.value[0] = blurX * scale;
-			__blurShader.uRadius.value[1] = 0;
-		}
-		else
-		{
-			var scale = Math.pow(0.5, (pass - __horizontalPasses) >> 1);
-			__blurShader.uRadius.value[0] = 0;
-			__blurShader.uRadius.value[1] = blurY * scale;
-		}
-		#end
-
-		return __blurShader;
-		#end
 	}
 
-	#if flash_box_blur
 	// Configure the shared box-blur shader for one axis of one pass. Reused by
 	// BevelFilter (which blurs the source before deriving highlight/shadow).
 	@:noCompletion private static function __setupBoxBlur(horizontal:Bool, v:Float):BitmapFilterShader
@@ -262,7 +239,6 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 		}
 		return s;
 	}
-	#end
 
 	@:noCompletion inline function __padFor(value:Float):Int
 	{
@@ -324,18 +300,11 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 	{
 		// TODO: Quality effect with fewer passes?
 
-		#if flash_box_blur
 		// one horizontal + one vertical box pass per quality iteration
 		var passes = (value > 0) ? value : 1;
 		__horizontalPasses = passes;
 		__verticalPasses = passes;
 		__numShaderPasses = passes * 2;
-		#else
-		__horizontalPasses = (__blurX <= 0) ? 0 : Math.round(__blurX * (value / 4)) + 1;
-		__verticalPasses = (__blurY <= 0) ? 0 : Math.round(__blurY * (value / 4)) + 1;
-
-		__numShaderPasses = __horizontalPasses + __verticalPasses;
-		#end
 
 		if (value != __quality) __renderDirty = true;
 		__quality = value;
@@ -345,73 +314,6 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 	}
 }
 
-#if !openfl_debug
-@:fileXml('tags="haxe,release"')
-@:noDebug
-#end
-private class BlurShader extends BitmapFilterShader
-{
-	@:glFragmentSource("uniform sampler2D openfl_Texture;
-
-		varying vec2 vBlurCoords[7];
-
-		void main(void) {
-
-			vec4 sum = vec4(0.0);
-			sum += texture2D(openfl_Texture, vBlurCoords[0]) * 0.00443;
-			sum += texture2D(openfl_Texture, vBlurCoords[1]) * 0.05399;
-			sum += texture2D(openfl_Texture, vBlurCoords[2]) * 0.24197;
-			sum += texture2D(openfl_Texture, vBlurCoords[3]) * 0.39894;
-			sum += texture2D(openfl_Texture, vBlurCoords[4]) * 0.24197;
-			sum += texture2D(openfl_Texture, vBlurCoords[5]) * 0.05399;
-			sum += texture2D(openfl_Texture, vBlurCoords[6]) * 0.00443;
-
-			gl_FragColor = sum;
-
-		}")
-	@:glVertexSource("attribute vec4 openfl_Position;
-		attribute vec2 openfl_TextureCoord;
-
-		uniform mat4 openfl_Matrix;
-
-		uniform vec2 uRadius;
-		varying vec2 vBlurCoords[7];
-		uniform vec2 uTextureSize;
-
-		void main(void) {
-
-			gl_Position = openfl_Matrix * openfl_Position;
-
-			vec2 r = uRadius / uTextureSize;
-			vBlurCoords[0] = openfl_TextureCoord - r;
-			vBlurCoords[1] = openfl_TextureCoord - r * 0.75;
-			vBlurCoords[2] = openfl_TextureCoord - r * 0.5;
-			vBlurCoords[3] = openfl_TextureCoord;
-			vBlurCoords[4] = openfl_TextureCoord + r * 0.5;
-			vBlurCoords[5] = openfl_TextureCoord + r * 0.75;
-			vBlurCoords[6] = openfl_TextureCoord + r;
-
-		}")
-	public function new()
-	{
-		super();
-
-		#if !macro
-		uRadius.value = [0, 0];
-		#end
-	}
-
-	@:noCompletion private override function __update():Void
-	{
-		#if !macro
-		uTextureSize.value = [__texture.input.width, __texture.input.height];
-		#end
-
-		super.__update();
-	}
-}
-
-#if flash_box_blur
 // Flash-faithful fractional box blur, one axis per pass (Ruffle-style). Kernel:
 // full_size = blur (<=255); radius = (full_size-1)/2; m = ceil(radius)-1 interior
 // double-weighted bilinear pairs; alpha = frac edge weight (8-bit quantised);
@@ -485,7 +387,6 @@ private class BoxBlurShader extends BitmapFilterShader
 		super.__update();
 	}
 }
-#end
 #else
 typedef BlurFilter = flash.filters.BlurFilter;
 #end

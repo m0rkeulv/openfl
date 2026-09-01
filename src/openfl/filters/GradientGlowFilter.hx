@@ -104,24 +104,7 @@ import openfl.geom.Rectangle;
 		{
 			// blur the object's alpha into a soft distance field (reuse BlurFilter)
 			var horizontal = pass < __horizontalPasses;
-			#if flash_box_blur
 			return BlurFilter.__setupBoxBlur(horizontal, horizontal ? __blurX : __blurY);
-			#else
-			var shader = BlurFilter.__blurShader;
-			if (horizontal)
-			{
-				var scale = Math.pow(0.5, pass >> 1);
-				shader.uRadius.value[0] = __blurX * scale;
-				shader.uRadius.value[1] = 0;
-			}
-			else
-			{
-				var scale = Math.pow(0.5, (pass - __horizontalPasses) >> 1);
-				shader.uRadius.value[0] = 0;
-				shader.uRadius.value[1] = __blurY * scale;
-			}
-			return shader;
-			#end
 		}
 
 		if (__rampDirty) __buildRamp();
@@ -183,29 +166,18 @@ import openfl.geom.Rectangle;
 	{
 		__offsetX = Std.int(__distance * Math.cos(__angle * Math.PI / 180));
 		__offsetY = Std.int(__distance * Math.sin(__angle * Math.PI / 180));
-		#if flash_box_blur
 		// Box blur reach grows to ~quality*blur/2 per side (see DropShadowFilter);
 		// reserve the full spread so the gradient glow isn't clipped at high quality.
-		var qext = (__quality > 0) ? __quality : 1;
-		var exX = Math.ceil(__blurX * 0.5 * qext) + 4;
-		var exY = Math.ceil(__blurY * 0.5 * qext) + 4;
-		#else
-		var exX = Math.ceil(__blurX * 1.5);
-		var exY = Math.ceil(__blurY * 1.5);
-		#end
+		var q = (__quality > 0) ? __quality : 1;
+		var exX = Math.ceil(__blurX * 0.5 * q) + 4;
+		var exY = Math.ceil(__blurY * 0.5 * q) + 4;
 		__topExtension = (__offsetY < 0 ? -__offsetY : 0) + exY;
 		__bottomExtension = (__offsetY > 0 ? __offsetY : 0) + exY;
 		__leftExtension = (__offsetX < 0 ? -__offsetX : 0) + exX;
 		__rightExtension = (__offsetX > 0 ? __offsetX : 0) + exX;
 
-		#if flash_box_blur
-		var q = (__quality > 0) ? __quality : 1;
 		__horizontalPasses = (__blurX <= 0) ? 0 : q;
 		__verticalPasses = (__blurY <= 0) ? 0 : q;
-		#else
-		__horizontalPasses = (__blurX <= 0) ? 0 : Math.round(__blurX * (__quality / 4)) + 1;
-		__verticalPasses = (__blurY <= 0) ? 0 : Math.round(__blurY * (__quality / 4)) + 1;
-		#end
 		__numShaderPasses = __horizontalPasses + __verticalPasses + 1;
 	}
 

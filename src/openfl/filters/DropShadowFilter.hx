@@ -325,30 +325,8 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 		if (blurPass < numBlurPasses)
 		{
 			var strength = blurPass == (numBlurPasses - 1) ? __strength : 1.0;
-			#if flash_box_blur
 			var horizontal = blurPass < __horizontalPasses;
 			return GlowFilter.__setupBoxBlur(horizontal, horizontal ? blurX : blurY, color, alpha, strength);
-			#else
-			var shader = GlowFilter.__blurAlphaShader;
-			if (blurPass < __horizontalPasses)
-			{
-				var scale = Math.pow(0.5, blurPass >> 1) * 0.5;
-				shader.uRadius.value[0] = blurX * scale;
-				shader.uRadius.value[1] = 0;
-			}
-			else
-			{
-				var scale = Math.pow(0.5, (blurPass - __horizontalPasses) >> 1) * 0.5;
-				shader.uRadius.value[0] = 0;
-				shader.uRadius.value[1] = blurY * scale;
-			}
-			shader.uColor.value[0] = ((color >> 16) & 0xFF) / 255;
-			shader.uColor.value[1] = ((color >> 8) & 0xFF) / 255;
-			shader.uColor.value[2] = (color & 0xFF) / 255;
-			shader.uColor.value[3] = alpha;
-			shader.uStrength.value[0] = strength;
-			return shader;
-			#end
 		}
 		if (__inner)
 		{
@@ -399,7 +377,6 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 	{
 		__offsetX = Std.int(__distance * Math.cos(__angle * Math.PI / 180));
 		__offsetY = Std.int(__distance * Math.sin(__angle * Math.PI / 180));
-		#if flash_box_blur
 		// Box blur applies `quality` passes; each pass widens the shadow's
 		// support by ~half the blur, so the reach grows to ~quality*blur/2. If we
 		// only reserve one blur radius the shadow is hard-clipped to a rectangle
@@ -407,10 +384,6 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 		var q = (__quality > 0) ? __quality : 1;
 		var exX = Math.ceil(__blurX * 0.5 * q) + 4;
 		var exY = Math.ceil(__blurY * 0.5 * q) + 4;
-		#else
-		var exX = Math.ceil(__blurX);
-		var exY = Math.ceil(__blurY);
-		#end
 		__topExtension = Std.int((__offsetY < 0 ? -__offsetY : 0) + exY);
 		__bottomExtension = Std.int((__offsetY > 0 ? __offsetY : 0) + exY);
 		__leftExtension = Std.int((__offsetX < 0 ? -__offsetX : 0) + exX);
@@ -420,14 +393,9 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 
 	@:noCompletion private function __calculateNumShaderPasses():Void
 	{
-		#if flash_box_blur
 		var q = (__quality > 0) ? __quality : 1;
 		__horizontalPasses = (__blurX <= 0) ? 0 : q;
 		__verticalPasses = (__blurY <= 0) ? 0 : q;
-		#else
-		__horizontalPasses = (__blurX <= 0) ? 0 : Math.round(__blurX * (__quality / 4)) + 1;
-		__verticalPasses = (__blurY <= 0) ? 0 : Math.round(__blurY * (__quality / 4)) + 1;
-		#end
 		__numShaderPasses = __horizontalPasses + __verticalPasses + (__inner ? 2 : 1);
 	}
 
