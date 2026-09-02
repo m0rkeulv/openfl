@@ -387,13 +387,8 @@ class DisplayObjectRenderer extends EventDispatcher
 				filterWidth = rect.width > 0 ? Math.ceil((rect.width + 1) * pixelRatio) : 0;
 				filterHeight = rect.height > 0 ? Math.ceil((rect.height + 1) * pixelRatio) : 0;
 
-				// Snap the cache origin to a whole DEVICE pixel, not a whole logical
-				// pixel. At a fractional pixelRatio (1.5x, 1.25x) an integer logical
-				// offset is a fractional device offset, and the whole cache bitmap is
-				// then composited at a half-pixel phase and bilinearly smeared. Soft
-				// effects hide it; a thin high-contrast band (a bevel edge) shows it as
-				// a visible displacement. Rounding in device space keeps both the
-				// content-into-cache and cache-onto-screen placements pixel-aligned.
+
+				// PixelRatio is adjusting for HDPI screns with fractional scaling. (1.5x, 1.25x etc)
 				offsetX = (rect.x > 0 ? Math.ceil(rect.x * pixelRatio) : Math.floor(rect.x * pixelRatio)) / pixelRatio;
 				offsetY = (rect.y > 0 ? Math.ceil(rect.y * pixelRatio) : Math.floor(rect.y * pixelRatio)) / pixelRatio;
 
