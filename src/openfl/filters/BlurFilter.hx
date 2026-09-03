@@ -69,7 +69,7 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 @:access(openfl.geom.Rectangle)
 @:final class BlurFilter extends BitmapFilter
 {
-	@:noCompletion private static var __blurShader:BlurShader = new BlurShader();
+	@:noCompletion private static var __blurShader:BoxBlurShader = new BoxBlurShader();
 
 	/**
 		The amount of horizontal blur. Valid values are from 0 to 255(floating
@@ -184,7 +184,7 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 		#if lime
 		var time = Timer.stamp();
 		var finalImage = ImageDataUtil.gaussianBlur(bitmapData.image, sourceBitmapData.image, sourceRect.__toLimeRectangle(), destPoint.__toLimeVector2(),
-			__blurX, __blurY, __quality);
+			__blurX * __renderScale, __blurY * __renderScale, __quality);
 		var elapsed = Timer.stamp() - time;
 		// trace("blurX: " + __blurX + " blurY: " + __blurY + " quality: " + __quality + " elapsed: " + elapsed * 1000 + "ms");
 		if (finalImage == bitmapData.image) return bitmapData;
@@ -195,21 +195,22 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 	@:noCompletion private override function __initShader(renderer:DisplayObjectRenderer, pass:Int, sourceBitmapData:BitmapData):Shader
 	{
 		#if !macro
-		if (pass < __horizontalPasses)
-		{
-			var scale = Math.pow(0.5, pass >> 1);
-			__blurShader.uRadius.value[0] = blurX * scale;
-			__blurShader.uRadius.value[1] = 0;
-		}
-		else
-		{
-			var scale = Math.pow(0.5, (pass - __horizontalPasses) >> 1);
-			__blurShader.uRadius.value[0] = 0;
-			__blurShader.uRadius.value[1] = blurY * scale;
-		}
-		#end
-
+		// passes alternate horizontal / vertical, each applies one full box blur for its axis, iterated `quality` times
+		var horizontal = (pass % 2 == 0);
+		return __setupBlurShader(horizontal, (horizontal ? blurX : blurY) * __renderScale);
+		#else
 		return __blurShader;
+		#end
+	}
+
+	// Configure the box-blur shader for one axis of one pass.
+	@:noCompletion private static function __setupBlurShader(horizontal:Bool, v:Float):BitmapFilterShader
+	{
+		var shader = __blurShader;
+		shader.uDir.value[0] = horizontal ? 1.0 : 0.0;
+		shader.uDir.value[1] = horizontal ? 0.0 : 1.0;
+		shader.uFullSize.value[0] = v > 255 ? 255.0 : v;
+		return shader;
 	}
 
 	@:noCompletion inline function __padFor(value:Float):Int
@@ -270,12 +271,12 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 
 	@:noCompletion private function set_quality(value:Int):Int
 	{
-		// TODO: Quality effect with fewer passes?
 
-		__horizontalPasses = (__blurX <= 0) ? 0 : Math.round(__blurX * (value / 4)) + 1;
-		__verticalPasses = (__blurY <= 0) ? 0 : Math.round(__blurY * (value / 4)) + 1;
-
-		__numShaderPasses = __horizontalPasses + __verticalPasses;
+		// one horizontal + one vertical box pass per quality iteration
+		var passes = (value > 0) ? value : 1;
+		__horizontalPasses = passes;
+		__verticalPasses = passes;
+		__numShaderPasses = passes * 2;
 
 		if (value != __quality) __renderDirty = true;
 		__quality = value;
@@ -289,47 +290,49 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 @:fileXml('tags="haxe,release"')
 @:noDebug
 #end
-private class BlurShader extends BitmapFilterShader
+private class BoxBlurShader extends BitmapFilterShader
 {
-	@:glFragmentSource("uniform sampler2D openfl_Texture;
-
-		varying vec2 vBlurCoords[7];
+	@:glVertexSource("#pragma header
 
 		void main(void) {
 
-			vec4 sum = vec4(0.0);
-			sum += texture2D(openfl_Texture, vBlurCoords[0]) * 0.00443;
-			sum += texture2D(openfl_Texture, vBlurCoords[1]) * 0.05399;
-			sum += texture2D(openfl_Texture, vBlurCoords[2]) * 0.24197;
-			sum += texture2D(openfl_Texture, vBlurCoords[3]) * 0.39894;
-			sum += texture2D(openfl_Texture, vBlurCoords[4]) * 0.24197;
-			sum += texture2D(openfl_Texture, vBlurCoords[5]) * 0.05399;
-			sum += texture2D(openfl_Texture, vBlurCoords[6]) * 0.00443;
-
-			gl_FragColor = sum;
+			#pragma body
 
 		}")
-	@:glVertexSource("attribute vec4 openfl_Position;
-		attribute vec2 openfl_TextureCoord;
+	@:glFragmentSource("#pragma header
 
-		uniform mat4 openfl_Matrix;
-
-		uniform vec2 uRadius;
-		varying vec2 vBlurCoords[7];
 		uniform vec2 uTextureSize;
+		uniform vec2 uDir;          // blur axis: (1,0) horizontal, (0,1) vertical
+		uniform float uFullSize;    // box width = the blur amount
 
 		void main(void) {
 
-			gl_Position = openfl_Matrix * openfl_Position;
+			vec2 direction = uDir / uTextureSize;
+			float fullSize = min(uFullSize, 255.0);
 
-			vec2 r = uRadius / uTextureSize;
-			vBlurCoords[0] = openfl_TextureCoord - r;
-			vBlurCoords[1] = openfl_TextureCoord - r * 0.75;
-			vBlurCoords[2] = openfl_TextureCoord - r * 0.5;
-			vBlurCoords[3] = openfl_TextureCoord;
-			vBlurCoords[4] = openfl_TextureCoord + r * 0.5;
-			vBlurCoords[5] = openfl_TextureCoord + r * 0.75;
-			vBlurCoords[6] = openfl_TextureCoord + r;
+			if (fullSize <= 1.0) {
+				gl_FragColor = texture2D(openfl_Texture, openfl_TextureCoordv);
+				return;
+			}
+
+			float halfW = fullSize * 0.5;
+			int   n     = int(floor(halfW - 0.5));           // full interior texels per side
+			float frac  = halfW - (float(n) + 0.5);          // fractional edge weight
+			frac = floor(frac * 255.0) / 255.0;              // 8-bit weight (Flash fixed point)
+
+			vec4 sum = texture2D(openfl_Texture, openfl_TextureCoordv);   // centre
+			for (int i = 1; i <= 128; i++) {                             // full interior pairs
+				if (i > n) break;
+				vec2 off = float(i) * direction;
+				sum += texture2D(openfl_Texture, openfl_TextureCoordv + off);
+				sum += texture2D(openfl_Texture, openfl_TextureCoordv - off);
+			}
+			vec2 edge = float(n + 1) * direction;                        // fractional edges
+			sum += texture2D(openfl_Texture, openfl_TextureCoordv + edge) * frac;
+			sum += texture2D(openfl_Texture, openfl_TextureCoordv - edge) * frac;
+
+			vec4 result = sum / fullSize;
+			gl_FragColor = floor(result * 255.0) / 255.0;               // 8-bit round each pass
 
 		}")
 	public function new()
@@ -337,7 +340,8 @@ private class BlurShader extends BitmapFilterShader
 		super();
 
 		#if !macro
-		uRadius.value = [0, 0];
+		uDir.value = [1.0, 0.0];
+		uFullSize.value = [1.0];
 		#end
 	}
 
