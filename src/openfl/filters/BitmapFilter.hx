@@ -38,13 +38,6 @@ class BitmapFilter
 
 	/**
 		Whether `__applyFilter` composites the original object into its own result.
-
-		The GPU path hands the unfiltered object to the combine shader (see
-		`__initShader`), which composites inner / knockout / full itself. The
-		software path instead relies on the caller drawing the object back on top
-		afterwards, which can only ever produce an "outer, non-knockout" result.
-		Filters whose `__applyFilter` does the whole composite set this so the
-		software callers skip that draw. The GPU path never reads it.
 	**/
 	@:noCompletion private var __softwareComposite:Bool;
 
@@ -64,7 +57,6 @@ class BitmapFilter
 
 	public function new()
 	{
-		__renderScale = 1;
 		__bottomExtension = 0;
 		__leftExtension = 0;
 		__needSecondBitmapData = true;
@@ -74,6 +66,7 @@ class BitmapFilter
 		__shaderBlendMode = NORMAL;
 		__topExtension = 0;
 		__smooth = true;
+		__renderScale = 1;
 		__softwareComposite = false;
 	}
 
@@ -99,17 +92,6 @@ class BitmapFilter
 		return null;
 	}
 
-	// ------------------------------------------------------------------------
-	// Software (CPU) helpers, shared by the effect filters. These mirror the GL
-	// shaders so both paths produce the same image: the same fractional box blur
-	// of the source alpha, and the same combine formulas.
-	//
-	// "mask" throughout = the shape's alpha as one Float (0..1) per pixel of the
-	// destination grid. Blurred, it becomes a soft coverage map -- 1 inside the
-	// shape, fading to 0 outside -- and that is the geometry every effect is
-	// derived from: glow/shadow read it, bevel takes its directional difference,
-	// the gradient filters index a colour ramp by it.
-	// ------------------------------------------------------------------------
 
 	/**
 		The source's alpha channel as a 0..1 mask laid out on the destination
@@ -119,13 +101,13 @@ class BitmapFilter
 	**/
 	@:noCompletion private static function __alphaMask(source:BitmapData, sourceRect:Rectangle, destPoint:Point, width:Int, height:Int):Array<Float>
 	{
-		var mask = new Array<Float>();
-		for (i in 0...width * height)
-			mask.push(0.0);
+		var mask = [for (i in 0...width * height) 0.0];
 
 		var pixels = source.getVector(sourceRect);
+
 		var sw = Std.int(sourceRect.width);
 		var sh = Std.int(sourceRect.height);
+
 		var ox = Std.int(destPoint.x);
 		var oy = Std.int(destPoint.y);
 
@@ -150,9 +132,7 @@ class BitmapFilter
 	@:noCompletion private static function __blurMask(mask:Array<Float>, width:Int, height:Int, blurX:Float, blurY:Float, quality:Int):Array<Float>
 	{
 		var passes = (quality > 0) ? quality : 1;
-		var scratch = new Array<Float>();
-		for (i in 0...mask.length)
-			scratch.push(0.0);
+		var scratch = [for (i in 0...mask.length) 0.0];
 
 		for (i in 0...passes)
 		{
@@ -222,8 +202,13 @@ class BitmapFilter
 		var height = dest.height;
 
 		// source pixels on the destination grid, premultiplied
-		var srcR = new Array<Float>(), srcG = new Array<Float>(), srcB = new Array<Float>(), srcA = new Array<Float>();
-		for (i in 0...width * height)
+		var srcR = new Array<Float>();
+		var srcG = new Array<Float>();
+		var srcB = new Array<Float>();
+		var srcA = new Array<Float>();
+
+		var pixelCount = width * height;
+		for (i in 0...pixelCount)
 		{
 			srcR.push(0.0);
 			srcG.push(0.0);
@@ -232,22 +217,25 @@ class BitmapFilter
 		}
 
 		var pixels = source.getVector(sourceRect);
-		var sw = Std.int(sourceRect.width);
-		var sh = Std.int(sourceRect.height);
-		var ox = Std.int(destPoint.x);
-		var oy = Std.int(destPoint.y);
 
-		for (y in 0...sh)
+		var sourceWidth = Std.int(sourceRect.width);
+		var sourceHeight = Std.int(sourceRect.height);
+		var destOffsetX = Std.int(destPoint.x);
+		var destOffsetY = Std.int(destPoint.y);
+
+		for (y in 0...sourceHeight)
 		{
-			var dy = y + oy;
-			if (dy < 0 || dy >= height) continue;
-			for (x in 0...sw)
+			var destY = y + destOffsetY;
+			if (destY < 0 || destY >= height) continue;
+
+			for (x in 0...sourceWidth)
 			{
-				var dx = x + ox;
-				if (dx < 0 || dx >= width) continue;
-				var argb = pixels[y * sw + x];
+				var destX = x + destOffsetX;
+				if (destX < 0 || destX >= width) continue;
+
+				var argb = pixels[y * sourceWidth + x];
 				var a = ((argb >>> 24) & 0xFF) / 255.0;
-				var i = dy * width + dx;
+				var i = destY * width + destX;
 				srcA[i] = a;
 				srcR[i] = (((argb >> 16) & 0xFF) / 255.0) * a;
 				srcG[i] = (((argb >> 8) & 0xFF) / 255.0) * a;
@@ -259,61 +247,62 @@ class BitmapFilter
 
 		for (i in 0...width * height)
 		{
-			var sr = srcR[i], sg = srcG[i], sb = srcB[i], sa = srcA[i];
-			var er = fxR[i], eg = fxG[i], eb = fxB[i], ea = fxA[i];
+			var sourceR = srcR[i], sourceG = srcG[i], sourceB = srcB[i], sourceA = srcA[i];
+			var effectR = fxR[i], effectG = fxG[i], effectB = fxB[i], effectA = fxA[i];
 			var r:Float, g:Float, b:Float, a:Float;
 
 			if (type == INNER)
 			{
-				var mr = er * sa, mg = eg * sa, mb = eb * sa, ma = ea * sa;
+				// the effect confined to the shape: scaled by the source alpha
+				var maskedR = effectR * sourceA, maskedG = effectG * sourceA, maskedB = effectB * sourceA, maskedA = effectA * sourceA;
 				if (knockout)
 				{
-					r = mr;
-					g = mg;
-					b = mb;
-					a = ma;
+					r = maskedR;
+					g = maskedG;
+					b = maskedB;
+					a = maskedA;
 				}
 				else
 				{
-					r = sr * (1 - ea) + mr;
-					g = sg * (1 - ea) + mg;
-					b = sb * (1 - ea) + mb;
-					a = sa;
+					r = sourceR * (1 - effectA) + maskedR;
+					g = sourceG * (1 - effectA) + maskedG;
+					b = sourceB * (1 - effectA) + maskedB;
+					a = sourceA;
 				}
 			}
 			else if (type == FULL)
 			{
 				if (knockout)
 				{
-					r = er;
-					g = eg;
-					b = eb;
-					a = ea;
+					r = effectR;
+					g = effectG;
+					b = effectB;
+					a = effectA;
 				}
 				else
 				{
-					r = sr * (1 - ea) + er;
-					g = sg * (1 - ea) + eg;
-					b = sb * (1 - ea) + eb;
-					a = sa * (1 - ea) + ea;
+					r = sourceR * (1 - effectA) + effectR;
+					g = sourceG * (1 - effectA) + effectG;
+					b = sourceB * (1 - effectA) + effectB;
+					a = sourceA * (1 - effectA) + effectA;
 				}
 			}
 			else // OUTER
 			{
-				var k = 1 - sa;
+				var outside = 1 - sourceA; // how much of this pixel lies outside the shape
 				if (knockout)
 				{
-					r = er * k;
-					g = eg * k;
-					b = eb * k;
-					a = ea * k;
+					r = effectR * outside;
+					g = effectG * outside;
+					b = effectB * outside;
+					a = effectA * outside;
 				}
 				else
 				{
-					r = sr + er * k;
-					g = sg + eg * k;
-					b = sb + eb * k;
-					a = sa + ea * k;
+					r = sourceR + effectR * outside;
+					g = sourceG + effectG * outside;
+					b = sourceB + effectB * outside;
+					a = sourceA + effectA * outside;
 				}
 			}
 
@@ -329,10 +318,12 @@ class BitmapFilter
 	{
 		if (a <= 0) return 0;
 		if (a > 1) a = 1;
+
 		var ir = Std.int(__clamp01(r / a) * 255 + 0.5);
 		var ig = Std.int(__clamp01(g / a) * 255 + 0.5);
 		var ib = Std.int(__clamp01(b / a) * 255 + 0.5);
 		var ia = Std.int(a * 255 + 0.5);
+
 		return (ia << 24) | (ir << 16) | (ig << 8) | ib;
 	}
 

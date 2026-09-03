@@ -206,11 +206,11 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 	// Configure the box-blur shader for one axis of one pass.
 	@:noCompletion private static function __setupBlurShader(horizontal:Bool, v:Float):BitmapFilterShader
 	{
-		var s = __blurShader;
-		s.uDir.value[0] = horizontal ? 1.0 : 0.0;
-		s.uDir.value[1] = horizontal ? 0.0 : 1.0;
-		s.uFullSize.value[0] = v > 255 ? 255.0 : v;
-		return s;
+		var shader = __blurShader;
+		shader.uDir.value[0] = horizontal ? 1.0 : 0.0;
+		shader.uDir.value[1] = horizontal ? 0.0 : 1.0;
+		shader.uFullSize.value[0] = v > 255 ? 255.0 : v;
+		return shader;
 	}
 
 	@:noCompletion inline function __padFor(value:Float):Int

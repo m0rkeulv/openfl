@@ -188,17 +188,15 @@ import lime._internal.graphics.ImageDataUtil;
 				// (called  blurLeft / blurRight in BevelShader)
 				var maskTowardShadow = BitmapFilter.__maskAt(mask, width, height, x + dx, y + dy);
 				var maskTowardLight = BitmapFilter.__maskAt(mask, width, height, x - dx, y - dy);
-				var d = (maskTowardShadow - maskTowardLight) * __strength;
-				// positive: more shape toward the shadow than toward the light, so this
-				// pixel sits on the edge FACING the light -> highlight. negative -> the
-				// shadow-facing edge.
-				var high = d > 1 ? 1.0 : (d < 0 ? 0.0 : d);
-				var shad = -d > 1 ? 1.0 : (-d < 0 ? 0.0 : -d);
+				var dist = (maskTowardShadow - maskTowardLight) * __strength;
 
-				fxR.push(highlightR * high + shadowR * shad);
-				fxG.push(highlightG * high + shadowG * shad);
-				fxB.push(highlightB * high + shadowB * shad);
-				fxA.push(__highlightAlpha * high + __shadowAlpha * shad);
+				var highlight = dist > 1 ? 1.0 : (dist < 0 ? 0.0 : dist);
+				var shadow = -dist > 1 ? 1.0 : (-dist < 0 ? 0.0 : -dist);
+
+				fxR.push(highlightR * highlight + shadowR * shadow);
+				fxG.push(highlightG * highlight + shadowG * shadow);
+				fxB.push(highlightB * highlight + shadowB * shadow);
+				fxA.push(__highlightAlpha * highlight + __shadowAlpha * shadow);
 			}
 		}
 
@@ -478,7 +476,7 @@ import lime._internal.graphics.ImageDataUtil;
 		var offsetX:Int = __type != "inner" ? Math.ceil(__distance * Math.cos(__angle * Math.PI / 180)) : 0;
 		var offsetY:Int = __type != "inner" ? Math.ceil(__distance * Math.sin(__angle * Math.PI / 180)) : 0;
 		// Box blur reach grows to ~quality*blur/2 per side (see DropShadowFilter);
-		// reserve the full spread so the bevel isn't clipped at high quality.
+		// reserving the full spread so the bevel isn't clipped at high quality.
 		var q = (__quality > 0) ? __quality : 1;
 		var exX = Math.ceil(__blurX * 0.5 * q) + 4;
 		var exY = Math.ceil(__blurY * 0.5 * q) + 4;
