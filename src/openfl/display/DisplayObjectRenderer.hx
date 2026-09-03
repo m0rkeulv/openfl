@@ -387,8 +387,10 @@ class DisplayObjectRenderer extends EventDispatcher
 				filterWidth = rect.width > 0 ? Math.ceil((rect.width + 1) * pixelRatio) : 0;
 				filterHeight = rect.height > 0 ? Math.ceil((rect.height + 1) * pixelRatio) : 0;
 
-				offsetX = rect.x > 0 ? Math.ceil(rect.x) : Math.floor(rect.x);
-				offsetY = rect.y > 0 ? Math.ceil(rect.y) : Math.floor(rect.y);
+
+				// PixelRatio is adjusting for HDPI screns with fractional scaling. (1.5x, 1.25x etc)
+				offsetX = (rect.x > 0 ? Math.ceil(rect.x * pixelRatio) : Math.floor(rect.x * pixelRatio)) / pixelRatio;
+				offsetY = (rect.y > 0 ? Math.ceil(rect.y * pixelRatio) : Math.floor(rect.y * pixelRatio)) / pixelRatio;
 
 				if (displayObject.__cacheBitmapData != null)
 				{
@@ -668,6 +670,10 @@ class DisplayObjectRenderer extends EventDispatcher
 
 						for (filter in displayObject.__filters)
 						{
+							// the cache bitmap is drawn at pixelRatio, so blur radius and
+							// offsets (in logical pixels) must scale to match
+							filter.__renderScale = pixelRatio;
+
 							if (filter.__preserveObject)
 							{
 								childRenderer.__setRenderTarget(bitmap3);
@@ -785,6 +791,8 @@ class DisplayObjectRenderer extends EventDispatcher
 
 						for (filter in displayObject.__filters)
 						{
+							filter.__renderScale = pixelRatio;
+
 							if (filter.__preserveObject)
 							{
 								bitmap3.copyPixels(bitmap, bitmap.rect, destPoint);
@@ -792,7 +800,7 @@ class DisplayObjectRenderer extends EventDispatcher
 
 							lastBitmap = filter.__applyFilter(bitmap2, bitmap, bitmap.rect, destPoint);
 
-							if (filter.__preserveObject)
+							if (filter.__preserveObject && !filter.__softwareComposite)
 							{
 								lastBitmap.draw(bitmap3, null,
 									displayObject.__objectTransform != null ? displayObject.__objectTransform.__colorTransform : null);

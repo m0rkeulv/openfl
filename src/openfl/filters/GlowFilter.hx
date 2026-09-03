@@ -68,12 +68,7 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 @:final class GlowFilter extends BitmapFilter
 {
 	@:noCompletion private static var __invertAlphaShader = new InvertAlphaShader();
-	@:noCompletion private static var __blurAlphaShader = new BlurAlphaShader();
-	#if flash_box_blur
-	// Flash-faithful fractional box blur of the alpha channel (Ruffle-style),
-	// colourised like BlurAlphaShader. Shared by GlowFilter + DropShadowFilter.
-	@:noCompletion private static var __boxBlurAlphaShader = new BoxBlurAlphaShader();
-	#end
+	@:noCompletion private static var __blurAlphaShader = new BoxBlurAlphaShader();
 	@:noCompletion private static var __combineShader = new CombineShader();
 	@:noCompletion private static var __innerCombineShader = new InnerCombineShader();
 	@:noCompletion private static var __combineKnockoutShader = new CombineKnockoutShader();
@@ -251,6 +246,7 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 
 		__needSecondBitmapData = true;
 		__preserveObject = true;
+		__softwareComposite = true;
 		__renderDirty = true;
 	}
 
@@ -261,20 +257,35 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 
 	@:noCompletion private override function __applyFilter(bitmapData:BitmapData, sourceBitmapData:BitmapData, sourceRect:Rectangle, destPoint:Point):BitmapData
 	{
-		// TODO: Support knockout, inner
+		var width = bitmapData.width;
+		var height = bitmapData.height;
 
-		#if lime
-		var r = (__color >> 16) & 0xFF;
-		var g = (__color >> 8) & 0xFF;
-		var b = __color & 0xFF;
+		// blur the source alpha into the glow's coverage mask, then colourise it
+		var mask = BitmapFilter.__alphaMask(sourceBitmapData, sourceRect, destPoint, width, height);
+		if (__inner)
+		{
+			for (i in 0...mask.length)
+				mask[i] = 1 - mask[i];
+		}
+		BitmapFilter.__blurMask(mask, width, height, __blurX * __renderScale, __blurY * __renderScale, __quality);
 
-		var finalImage = ImageDataUtil.gaussianBlur(bitmapData.image, sourceBitmapData.image, sourceRect.__toLimeRectangle(), destPoint.__toLimeVector2(),
-			__blurX, __blurY, __quality, __strength);
-		finalImage.colorTransform(finalImage.rect, new ColorTransform(0, 0, 0, __alpha, r, g, b, 0).__toLimeColorMatrix());
+		var cr = ((__color >> 16) & 0xFF) / 255.0;
+		var cg = ((__color >> 8) & 0xFF) / 255.0;
+		var cb = (__color & 0xFF) / 255.0;
 
-		if (finalImage == bitmapData.image) return bitmapData;
-		#end
-		return sourceBitmapData;
+		var fxR = new Array<Float>(), fxG = new Array<Float>(), fxB = new Array<Float>(), fxA = new Array<Float>();
+		for (i in 0...width * height)
+		{
+			var f = mask[i] * __strength;
+			if (f > 1) f = 1;
+			else if (f < 0) f = 0;
+			fxR.push(cr * f);
+			fxG.push(cg * f);
+			fxB.push(cb * f);
+			fxA.push(__alpha * f);
+		}
+
+		return BitmapFilter.__compositeEffect(bitmapData, sourceBitmapData, sourceRect, destPoint, fxR, fxG, fxB, fxA, __inner ? INNER : OUTER, __knockout);
 	}
 
 	@:noCompletion private override function __initShader(renderer:DisplayObjectRenderer, pass:Int, sourceBitmapData:BitmapData):Shader
@@ -292,30 +303,8 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 		if (blurPass < numBlurPasses)
 		{
 			var strength = blurPass == (numBlurPasses - 1) ? __strength : 1.0;
-			#if flash_box_blur
 			var horizontal = blurPass < __horizontalPasses;
-			return __setupBoxBlur(horizontal, horizontal ? blurX : blurY, color, alpha, strength);
-			#else
-			var shader = __blurAlphaShader;
-			if (blurPass < __horizontalPasses)
-			{
-				var scale = Math.pow(0.5, blurPass >> 1) * 0.5;
-				shader.uRadius.value[0] = blurX * scale;
-				shader.uRadius.value[1] = 0;
-			}
-			else
-			{
-				var scale = Math.pow(0.5, (blurPass - __horizontalPasses) >> 1) * 0.5;
-				shader.uRadius.value[0] = 0;
-				shader.uRadius.value[1] = blurY * scale;
-			}
-			shader.uColor.value[0] = ((color >> 16) & 0xFF) / 255;
-			shader.uColor.value[1] = ((color >> 8) & 0xFF) / 255;
-			shader.uColor.value[2] = (color & 0xFF) / 255;
-			shader.uColor.value[3] = alpha;
-			shader.uStrength.value[0] = strength;
-			return shader;
-			#end
+			return __setupBlurAlphaShader(horizontal, (horizontal ? blurX : blurY) * __renderScale, color, alpha, strength);
 		}
 		if (__inner)
 		{
@@ -356,16 +345,10 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 
 	@:noCompletion private function __updateSize():Void
 	{
-		#if flash_box_blur
 		// Box blur reach grows to ~quality*blur/2 per side (see DropShadowFilter);
-		// reserve the full spread so the glow isn't clipped at high quality.
 		var q = (__quality > 0) ? __quality : 1;
 		__leftExtension = (__blurX > 0 ? Math.ceil(__blurX * 0.5 * q) + 4 : 0);
 		__topExtension = (__blurY > 0 ? Math.ceil(__blurY * 0.5 * q) + 4 : 0);
-		#else
-		__leftExtension = (__blurX > 0 ? Math.ceil(__blurX * 1.5) : 0);
-		__topExtension = (__blurY > 0 ? Math.ceil(__blurY * 1.5) : 0);
-		#end
 		__rightExtension = __leftExtension;
 		__bottomExtension = __topExtension;
 		__calculateNumShaderPasses();
@@ -373,57 +356,26 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 
 	@:noCompletion private function __calculateNumShaderPasses():Void
 	{
-		#if flash_box_blur
 		// one horizontal + one vertical box pass per quality iteration
 		var q = (__quality > 0) ? __quality : 1;
 		__horizontalPasses = (__blurX <= 0) ? 0 : q;
 		__verticalPasses = (__blurY <= 0) ? 0 : q;
-		#else
-		__horizontalPasses = (__blurX <= 0) ? 0 : Math.round(__blurX * (__quality / 4)) + 1;
-		__verticalPasses = (__blurY <= 0) ? 0 : Math.round(__blurY * (__quality / 4)) + 1;
-		#end
 		__numShaderPasses = __horizontalPasses + __verticalPasses + (__inner ? 2 : 1);
 	}
 
-	#if flash_box_blur
-	// Configure the shared box-blur-alpha shader for one axis/pass (used by both
-	// GlowFilter and DropShadowFilter). Same kernel math as BlurFilter's box blur.
-	@:noCompletion private static function __setupBoxBlur(horizontal:Bool, v:Float, color:Int, alpha:Float, strength:Float):BitmapFilterShader
+	@:noCompletion private static function __setupBlurAlphaShader(horizontal:Bool, v:Float, color:Int, alpha:Float, strength:Float):BitmapFilterShader
 	{
-		var s = __boxBlurAlphaShader;
-		var fullSize = v > 255 ? 255.0 : v;
-		s.uDir.value[0] = horizontal ? 1.0 : 0.0;
-		s.uDir.value[1] = horizontal ? 0.0 : 1.0;
-		if (fullSize <= 1)
-		{
-			s.uFullSize.value[0] = 1.0;
-			s.uM.value[0] = 0.0;
-			s.uM2.value[0] = 0.0;
-			s.uFirstWeight.value[0] = 0.0;
-			s.uLastOffset.value[0] = 0.0;
-			s.uLastWeight.value[0] = 1.0;
-		}
-		else
-		{
-			var radius = (fullSize - 1) / 2;
-			var m = Math.ceil(radius) - 1;
-			if (m < 0) m = 0;
-			var frac = Math.floor((radius - m) * 255) / 255;
-			s.uFullSize.value[0] = fullSize;
-			s.uM.value[0] = m;
-			s.uM2.value[0] = m * 2;
-			s.uFirstWeight.value[0] = frac;
-			s.uLastOffset.value[0] = frac / (frac + 1);
-			s.uLastWeight.value[0] = frac + 1;
-		}
-		s.uColor.value[0] = ((color >> 16) & 0xFF) / 255;
-		s.uColor.value[1] = ((color >> 8) & 0xFF) / 255;
-		s.uColor.value[2] = (color & 0xFF) / 255;
-		s.uColor.value[3] = alpha;
-		s.uStrength.value[0] = strength;
-		return s;
+		var shader = __blurAlphaShader;
+		shader.uDir.value[0] = horizontal ? 1.0 : 0.0;
+		shader.uDir.value[1] = horizontal ? 0.0 : 1.0;
+		shader.uFullSize.value[0] = v > 255 ? 255.0 : v;
+		shader.uColor.value[0] = ((color >> 16) & 0xFF) / 255;
+		shader.uColor.value[1] = ((color >> 8) & 0xFF) / 255;
+		shader.uColor.value[2] = (color & 0xFF) / 255;
+		shader.uColor.value[3] = alpha;
+		shader.uStrength.value[0] = strength;
+		return shader;
 	}
-	#end
 
 	// Get & Set Methods
 	@:noCompletion private function get_alpha():Float
@@ -521,7 +473,7 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 		{
 			__renderDirty = true;
 			__quality = value;
-			__updateSize(); // passes & extension both depend on quality
+			__updateSize(); // quality affects the size
 		}
 		return __quality = value;
 	}
@@ -574,80 +526,6 @@ private class InvertAlphaShader extends BitmapFilterShader
 @:fileXml('tags="haxe,release"')
 @:noDebug
 #end
-private class BlurAlphaShader extends BitmapFilterShader
-{
-	@:glFragmentSource("
-		uniform sampler2D openfl_Texture;
-		uniform vec4 uColor;
-		uniform float uStrength;
-		varying vec2 vTexCoord;
-		varying vec2 vBlurCoords[6];
-
-		void main(void)
-		{
-            vec4 texel = texture2D(openfl_Texture, vTexCoord);
-
-            vec3 contributions = vec3(0.00443, 0.05399, 0.24197);
-            vec3 top = vec3(
-                texture2D(openfl_Texture, vBlurCoords[0]).a,
-                texture2D(openfl_Texture, vBlurCoords[1]).a,
-                texture2D(openfl_Texture, vBlurCoords[2]).a
-            );
-            vec3 bottom = vec3(
-                texture2D(openfl_Texture, vBlurCoords[3]).a,
-                texture2D(openfl_Texture, vBlurCoords[4]).a,
-                texture2D(openfl_Texture, vBlurCoords[5]).a
-            );
-
-            float a = texel.a * 0.39894;
-			a += dot(top, contributions.xyz);
-            a += dot(bottom, contributions.zyx);
-
-			gl_FragColor = uColor * clamp(a * uStrength, 0.0, 1.0);
-		}
-	")
-	@:glVertexSource("
-		attribute vec4 openfl_Position;
-		attribute vec2 openfl_TextureCoord;
-
-		uniform mat4 openfl_Matrix;
-		uniform vec2 openfl_TextureSize;
-
-		uniform vec2 uRadius;
-		varying vec2 vTexCoord;
-		varying vec2 vBlurCoords[6];
-
-		void main(void) {
-
-			gl_Position = openfl_Matrix * openfl_Position;
-			vTexCoord = openfl_TextureCoord;
-
-			vec3 offset = vec3(0.5, 0.75, 1.0);
-			vec2 r = uRadius / openfl_TextureSize;
-			vBlurCoords[0] = openfl_TextureCoord - r * offset.z;
-			vBlurCoords[1] = openfl_TextureCoord - r * offset.y;
-			vBlurCoords[2] = openfl_TextureCoord - r * offset.x;
-			vBlurCoords[3] = openfl_TextureCoord + r * offset.x;
-			vBlurCoords[4] = openfl_TextureCoord + r * offset.y;
-			vBlurCoords[5] = openfl_TextureCoord + r * offset.z;
-		}
-	")
-	public function new()
-	{
-		super();
-		#if !macro
-		uRadius.value = [0, 0];
-		uColor.value = [0, 0, 0, 0];
-		uStrength.value = [1];
-		#end
-	}
-}
-
-#if flash_box_blur
-#if !openfl_debug
-@:fileXml('tags="haxe,release"')
-@:noDebug
-#end
 private class BoxBlurAlphaShader extends BitmapFilterShader
 {
 	@:glFragmentSource("#pragma header
@@ -655,32 +533,37 @@ private class BoxBlurAlphaShader extends BitmapFilterShader
 		uniform vec4 uColor;
 		uniform float uStrength;
 		uniform vec2 uTextureSize;
-		uniform vec2 uDir;
-		uniform float uFullSize;
-		uniform float uM;
-		uniform float uM2;
-		uniform float uFirstWeight;
-		uniform float uLastOffset;
-		uniform float uLastWeight;
+		uniform vec2 uDir;          // blur axis: (1,0) horizontal, (0,1) vertical
+		uniform float uFullSize;    // box width = the blur amount
 
 		void main(void)
 		{
 			vec2 direction = uDir / uTextureSize;
-			vec2 base = openfl_TextureCoordv - direction * uM;
+			float fullSize = min(uFullSize, 255.0);
+			float a;
 
-			float total = texture2D(openfl_Texture, base - direction).a * uFirstWeight;
+			if (fullSize <= 1.0) {
+				a = texture2D(openfl_Texture, openfl_TextureCoordv).a;
+			} else {
+				float halfW = fullSize * 0.5;
+				int   n     = int(floor(halfW - 0.5));
+				float frac  = halfW - (float(n) + 0.5);
+				frac = floor(frac * 255.0) / 255.0;
 
-			float center = 0.0;
-			for (int i = 0; i < 64; i++) {
-				float fi = float(i) * 2.0 + 0.5;
-				if (fi >= uM2) break;
-				center += texture2D(openfl_Texture, base + direction * fi).a;
+				float sum = texture2D(openfl_Texture, openfl_TextureCoordv).a;   // centre
+				for (int i = 1; i <= 128; i++) {                                // full interior
+					if (i > n) break;
+					vec2 off = float(i) * direction;
+					sum += texture2D(openfl_Texture, openfl_TextureCoordv + off).a;
+					sum += texture2D(openfl_Texture, openfl_TextureCoordv - off).a;
+				}
+				vec2 edge = float(n + 1) * direction;                          // fractional edges
+				sum += texture2D(openfl_Texture, openfl_TextureCoordv + edge).a * frac;
+				sum += texture2D(openfl_Texture, openfl_TextureCoordv - edge).a * frac;
+
+				a = sum / fullSize;
 			}
-			total += center * 2.0;
 
-			total += texture2D(openfl_Texture, base + direction * (uM2 + uLastOffset)).a * uLastWeight;
-
-			float a = total / uFullSize;
 			gl_FragColor = uColor * clamp(a * uStrength, 0.0, 1.0);
 		}")
 	@:glVertexSource("#pragma header
@@ -698,11 +581,6 @@ private class BoxBlurAlphaShader extends BitmapFilterShader
 		uStrength.value = [1];
 		uDir.value = [1, 0];
 		uFullSize.value = [1];
-		uM.value = [0];
-		uM2.value = [0];
-		uFirstWeight.value = [0];
-		uLastOffset.value = [0];
-		uLastWeight.value = [1];
 		#end
 	}
 
@@ -714,7 +592,6 @@ private class BoxBlurAlphaShader extends BitmapFilterShader
 		super.__update();
 	}
 }
-#end
 
 #if !openfl_debug
 @:fileXml('tags="haxe,release"')

@@ -144,6 +144,7 @@ import lime._internal.graphics.ImageDataUtil;
 
 		__needSecondBitmapData = true;
 		__preserveObject = true;
+		__softwareComposite = true;
 		__renderDirty = true;
 	}
 
@@ -155,15 +156,52 @@ import lime._internal.graphics.ImageDataUtil;
 
 	@:noCompletion private override function __applyFilter(bitmapData:BitmapData, sourceBitmapData:BitmapData, sourceRect:Rectangle, destPoint:Point):BitmapData
 	{
-		#if lime
-		var time = Timer.stamp();
-		var finalImage = ImageDataUtil.gaussianBlur(bitmapData.image, sourceBitmapData.image, sourceRect.__toLimeRectangle(), destPoint.__toLimeVector2(),
-			__blurX, __blurY, __quality);
-		var elapsed = Timer.stamp() - time;
-		// trace("blurX: " + __blurX + " blurY: " + __blurY + " quality: " + __quality + " elapsed: " + elapsed * 1000 + "ms");
-		if (finalImage == bitmapData.image) return bitmapData;
-		#end
-		return sourceBitmapData;
+		var width = bitmapData.width;
+		var height = bitmapData.height;
+
+		// Same Shader: blur the source alpha, then compare the mask either side of the light direction.
+		// The signed difference drives the highlight (light side) and the shadow (dark side).
+		var mask = BitmapFilter.__alphaMask(sourceBitmapData, sourceRect, destPoint, width, height);
+		BitmapFilter.__blurMask(mask, width, height, __blurX * __renderScale, __blurY * __renderScale, __quality);
+
+		var rad = __angle * Math.PI / 180;
+		var dx = Std.int(Math.round(__distance * Math.cos(rad) * __renderScale));
+		var dy = Std.int(Math.round(__distance * Math.sin(rad) * __renderScale));
+
+		// highlight / shadow colours, each channel premultiplied by its alpha
+		// the same values the shader receives as uLightColor / uShadowColor
+		var highlightR = (((__highlightColor >> 16) & 0xFF) / 255.0) * __highlightAlpha;
+		var highlightG = (((__highlightColor >> 8) & 0xFF) / 255.0) * __highlightAlpha;
+		var highlightB = ((__highlightColor & 0xFF) / 255.0) * __highlightAlpha;
+		var shadowR = (((__shadowColor >> 16) & 0xFF) / 255.0) * __shadowAlpha;
+		var shadowG = (((__shadowColor >> 8) & 0xFF) / 255.0) * __shadowAlpha;
+		var shadowB = ((__shadowColor & 0xFF) / 255.0) * __shadowAlpha;
+
+		var fxR = new Array<Float>(), fxG = new Array<Float>(), fxB = new Array<Float>(), fxA = new Array<Float>();
+		for (y in 0...height)
+		{
+			for (x in 0...width)
+			{
+				// Sample the blurred mask a short way along the light angle in both
+				// directions. Flash's `angle` is where the light comes from, so `+offset`
+				// points the way a shadow falls and `-offset` points toward the light.
+				// (called  blurLeft / blurRight in BevelShader)
+				var maskTowardShadow = BitmapFilter.__maskAt(mask, width, height, x + dx, y + dy);
+				var maskTowardLight = BitmapFilter.__maskAt(mask, width, height, x - dx, y - dy);
+				var dist = (maskTowardShadow - maskTowardLight) * __strength;
+
+				var highlight = dist > 1 ? 1.0 : (dist < 0 ? 0.0 : dist);
+				var shadow = -dist > 1 ? 1.0 : (-dist < 0 ? 0.0 : -dist);
+
+				fxR.push(highlightR * highlight + shadowR * shadow);
+				fxG.push(highlightG * highlight + shadowG * shadow);
+				fxB.push(highlightB * highlight + shadowB * shadow);
+				fxA.push(__highlightAlpha * highlight + __shadowAlpha * shadow);
+			}
+		}
+
+		var type:BitmapFilterType = (__type == "inner") ? INNER : ((__type == "outer") ? OUTER : FULL);
+		return BitmapFilter.__compositeEffect(bitmapData, sourceBitmapData, sourceRect, destPoint, fxR, fxG, fxB, fxA, type, __knockout);
 	}
 
 	@:noCompletion private override function __initShader(renderer:DisplayObjectRenderer, pass:Int, sourceBitmapData:BitmapData):Shader
@@ -173,27 +211,12 @@ import lime._internal.graphics.ImageDataUtil;
 		var numBlurPasses = __horizontalPasses + __verticalPasses;
 		if (blurPass < numBlurPasses)
 		{
-			#if flash_box_blur
 			var horizontal = pass < __horizontalPasses;
-			return BlurFilter.__setupBoxBlur(horizontal, horizontal ? blurX : blurY);
-			#else
-			var shader = BlurFilter.__blurShader;
-			if (pass < __horizontalPasses)
-			{
-				var scale = Math.pow(0.5, pass >> 1);
-				shader.uRadius.value[0] = blurX * scale;
-				shader.uRadius.value[1] = 0;
-			}
-			else
-			{
-				var scale = Math.pow(0.5, (pass - __horizontalPasses) >> 1);
-				shader.uRadius.value[0] = 0;
-				shader.uRadius.value[1] = blurY * scale;
-			}
-			return shader;
-			#end
+			return BlurFilter.__setupBlurShader(horizontal, (horizontal ? blurX : blurY) * __renderScale);
 		}
 
+		// transform is scaled by __renderScale, which is not known until render time
+		__updateTransform();
 		__bevelShader.sourceBitmap.input = sourceBitmapData;
 		#end
 
@@ -351,19 +374,14 @@ import lime._internal.graphics.ImageDataUtil;
 		value = value < 1 ? 1 : value;
 		value = value > 15 ? 15 : value;
 
-		#if flash_box_blur
 		__horizontalPasses = (__blurX <= 0) ? 0 : value;
 		__verticalPasses = (__blurY <= 0) ? 0 : value;
-		#else
-		__horizontalPasses = (__blurX <= 0) ? 0 : Math.round(__blurX * (value / 4));
-		__verticalPasses = (__blurY <= 0) ? 0 : Math.round(__blurY * (value / 4));
-		#end
 
 		__numShaderPasses = __horizontalPasses + __verticalPasses + 1;
 
 		if (value != __quality) __renderDirty = true;
 		__quality = value;
-		__updateSize(); // extension depends on quality (box-blur reach)
+		__updateSize(); // depends on filter's quality settings
 		return __quality = value;
 	}
 
@@ -430,8 +448,8 @@ import lime._internal.graphics.ImageDataUtil;
 	@:noCompletion private function __updateTransform():Void
 	{
 		var rad:Float = __angle * Math.PI / 180;
-		__bevelShader.uTransformX.value[0] = (__distance * Math.cos(rad));
-		__bevelShader.uTransformY.value[0] = (__distance * Math.sin(rad));
+		__bevelShader.uTransformX.value[0] = (__distance * Math.cos(rad)) * __renderScale;
+		__bevelShader.uTransformY.value[0] = (__distance * Math.sin(rad)) * __renderScale;
 	}
 
 	@:noCompletion private function __updateColors():Void
@@ -457,16 +475,11 @@ import lime._internal.graphics.ImageDataUtil;
 	{
 		var offsetX:Int = __type != "inner" ? Math.ceil(__distance * Math.cos(__angle * Math.PI / 180)) : 0;
 		var offsetY:Int = __type != "inner" ? Math.ceil(__distance * Math.sin(__angle * Math.PI / 180)) : 0;
-		#if flash_box_blur
 		// Box blur reach grows to ~quality*blur/2 per side (see DropShadowFilter);
-		// reserve the full spread so the bevel isn't clipped at high quality.
+		// reserving the full spread so the bevel isn't clipped at high quality.
 		var q = (__quality > 0) ? __quality : 1;
 		var exX = Math.ceil(__blurX * 0.5 * q) + 4;
 		var exY = Math.ceil(__blurY * 0.5 * q) + 4;
-		#else
-		var exX = Math.ceil(__blurX);
-		var exY = Math.ceil(__blurY);
-		#end
 		__topExtension = (offsetY < 0 ? -offsetY : 0) + exY;
 		__bottomExtension = (offsetY > 0 ? offsetY : 0) + exY;
 		__leftExtension = (offsetX < 0 ? -offsetX : 0) + exX;
