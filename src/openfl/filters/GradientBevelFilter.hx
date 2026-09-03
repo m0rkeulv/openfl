@@ -104,9 +104,11 @@ import openfl.geom.Rectangle;
 			{
 				// signed bevel distance -> ramp index, as GradientBevelShader does:
 				// -1 is one edge, 0 the (usually transparent) middle stop, +1 the other
-				var bL = BitmapFilter.__maskAt(mask, width, height, x + dx, y + dy);
-				var bR = BitmapFilter.__maskAt(mask, width, height, x - dx, y - dy);
-				var sd = (bL - bR) * __strength;
+				// mask sampled along the light angle: +offset is the way a shadow falls,
+				// -offset points toward the light (Flash's `angle` is where light comes FROM)
+				var maskTowardShadow = BitmapFilter.__maskAt(mask, width, height, x + dx, y + dy);
+				var maskTowardLight = BitmapFilter.__maskAt(mask, width, height, x - dx, y - dy);
+				var sd = (maskTowardShadow - maskTowardLight) * __strength;
 				if (sd > 1) sd = 1;
 				else if (sd < -1) sd = -1;
 
@@ -349,16 +351,16 @@ private class GradientBevelShader extends BitmapFilterShader
 
 		void main(void) {
 			vec4 dest = texture2D(sourceBitmap, vTextureCoord);
-			vec2 uvL = vTextureCoord + vTransform;
-			vec2 uvR = vTextureCoord - vTransform;
-			float bL = texture2D(openfl_Texture, uvL).a;
-			float bR = texture2D(openfl_Texture, uvR).a;
-			if (uvL.x<0.0||uvL.x>1.0||uvL.y<0.0||uvL.y>1.0) bL = 0.0;
-			if (uvR.x<0.0||uvR.x>1.0||uvR.y<0.0||uvR.y>1.0) bR = 0.0;
+			vec2 uvTowardShadow = vTextureCoord + vTransform;
+			vec2 uvTowardLight = vTextureCoord - vTransform;
+			float maskTowardShadow = texture2D(openfl_Texture, uvTowardShadow).a;
+			float maskTowardLight = texture2D(openfl_Texture, uvTowardLight).a;
+			if (uvTowardShadow.x<0.0||uvTowardShadow.x>1.0||uvTowardShadow.y<0.0||uvTowardShadow.y>1.0) maskTowardShadow = 0.0;
+			if (uvTowardLight.x<0.0||uvTowardLight.x>1.0||uvTowardLight.y<0.0||uvTowardLight.y>1.0) maskTowardLight = 0.0;
 
 			// signed distance field -> ramp index (-1 = one edge/ratio 0,
 			// 0 = base/ratio 128, +1 = other edge/ratio 255)
-			float sd = clamp((bL - bR) * uStrength, -1.0, 1.0);
+			float sd = clamp((maskTowardShadow - maskTowardLight) * uStrength, -1.0, 1.0);
 			vec4 glow = texture2D(gradientRamp, vec2(sd * 0.5 + 0.5, 0.5));
 
 			if (uBevelType == 0.0) {

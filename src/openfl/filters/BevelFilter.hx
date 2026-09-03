@@ -169,27 +169,36 @@ import lime._internal.graphics.ImageDataUtil;
 		var dx = Std.int(Math.round(__distance * Math.cos(rad) * __renderScale));
 		var dy = Std.int(Math.round(__distance * Math.sin(rad) * __renderScale));
 
-		var hr = (((__highlightColor >> 16) & 0xFF) / 255.0) * __highlightAlpha;
-		var hg = (((__highlightColor >> 8) & 0xFF) / 255.0) * __highlightAlpha;
-		var hb = ((__highlightColor & 0xFF) / 255.0) * __highlightAlpha;
-		var sr = (((__shadowColor >> 16) & 0xFF) / 255.0) * __shadowAlpha;
-		var sg = (((__shadowColor >> 8) & 0xFF) / 255.0) * __shadowAlpha;
-		var sb = ((__shadowColor & 0xFF) / 255.0) * __shadowAlpha;
+		// highlight / shadow colours, each channel premultiplied by its alpha
+		// the same values the shader receives as uLightColor / uShadowColor
+		var highlightR = (((__highlightColor >> 16) & 0xFF) / 255.0) * __highlightAlpha;
+		var highlightG = (((__highlightColor >> 8) & 0xFF) / 255.0) * __highlightAlpha;
+		var highlightB = ((__highlightColor & 0xFF) / 255.0) * __highlightAlpha;
+		var shadowR = (((__shadowColor >> 16) & 0xFF) / 255.0) * __shadowAlpha;
+		var shadowG = (((__shadowColor >> 8) & 0xFF) / 255.0) * __shadowAlpha;
+		var shadowB = ((__shadowColor & 0xFF) / 255.0) * __shadowAlpha;
 
 		var fxR = new Array<Float>(), fxG = new Array<Float>(), fxB = new Array<Float>(), fxA = new Array<Float>();
 		for (y in 0...height)
 		{
 			for (x in 0...width)
 			{
-				var bL = BitmapFilter.__maskAt(mask, width, height, x + dx, y + dy);
-				var bR = BitmapFilter.__maskAt(mask, width, height, x - dx, y - dy);
-				var d = (bL - bR) * __strength;
+				// Sample the blurred mask a short way along the light angle in both
+				// directions. Flash's `angle` is where the light comes from, so `+offset`
+				// points the way a shadow falls and `-offset` points toward the light.
+				// (called  blurLeft / blurRight in BevelShader)
+				var maskTowardShadow = BitmapFilter.__maskAt(mask, width, height, x + dx, y + dy);
+				var maskTowardLight = BitmapFilter.__maskAt(mask, width, height, x - dx, y - dy);
+				var d = (maskTowardShadow - maskTowardLight) * __strength;
+				// positive: more shape toward the shadow than toward the light, so this
+				// pixel sits on the edge FACING the light -> highlight. negative -> the
+				// shadow-facing edge.
 				var high = d > 1 ? 1.0 : (d < 0 ? 0.0 : d);
 				var shad = -d > 1 ? 1.0 : (-d < 0 ? 0.0 : -d);
 
-				fxR.push(hr * high + sr * shad);
-				fxG.push(hg * high + sg * shad);
-				fxB.push(hb * high + sb * shad);
+				fxR.push(highlightR * high + shadowR * shad);
+				fxG.push(highlightG * high + shadowG * shad);
+				fxB.push(highlightB * high + shadowB * shad);
 				fxA.push(__highlightAlpha * high + __shadowAlpha * shad);
 			}
 		}
