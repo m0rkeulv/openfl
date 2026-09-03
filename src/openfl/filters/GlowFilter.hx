@@ -261,9 +261,6 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 		var height = bitmapData.height;
 
 		// blur the source alpha into the glow's coverage mask, then colourise it
-		// exactly as BoxBlurAlphaShader does: fx = color * clamp(mask * strength).
-		// An inner glow blurs the *inverted* alpha (the GL path runs InvertAlphaShader
-		// as its first pass), so the glow grows inwards from the edge.
 		var mask = BitmapFilter.__alphaMask(sourceBitmapData, sourceRect, destPoint, width, height);
 		if (__inner)
 		{
@@ -368,16 +365,16 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 
 	@:noCompletion private static function __setupBlurAlphaShader(horizontal:Bool, v:Float, color:Int, alpha:Float, strength:Float):BitmapFilterShader
 	{
-		var s = __blurAlphaShader;
-		s.uDir.value[0] = horizontal ? 1.0 : 0.0;
-		s.uDir.value[1] = horizontal ? 0.0 : 1.0;
-		s.uFullSize.value[0] = v > 255 ? 255.0 : v;
-		s.uColor.value[0] = ((color >> 16) & 0xFF) / 255;
-		s.uColor.value[1] = ((color >> 8) & 0xFF) / 255;
-		s.uColor.value[2] = (color & 0xFF) / 255;
-		s.uColor.value[3] = alpha;
-		s.uStrength.value[0] = strength;
-		return s;
+		var shader = __blurAlphaShader;
+		shader.uDir.value[0] = horizontal ? 1.0 : 0.0;
+		shader.uDir.value[1] = horizontal ? 0.0 : 1.0;
+		shader.uFullSize.value[0] = v > 255 ? 255.0 : v;
+		shader.uColor.value[0] = ((color >> 16) & 0xFF) / 255;
+		shader.uColor.value[1] = ((color >> 8) & 0xFF) / 255;
+		shader.uColor.value[2] = (color & 0xFF) / 255;
+		shader.uColor.value[3] = alpha;
+		shader.uStrength.value[0] = strength;
+		return shader;
 	}
 
 	// Get & Set Methods
@@ -476,7 +473,7 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 		{
 			__renderDirty = true;
 			__quality = value;
-			__updateSize(); // passes & extension both depend on quality
+			__updateSize(); // quality affects the size
 		}
 		return __quality = value;
 	}

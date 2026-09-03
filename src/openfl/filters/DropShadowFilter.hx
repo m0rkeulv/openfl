@@ -282,8 +282,8 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 
 		__needSecondBitmapData = true;
 		__preserveObject = true;
-		__softwareComposite = true;
 		__renderDirty = true;
+		__softwareComposite = true;
 	}
 
 	public override function clone():BitmapFilter
@@ -296,10 +296,7 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 		var width = bitmapData.width;
 		var height = bitmapData.height;
 
-		// blur the source alpha, then read it back shifted by the shadow offset --
-		// the GL path does the same by sampling the glow at (coord - offset).
-		// An inner shadow blurs the *inverted* alpha (the GL path runs
-		// InvertAlphaShader as its first pass) so the shadow falls inside the edge.
+		// blur the source alpha, then read it back shifted by the shadow offset
 		var mask = BitmapFilter.__alphaMask(sourceBitmapData, sourceRect, destPoint, width, height);
 		if (__inner)
 		{
@@ -308,26 +305,30 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 		}
 		BitmapFilter.__blurMask(mask, width, height, __blurX * __renderScale, __blurY * __renderScale, __quality);
 
-		var cr = ((__color >> 16) & 0xFF) / 255.0;
-		var cg = ((__color >> 8) & 0xFF) / 255.0;
-		var cb = (__color & 0xFF) / 255.0;
-		var ox = Std.int(__offsetX * __renderScale);
-		var oy = Std.int(__offsetY * __renderScale);
+		var colorR = ((__color >> 16) & 0xFF) / 255.0;
+		var colorG = ((__color >> 8) & 0xFF) / 255.0;
+		var colorB = (__color & 0xFF) / 255.0;
+
+		var shadowOffsetX = Std.int(__offsetX * __renderScale);
+		var shadowOffsetY = Std.int(__offsetY * __renderScale);
 
 		var fxR = new Array<Float>(), fxG = new Array<Float>(), fxB = new Array<Float>(), fxA = new Array<Float>();
 		for (y in 0...height)
 		{
 			for (x in 0...width)
 			{
-				var sx = x - ox;
-				var sy = y - oy;
-				var f = ((sx < 0 || sx >= width || sy < 0 || sy >= height) ? 0.0 : mask[sy * width + sx]) * __strength;
-				if (f > 1) f = 1;
-				else if (f < 0) f = 0;
-				fxR.push(cr * f);
-				fxG.push(cg * f);
-				fxB.push(cb * f);
-				fxA.push(__alpha * f);
+				// the shadow at this pixel is the blurred mask read from `offset` pixels back
+				var maskX = x - shadowOffsetX;
+				var maskY = y - shadowOffsetY;
+				var shadowCoverage = ((maskX < 0 || maskX >= width || maskY < 0 || maskY >= height) ? 0.0 : mask[maskY * width + maskX]) * __strength;
+
+				if (shadowCoverage > 1) shadowCoverage = 1;
+				else if (shadowCoverage < 0) shadowCoverage = 0;
+
+				fxR.push(colorR * shadowCoverage);
+				fxG.push(colorG * shadowCoverage);
+				fxB.push(colorB * shadowCoverage);
+				fxA.push(__alpha * shadowCoverage);
 			}
 		}
 
@@ -561,7 +562,7 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 		{
 			__renderDirty = true;
 			__quality = value;
-			__updateSize(); // passes & extension both depend on quality
+			__updateSize(); //  quality affects the size
 		}
 		return __quality = value;
 	}

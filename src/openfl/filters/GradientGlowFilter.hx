@@ -89,25 +89,27 @@ import openfl.geom.Rectangle;
 		var width = bitmapData.width;
 		var height = bitmapData.height;
 
-		// blurred source alpha, read back shifted by distance/angle (as the GL path
-		// samples the mask at coord - offset)
+		// blurred source alpha, read back shifted by distance/angle (as the GL path samples the mask at coord - offset)
 		var mask = BitmapFilter.__alphaMask(sourceBitmapData, sourceRect, destPoint, width, height);
 		BitmapFilter.__blurMask(mask, width, height, __blurX * __renderScale, __blurY * __renderScale, __quality);
 
 		if (__rampDirty) __buildRamp();
 		var ramp = __rampChannels();
 
+		var glowOffsetX = Std.int(__offsetX * __renderScale);
+		var glowOffsetY = Std.int(__offsetY * __renderScale);
+
 		var fxR = new Array<Float>(), fxG = new Array<Float>(), fxB = new Array<Float>(), fxA = new Array<Float>();
 		for (y in 0...height)
 		{
 			for (x in 0...width)
 			{
-				var f = BitmapFilter.__maskAt(mask, width, height, x - Std.int(__offsetX * __renderScale), y - Std.int(__offsetY * __renderScale)) * __strength;
-				if (f > 1) f = 1;
-				else if (f < 0) f = 0;
+				var glowCoverage = BitmapFilter.__maskAt(mask, width, height, x - glowOffsetX, y - glowOffsetY) * __strength;
+				if (glowCoverage > 1) glowCoverage = 1;
+				else if (glowCoverage < 0) glowCoverage = 0;
 
 				// index the ramp by the mask, exactly as GradientGlowShader does
-				var i = Std.int(f * 255 + 0.5) * 4;
+				var i = Std.int(glowCoverage * 255 + 0.5) * 4;
 				fxR.push(ramp[i]);
 				fxG.push(ramp[i + 1]);
 				fxB.push(ramp[i + 2]);
@@ -118,8 +120,7 @@ import openfl.geom.Rectangle;
 		return BitmapFilter.__compositeEffect(bitmapData, sourceBitmapData, sourceRect, destPoint, fxR, fxG, fxB, fxA, __type, __knockout);
 	}
 
-	// The 256-entry ramp as flat premultiplied [r,g,b,a] floats, matching how the
-	// ramp BitmapData is premultiplied when uploaded as a texture on the GL path.
+	// 256-entry ramp as flat premultiplied [r,g,b,a] floats, matching how the ramp BitmapData is premultiplied when uploaded as a texture.
 	@:noCompletion private function __rampChannels():Array<Float>
 	{
 		var out = new Array<Float>();
@@ -164,9 +165,8 @@ import openfl.geom.Rectangle;
 		#end
 	}
 
-	// Build the 256-entry straight-ARGB gradient ramp (one texel per output index
-	// 0..255) from the (colors, alphas, ratios) stops. Each index is the colour and
-	// alpha linearly interpolated between the two stops it falls between.
+	// Build the 256-entry straight-ARGB gradient ramp (one texel per output index 0..255) from the (colors, alphas, ratios).
+	// Each index is the colour and alpha linearly interpolated between the two stops it falls between.
 	@:noCompletion private function __buildRamp():Void
 	{
 		if (__ramp == null) __ramp = new BitmapData(256, 1, true, 0);
@@ -176,8 +176,7 @@ import openfl.geom.Rectangle;
 		for (index in 0...256)
 		{
 			// advance to the stop pair whose ratio range contains `index`
-			while (stop < stopCount - 1 && __ratios[stop + 1] < index)
-				stop++;
+			while (stop < stopCount - 1 && __ratios[stop + 1] < index) stop++;
 
 			var colorLo = __colors[stop];
 			var alphaLo = __alphas[stop];

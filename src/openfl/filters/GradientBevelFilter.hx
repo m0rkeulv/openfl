@@ -94,25 +94,26 @@ import openfl.geom.Rectangle;
 		var ramp = __rampChannels();
 
 		var rad = __angle * Math.PI / 180;
-		var dx = Std.int(Math.round(__distance * Math.cos(rad) * __renderScale));
-		var dy = Std.int(Math.round(__distance * Math.sin(rad) * __renderScale));
+		var offsetX = Std.int(Math.round(__distance * Math.cos(rad) * __renderScale));
+		var offsetY = Std.int(Math.round(__distance * Math.sin(rad) * __renderScale));
 
 		var fxR = new Array<Float>(), fxG = new Array<Float>(), fxB = new Array<Float>(), fxA = new Array<Float>();
 		for (y in 0...height)
 		{
 			for (x in 0...width)
 			{
-				// signed bevel distance -> ramp index, as GradientBevelShader does:
-				// -1 is one edge, 0 the (usually transparent) middle stop, +1 the other
 				// mask sampled along the light angle: +offset is the way a shadow falls,
 				// -offset points toward the light (Flash's `angle` is where light comes FROM)
-				var maskTowardShadow = BitmapFilter.__maskAt(mask, width, height, x + dx, y + dy);
-				var maskTowardLight = BitmapFilter.__maskAt(mask, width, height, x - dx, y - dy);
-				var sd = (maskTowardShadow - maskTowardLight) * __strength;
-				if (sd > 1) sd = 1;
-				else if (sd < -1) sd = -1;
+				var maskTowardShadow = BitmapFilter.__maskAt(mask, width, height, x + offsetX, y + offsetY);
+				var maskTowardLight = BitmapFilter.__maskAt(mask, width, height, x - offsetX, y - offsetY);
+				// signed edge slope -> ramp index, as GradientBevelShader does: positive on
+				// the edge facing the light, negative on the far edge, zero on flat areas.
+				// -1 is one edge, 0 the (usually transparent) middle stop, +1 the other
+				var edgeSlope = (maskTowardShadow - maskTowardLight) * __strength;
+				if (edgeSlope > 1) edgeSlope = 1;
+				else if (edgeSlope < -1) edgeSlope = -1;
 
-				var i = Std.int((sd * 0.5 + 0.5) * 255 + 0.5) * 4;
+				var i = Std.int((edgeSlope * 0.5 + 0.5) * 255 + 0.5) * 4;
 				fxR.push(ramp[i]);
 				fxG.push(ramp[i + 1]);
 				fxB.push(ramp[i + 2]);
@@ -123,8 +124,6 @@ import openfl.geom.Rectangle;
 		return BitmapFilter.__compositeEffect(bitmapData, sourceBitmapData, sourceRect, destPoint, fxR, fxG, fxB, fxA, __type, __knockout);
 	}
 
-	// The 256-entry ramp as flat premultiplied [r,g,b,a] floats, matching how the
-	// ramp BitmapData is premultiplied when uploaded as a texture on the GL path.
 	@:noCompletion private function __rampChannels():Array<Float>
 	{
 		var out = new Array<Float>();
@@ -168,9 +167,8 @@ import openfl.geom.Rectangle;
 		#end
 	}
 
-	// Build the 256-entry straight-ARGB gradient ramp (one texel per output index
-	// 0..255) from the (colors, alphas, ratios) stops. Each index is the colour and
-	// alpha linearly interpolated between the two stops it falls between.
+	// 256-entry straight-ARGB gradient ramp (one texel per output index 0..255) from the (colors, alphas, ratios).
+	// Each index is the colour and alpha linearly interpolated between the two stops it falls between.
 	@:noCompletion private function __buildRamp():Void
 	{
 		if (__ramp == null) __ramp = new BitmapData(256, 1, true, 0);
@@ -180,8 +178,7 @@ import openfl.geom.Rectangle;
 		for (index in 0...256)
 		{
 			// advance to the stop pair whose ratio range contains `index`
-			while (stop < stopCount - 1 && __ratios[stop + 1] < index)
-				stop++;
+			while (stop < stopCount - 1 && __ratios[stop + 1] < index) stop++;
 
 			var colorLo = __colors[stop];
 			var alphaLo = __alphas[stop];
@@ -202,8 +199,7 @@ import openfl.geom.Rectangle;
 				var colorHi = __colors[stop + 1];
 				var alphaHi = __alphas[stop + 1];
 
-				// blend = how far `index` sits between the two stops (0 at the low
-				// stop, 1 at the high stop)
+				// blend = how far `index` sits between the two stops (0 at the low stop, 1 at the high stop)
 				var blend = (ratioHi > ratioLo) ? (index - ratioLo) / (ratioHi - ratioLo) : 0.0;
 
 				r = lerp((colorLo >> 16) & 0xFF, (colorHi >> 16) & 0xFF, blend);
