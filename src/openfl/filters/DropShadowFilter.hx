@@ -300,13 +300,13 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 		// the GL path does the same by sampling the glow at (coord - offset).
 		// An inner shadow blurs the *inverted* alpha (the GL path runs
 		// InvertAlphaShader as its first pass) so the shadow falls inside the edge.
-		var field = BitmapFilter.__alphaField(sourceBitmapData, sourceRect, destPoint, width, height);
+		var mask = BitmapFilter.__alphaMask(sourceBitmapData, sourceRect, destPoint, width, height);
 		if (__inner)
 		{
-			for (i in 0...field.length)
-				field[i] = 1 - field[i];
+			for (i in 0...mask.length)
+				mask[i] = 1 - mask[i];
 		}
-		BitmapFilter.__blurField(field, width, height, __blurX * __renderScale, __blurY * __renderScale, __quality);
+		BitmapFilter.__blurMask(mask, width, height, __blurX * __renderScale, __blurY * __renderScale, __quality);
 
 		var cr = ((__color >> 16) & 0xFF) / 255.0;
 		var cg = ((__color >> 8) & 0xFF) / 255.0;
@@ -321,7 +321,7 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 			{
 				var sx = x - ox;
 				var sy = y - oy;
-				var f = ((sx < 0 || sx >= width || sy < 0 || sy >= height) ? 0.0 : field[sy * width + sx]) * __strength;
+				var f = ((sx < 0 || sx >= width || sy < 0 || sy >= height) ? 0.0 : mask[sy * width + sx]) * __strength;
 				if (f > 1) f = 1;
 				else if (f < 0) f = 0;
 				fxR.push(cr * f);

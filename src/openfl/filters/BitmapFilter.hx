@@ -53,7 +53,7 @@ class BitmapFilter
 
 		A filtered object is cached into a bitmap sized and drawn at the renderer's
 		pixel ratio, so on a HiDPI display the object is (say) 1.5x larger in that
-		bitmap. Filter distances -- blur radii and offsets -- are authored in
+		bitmap. Filter distances, blur radius, and offsets are authored in
 		*logical* pixels, so they must be scaled to match, otherwise the effect comes
 		out 1/pixelRatio too small relative to its content.
 
@@ -103,19 +103,25 @@ class BitmapFilter
 	// Software (CPU) helpers, shared by the effect filters. These mirror the GL
 	// shaders so both paths produce the same image: the same fractional box blur
 	// of the source alpha, and the same combine formulas.
+	//
+	// "mask" throughout = the shape's alpha as one Float (0..1) per pixel of the
+	// destination grid. Blurred, it becomes a soft coverage map -- 1 inside the
+	// shape, fading to 0 outside -- and that is the geometry every effect is
+	// derived from: glow/shadow read it, bevel takes its directional difference,
+	// the gradient filters index a colour ramp by it.
 	// ------------------------------------------------------------------------
 
 	/**
-		The source's alpha channel as a 0..1 field laid out on the destination
+		The source's alpha channel as a 0..1 mask laid out on the destination
 		grid, using the sourceRect/destPoint mapping `__applyFilter` is given.
 		Samples outside the source read 0, matching the transparent border the GL
 		path gets from its cache texture.
 	**/
-	@:noCompletion private static function __alphaField(source:BitmapData, sourceRect:Rectangle, destPoint:Point, width:Int, height:Int):Array<Float>
+	@:noCompletion private static function __alphaMask(source:BitmapData, sourceRect:Rectangle, destPoint:Point, width:Int, height:Int):Array<Float>
 	{
-		var field = new Array<Float>();
+		var mask = new Array<Float>();
 		for (i in 0...width * height)
-			field.push(0.0);
+			mask.push(0.0);
 
 		var pixels = source.getVector(sourceRect);
 		var sw = Std.int(sourceRect.width);
@@ -131,35 +137,32 @@ class BitmapFilter
 			{
 				var dx = x + ox;
 				if (dx < 0 || dx >= width) continue;
-				field[dy * width + dx] = ((pixels[y * sw + x] >>> 24) & 0xFF) / 255.0;
+				mask[dy * width + dx] = ((pixels[y * sw + x] >>> 24) & 0xFF) / 255.0;
 			}
 		}
-		return field;
+		return mask;
 	}
 
 	/**
-		Box-blur a 0..1 field in place, matching `BoxBlurShader`: `quality`
+		Box-blur a 0..1 mask in place, matching `BoxBlurShader`: `quality`
 		iterations of one horizontal then one vertical pass.
 	**/
-	@:noCompletion private static function __blurField(field:Array<Float>, width:Int, height:Int, blurX:Float, blurY:Float, quality:Int):Array<Float>
+	@:noCompletion private static function __blurMask(mask:Array<Float>, width:Int, height:Int, blurX:Float, blurY:Float, quality:Int):Array<Float>
 	{
 		var passes = (quality > 0) ? quality : 1;
 		var scratch = new Array<Float>();
-		for (i in 0...field.length)
+		for (i in 0...mask.length)
 			scratch.push(0.0);
 
 		for (i in 0...passes)
 		{
-			__blurFieldAxis(field, scratch, width, height, blurX, true);
-			__blurFieldAxis(scratch, field, width, height, blurY, false);
+			__blurMaskAxis(mask, scratch, width, height, blurX, true);
+			__blurMaskAxis(scratch, mask, width, height, blurY, false);
 		}
-		return field;
+		return mask;
 	}
 
-	// One axis of the fractional box: the centre sample, `n` full-weight pairs,
-	// and a fractional-weight texel per edge, divided by the box width and
-	// rounded to 8 bits -- the same kernel BoxBlurShader uses.
-	@:noCompletion private static function __blurFieldAxis(src:Array<Float>, dest:Array<Float>, width:Int, height:Int, blur:Float, horizontal:Bool):Void
+	@:noCompletion private static function __blurMaskAxis(src:Array<Float>, dest:Array<Float>, width:Int, height:Int, blur:Float, horizontal:Bool):Void
 	{
 		var fullSize = (blur > 255) ? 255.0 : blur;
 
@@ -180,25 +183,25 @@ class BitmapFilter
 		{
 			for (x in 0...width)
 			{
-				var sum = __fieldAt(src, width, height, x, y);
+				var sum = __maskAt(src, width, height, x, y);
 
 				for (i in 1...(n + 1))
 				{
-					if (horizontal) sum += __fieldAt(src, width, height, x + i, y) + __fieldAt(src, width, height, x - i, y);
-					else sum += __fieldAt(src, width, height, x, y + i) + __fieldAt(src, width, height, x, y - i);
+					if (horizontal) sum += __maskAt(src, width, height, x + i, y) + __maskAt(src, width, height, x - i, y);
+					else sum += __maskAt(src, width, height, x, y + i) + __maskAt(src, width, height, x, y - i);
 				}
 
-				if (horizontal) sum += (__fieldAt(src, width, height, x + edge, y) + __fieldAt(src, width, height, x - edge, y)) * frac;
-				else sum += (__fieldAt(src, width, height, x, y + edge) + __fieldAt(src, width, height, x, y - edge)) * frac;
+				if (horizontal) sum += (__maskAt(src, width, height, x + edge, y) + __maskAt(src, width, height, x - edge, y)) * frac;
+				else sum += (__maskAt(src, width, height, x, y + edge) + __maskAt(src, width, height, x, y - edge)) * frac;
 
 				dest[y * width + x] = Math.floor((sum / fullSize) * 255) / 255;
 			}
 		}
 	}
 
-	@:noCompletion private static inline function __fieldAt(field:Array<Float>, width:Int, height:Int, x:Int, y:Int):Float
+	@:noCompletion private static inline function __maskAt(mask:Array<Float>, width:Int, height:Int, x:Int, y:Int):Float
 	{
-		return (x < 0 || x >= width || y < 0 || y >= height) ? 0.0 : field[y * width + x];
+		return (x < 0 || x >= width || y < 0 || y >= height) ? 0.0 : mask[y * width + x];
 	}
 
 	/**

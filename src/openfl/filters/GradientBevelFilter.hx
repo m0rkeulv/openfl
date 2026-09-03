@@ -87,8 +87,8 @@ import openfl.geom.Rectangle;
 		var width = bitmapData.width;
 		var height = bitmapData.height;
 
-		var field = BitmapFilter.__alphaField(sourceBitmapData, sourceRect, destPoint, width, height);
-		BitmapFilter.__blurField(field, width, height, __blurX * __renderScale, __blurY * __renderScale, __quality);
+		var mask = BitmapFilter.__alphaMask(sourceBitmapData, sourceRect, destPoint, width, height);
+		BitmapFilter.__blurMask(mask, width, height, __blurX * __renderScale, __blurY * __renderScale, __quality);
 
 		if (__rampDirty) __buildRamp();
 		var ramp = __rampChannels();
@@ -104,8 +104,8 @@ import openfl.geom.Rectangle;
 			{
 				// signed bevel distance -> ramp index, as GradientBevelShader does:
 				// -1 is one edge, 0 the (usually transparent) middle stop, +1 the other
-				var bL = BitmapFilter.__fieldAt(field, width, height, x + dx, y + dy);
-				var bR = BitmapFilter.__fieldAt(field, width, height, x - dx, y - dy);
+				var bL = BitmapFilter.__maskAt(mask, width, height, x + dx, y + dy);
+				var bR = BitmapFilter.__maskAt(mask, width, height, x - dx, y - dy);
 				var sd = (bL - bR) * __strength;
 				if (sd > 1) sd = 1;
 				else if (sd < -1) sd = -1;

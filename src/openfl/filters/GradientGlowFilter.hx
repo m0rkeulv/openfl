@@ -90,9 +90,9 @@ import openfl.geom.Rectangle;
 		var height = bitmapData.height;
 
 		// blurred source alpha, read back shifted by distance/angle (as the GL path
-		// samples the field at coord - offset)
-		var field = BitmapFilter.__alphaField(sourceBitmapData, sourceRect, destPoint, width, height);
-		BitmapFilter.__blurField(field, width, height, __blurX * __renderScale, __blurY * __renderScale, __quality);
+		// samples the mask at coord - offset)
+		var mask = BitmapFilter.__alphaMask(sourceBitmapData, sourceRect, destPoint, width, height);
+		BitmapFilter.__blurMask(mask, width, height, __blurX * __renderScale, __blurY * __renderScale, __quality);
 
 		if (__rampDirty) __buildRamp();
 		var ramp = __rampChannels();
@@ -102,11 +102,11 @@ import openfl.geom.Rectangle;
 		{
 			for (x in 0...width)
 			{
-				var f = BitmapFilter.__fieldAt(field, width, height, x - Std.int(__offsetX * __renderScale), y - Std.int(__offsetY * __renderScale)) * __strength;
+				var f = BitmapFilter.__maskAt(mask, width, height, x - Std.int(__offsetX * __renderScale), y - Std.int(__offsetY * __renderScale)) * __strength;
 				if (f > 1) f = 1;
 				else if (f < 0) f = 0;
 
-				// index the ramp by the field, exactly as GradientGlowShader does
+				// index the ramp by the mask, exactly as GradientGlowShader does
 				var i = Std.int(f * 255 + 0.5) * 4;
 				fxR.push(ramp[i]);
 				fxG.push(ramp[i + 1]);
@@ -345,8 +345,8 @@ private class GradientGlowShader extends BitmapFilterShader
 
 		void main(void) {
 			vec4 src = texture2D(sourceBitmap, textureCoords.xy);
-			float field = texture2D(openfl_Texture, textureCoords.zw).a;
-			float f = clamp(field * uStrength, 0.0, 1.0);
+			float mask = texture2D(openfl_Texture, textureCoords.zw).a;
+			float f = clamp(mask * uStrength, 0.0, 1.0);
 
 			// index the ramp by the distance field (high near the shape = inner
 			// ratio 255, low far away = outer ratio 0), same for every type.

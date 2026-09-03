@@ -160,10 +160,10 @@ import lime._internal.graphics.ImageDataUtil;
 		var height = bitmapData.height;
 
 		// Same derivation as BevelShader: blur the source alpha, then compare the
-		// field either side of the light direction. The signed difference drives the
+		// mask either side of the light direction. The signed difference drives the
 		// highlight (light side) and the shadow (dark side).
-		var field = BitmapFilter.__alphaField(sourceBitmapData, sourceRect, destPoint, width, height);
-		BitmapFilter.__blurField(field, width, height, __blurX * __renderScale, __blurY * __renderScale, __quality);
+		var mask = BitmapFilter.__alphaMask(sourceBitmapData, sourceRect, destPoint, width, height);
+		BitmapFilter.__blurMask(mask, width, height, __blurX * __renderScale, __blurY * __renderScale, __quality);
 
 		var rad = __angle * Math.PI / 180;
 		var dx = Std.int(Math.round(__distance * Math.cos(rad) * __renderScale));
@@ -181,8 +181,8 @@ import lime._internal.graphics.ImageDataUtil;
 		{
 			for (x in 0...width)
 			{
-				var bL = BitmapFilter.__fieldAt(field, width, height, x + dx, y + dy);
-				var bR = BitmapFilter.__fieldAt(field, width, height, x - dx, y - dy);
+				var bL = BitmapFilter.__maskAt(mask, width, height, x + dx, y + dy);
+				var bR = BitmapFilter.__maskAt(mask, width, height, x - dx, y - dy);
 				var d = (bL - bR) * __strength;
 				var high = d > 1 ? 1.0 : (d < 0 ? 0.0 : d);
 				var shad = -d > 1 ? 1.0 : (-d < 0 ? 0.0 : -d);

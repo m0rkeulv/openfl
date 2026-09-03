@@ -260,17 +260,17 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 		var width = bitmapData.width;
 		var height = bitmapData.height;
 
-		// blur the source alpha into the glow's coverage field, then colourise it
-		// exactly as BoxBlurAlphaShader does: fx = color * clamp(field * strength).
+		// blur the source alpha into the glow's coverage mask, then colourise it
+		// exactly as BoxBlurAlphaShader does: fx = color * clamp(mask * strength).
 		// An inner glow blurs the *inverted* alpha (the GL path runs InvertAlphaShader
 		// as its first pass), so the glow grows inwards from the edge.
-		var field = BitmapFilter.__alphaField(sourceBitmapData, sourceRect, destPoint, width, height);
+		var mask = BitmapFilter.__alphaMask(sourceBitmapData, sourceRect, destPoint, width, height);
 		if (__inner)
 		{
-			for (i in 0...field.length)
-				field[i] = 1 - field[i];
+			for (i in 0...mask.length)
+				mask[i] = 1 - mask[i];
 		}
-		BitmapFilter.__blurField(field, width, height, __blurX * __renderScale, __blurY * __renderScale, __quality);
+		BitmapFilter.__blurMask(mask, width, height, __blurX * __renderScale, __blurY * __renderScale, __quality);
 
 		var cr = ((__color >> 16) & 0xFF) / 255.0;
 		var cg = ((__color >> 8) & 0xFF) / 255.0;
@@ -279,7 +279,7 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 		var fxR = new Array<Float>(), fxG = new Array<Float>(), fxB = new Array<Float>(), fxA = new Array<Float>();
 		for (i in 0...width * height)
 		{
-			var f = field[i] * __strength;
+			var f = mask[i] * __strength;
 			if (f > 1) f = 1;
 			else if (f < 0) f = 0;
 			fxR.push(cr * f);
