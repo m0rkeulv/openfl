@@ -271,7 +271,6 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 
 	@:noCompletion private function set_quality(value:Int):Int
 	{
-		// TODO: Quality effect with fewer passes?
 
 		// one horizontal + one vertical box pass per quality iteration
 		var passes = (value > 0) ? value : 1;
