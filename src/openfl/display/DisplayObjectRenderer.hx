@@ -670,8 +670,8 @@ class DisplayObjectRenderer extends EventDispatcher
 
 						for (filter in displayObject.__filters)
 						{
-							// the cache bitmap is drawn at pixelRatio, so blur radii and
-							// offsets (authored in logical pixels) must scale to match
+							// the cache bitmap is drawn at pixelRatio, so blur radius and
+							// offsets (in logical pixels) must scale to match
 							filter.__renderScale = pixelRatio;
 
 							if (filter.__preserveObject)
@@ -791,7 +791,6 @@ class DisplayObjectRenderer extends EventDispatcher
 
 						for (filter in displayObject.__filters)
 						{
-							// as above: the cache bitmap is drawn at pixelRatio
 							filter.__renderScale = pixelRatio;
 
 							if (filter.__preserveObject)

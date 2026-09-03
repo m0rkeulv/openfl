@@ -209,7 +209,6 @@ import lime._internal.graphics.ImageDataUtil;
 			return BlurFilter.__setupBlurShader(horizontal, (horizontal ? blurX : blurY) * __renderScale);
 		}
 
-		// recompute here rather than only in the distance/angle setters: the
 		// transform is scaled by __renderScale, which is not known until render time
 		__updateTransform();
 		__bevelShader.sourceBitmap.input = sourceBitmapData;
