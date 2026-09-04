@@ -42,6 +42,13 @@ class BitmapFilter
 	@:noCompletion private var __softwareComposite:Bool;
 
 	/**
+		Set by the display-list software path while `__applyFilter` runs where the
+		object itself sits inside the padded cache bitmap it is given as source (in
+		device pixels). `null` when the source is the object (BitmapData.applyFilter).
+	**/
+	@:noCompletion private var __objectRect:Rectangle;
+
+	/**
 		The device-pixel scale the filter is being rendered at.
 
 		A filtered object is cached into a bitmap sized and drawn at the renderer's
@@ -92,6 +99,12 @@ class BitmapFilter
 		return null;
 	}
 
+
+	// Flash rounds a distance offset down
+	@:noCompletion private static inline function __offsetFloor(v:Float):Int
+	{
+		return Math.floor(v);
+	}
 
 	/**
 		The source's alpha channel as a 0..1 mask laid out on the destination
@@ -182,6 +195,16 @@ class BitmapFilter
 	@:noCompletion private static inline function __maskAt(mask:Array<Float>, width:Int, height:Int, x:Int, y:Int):Float
 	{
 		return (x < 0 || x >= width || y < 0 || y >= height) ? 0.0 : mask[y * width + x];
+	}
+
+
+	@:noCompletion private static function __maskAtFrac(mask:Array<Float>, width:Int, height:Int, fx:Float, fy:Float):Float
+	{
+		var x0 = Math.floor(fx), y0 = Math.floor(fy);
+		var tx = fx - x0, ty = fy - y0;
+		var top = __maskAt(mask, width, height, x0, y0) * (1 - tx) + __maskAt(mask, width, height, x0 + 1, y0) * tx;
+		var bottom = __maskAt(mask, width, height, x0, y0 + 1) * (1 - tx) + __maskAt(mask, width, height, x0 + 1, y0 + 1) * tx;
+		return top * (1 - ty) + bottom * ty;
 	}
 
 	/**

@@ -165,8 +165,9 @@ import lime._internal.graphics.ImageDataUtil;
 		BitmapFilter.__blurMask(mask, width, height, __blurX * __renderScale, __blurY * __renderScale, __quality);
 
 		var rad = __angle * Math.PI / 180;
-		var dx = Std.int(Math.round(__distance * Math.cos(rad) * __renderScale));
-		var dy = Std.int(Math.round(__distance * Math.sin(rad) * __renderScale));
+		// exact (fractional) step along the light angle, sampled bilinearly as the shader does
+		var dx = __distance * Math.cos(rad) * __renderScale;
+		var dy = __distance * Math.sin(rad) * __renderScale;
 
 		// highlight / shadow colours, each channel premultiplied by its alpha
 		// the same values the shader receives as uLightColor / uShadowColor
@@ -186,8 +187,8 @@ import lime._internal.graphics.ImageDataUtil;
 				// directions. Flash's `angle` is where the light comes from, so `+offset`
 				// points the way a shadow falls and `-offset` points toward the light.
 				// (called  blurLeft / blurRight in BevelShader)
-				var maskTowardShadow = BitmapFilter.__maskAt(mask, width, height, x + dx, y + dy);
-				var maskTowardLight = BitmapFilter.__maskAt(mask, width, height, x - dx, y - dy);
+				var maskTowardShadow = BitmapFilter.__maskAtFrac(mask, width, height, x + dx, y + dy);
+				var maskTowardLight = BitmapFilter.__maskAtFrac(mask, width, height, x - dx, y - dy);
 				var dist = (maskTowardShadow - maskTowardLight) * __strength;
 
 				var highlight = dist > 1 ? 1.0 : (dist < 0 ? 0.0 : dist);
@@ -473,17 +474,17 @@ import lime._internal.graphics.ImageDataUtil;
 
 	@:noCompletion private function __updateSize():Void
 	{
-		var offsetX:Int = __type != "inner" ? Math.ceil(__distance * Math.cos(__angle * Math.PI / 180)) : 0;
-		var offsetY:Int = __type != "inner" ? Math.ceil(__distance * Math.sin(__angle * Math.PI / 180)) : 0;
-		// Box blur reach grows to ~quality*blur/2 per side (see DropShadowFilter);
-		// reserving the full spread so the bevel isn't clipped at high quality.
-		var q = (__quality > 0) ? __quality : 1;
-		var exX = Math.ceil(__blurX * 0.5 * q) + 4;
-		var exY = Math.ceil(__blurY * 0.5 * q) + 4;
-		__topExtension = (offsetY < 0 ? -offsetY : 0) + exY;
-		__bottomExtension = (offsetY > 0 ? offsetY : 0) + exY;
-		__leftExtension = (offsetX < 0 ? -offsetX : 0) + exX;
-		__rightExtension = (offsetX > 0 ? offsetX : 0) + exX;
+		var offsetX:Int = __type != "inner" ? BitmapFilter.__offsetFloor(__distance * Math.cos(__angle * Math.PI / 180)) : 0;
+		var offsetY:Int = __type != "inner" ? BitmapFilter.__offsetFloor(__distance * Math.sin(__angle * Math.PI / 180)) : 0;
+
+		if (offsetX < 0) offsetX = -offsetX;
+		if (offsetY < 0) offsetY = -offsetY;
+
+		var exX = BlurFilter.__effectExtension(__blurX, __quality);
+		var exY = BlurFilter.__effectExtension(__blurY, __quality);
+
+		__leftExtension = __rightExtension = exX + offsetX;
+		__topExtension = __bottomExtension = exY + offsetY;
 	}
 }
 

@@ -94,8 +94,9 @@ import openfl.geom.Rectangle;
 		var ramp = __rampChannels();
 
 		var rad = __angle * Math.PI / 180;
-		var offsetX = Std.int(Math.round(__distance * Math.cos(rad) * __renderScale));
-		var offsetY = Std.int(Math.round(__distance * Math.sin(rad) * __renderScale));
+		// exact (fractional) step along the light angle, sampled bilinearly
+		var offsetX = __distance * Math.cos(rad) * __renderScale;
+		var offsetY = __distance * Math.sin(rad) * __renderScale;
 
 		var fxR = new Array<Float>(), fxG = new Array<Float>(), fxB = new Array<Float>(), fxA = new Array<Float>();
 		for (y in 0...height)
@@ -103,9 +104,9 @@ import openfl.geom.Rectangle;
 			for (x in 0...width)
 			{
 				// mask sampled along the light angle: +offset is the way a shadow falls,
-				// -offset points toward the light (Flash's `angle` is where light comes FROM)
-				var maskTowardShadow = BitmapFilter.__maskAt(mask, width, height, x + offsetX, y + offsetY);
-				var maskTowardLight = BitmapFilter.__maskAt(mask, width, height, x - offsetX, y - offsetY);
+				// -offset points toward the light (Flash's `angle` is where light comes from)
+				var maskTowardShadow = BitmapFilter.__maskAtFrac(mask, width, height, x + offsetX, y + offsetY);
+				var maskTowardLight = BitmapFilter.__maskAtFrac(mask, width, height, x - offsetX, y - offsetY);
 				// signed edge slope -> ramp index, as GradientBevelShader does: positive on
 				// the edge facing the light, negative on the far edge, zero on flat areas.
 				// -1 is one edge, 0 the (usually transparent) middle stop, +1 the other
@@ -221,20 +222,23 @@ import openfl.geom.Rectangle;
 
 	@:noCompletion private function __updateSize():Void
 	{
-		// size calculation: box-blur support ( quality * blur/2 ) + transform offset(abs(distance*cos/sin)).
-
+		// blur growth plus the floored offset on every side.
+		// Visible here because the ramp's middle stop is painted flat out to these bounds.
 		var rad = __angle * Math.PI / 180;
-		// per-axis offset, ceil(abs) so negative angles don't drop a pixel
-		var offsetX:Int = (__type != INNER) ? Math.ceil(Math.abs(__distance * Math.cos(rad))) : 0;
-		var offsetY:Int = (__type != INNER) ? Math.ceil(Math.abs(__distance * Math.sin(rad))) : 0;
 
-		var q = (__quality > 0) ? __quality : 1;
-		var exX = Math.ceil(__blurX * 0.5 * q);
-		var exY = Math.ceil(__blurY * 0.5 * q);
+		var offsetX:Int = (__type != INNER) ? BitmapFilter.__offsetFloor(__distance * Math.cos(rad)) : 0;
+		var offsetY:Int = (__type != INNER) ? BitmapFilter.__offsetFloor(__distance * Math.sin(rad)) : 0;
+
+		if (offsetX < 0) offsetX = -offsetX;
+		if (offsetY < 0) offsetY = -offsetY;
+
+		var exX = BlurFilter.__effectExtension(__blurX, __quality);
+		var exY = BlurFilter.__effectExtension(__blurY, __quality);
 
 		__leftExtension = __rightExtension = exX + offsetX;
 		__topExtension = __bottomExtension = exY + offsetY;
 
+		var q = (__quality > 0) ? __quality : 1;
 		__horizontalPasses = (__blurX <= 0) ? 0 : q;
 		__verticalPasses = (__blurY <= 0) ? 0 : q;
 		__numShaderPasses = __horizontalPasses + __verticalPasses + 1;

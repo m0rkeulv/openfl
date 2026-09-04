@@ -799,9 +799,23 @@ class DisplayObjectRenderer extends EventDispatcher
 						var cacheBitmap:BitmapData;
 						var lastBitmap:BitmapData;
 
+						// where the object sits inside the padded cache bitmap (device px):
+						// the padding is the sum of every filter's extensions
+						var padLeft = 0, padTop = 0, padRight = 0, padBottom = 0;
+						for (filter in displayObject.__filters)
+						{
+							padLeft += filter.__leftExtension;
+							padTop += filter.__topExtension;
+							padRight += filter.__rightExtension;
+							padBottom += filter.__bottomExtension;
+						}
+						var objectRect = new Rectangle(padLeft * pixelRatio, padTop * pixelRatio, filterWidth - (padLeft + padRight) * pixelRatio,
+							filterHeight - (padTop + padBottom) * pixelRatio);
+
 						for (filter in displayObject.__filters)
 						{
 							filter.__renderScale = pixelRatio;
+							filter.__objectRect = objectRect;
 
 							if (filter.__preserveObject)
 							{
@@ -816,6 +830,7 @@ class DisplayObjectRenderer extends EventDispatcher
 									displayObject.__objectTransform != null ? displayObject.__objectTransform.__colorTransform : null);
 							}
 							filter.__renderDirty = false;
+							filter.__objectRect = null;
 
 							if (needSecondBitmapData && lastBitmap == bitmap2)
 							{

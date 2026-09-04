@@ -71,6 +71,37 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 {
 	@:noCompletion private static var __blurShader:BoxBlurShader = new BoxBlurShader();
 
+	// Flash quality settings have a range 0-15 so we can store values in a lookup table.
+	// These values are bases on best effort measurement of how flash does things and has been sampled from Flash/Air tests.
+	// Flash store values as 32-bit floats so 1.05 or 1.55 cannot be stored exactly (they are held as 1.04999995 and 1.54999995)
+	// it also seems like based on measurements that Flash do some operations or logic based on 1/4 pixels.
+	// so in order to get the best approximation to Flash we do have to use some magic numbers in the methods below
+	@:noCompletion private static var __growthByQuality:Array<Float> = [
+		for (twentieths in [0, 10, 21, 27, 31, 35, 38, 40, 42, 44, 46, 50, 60, 60, 70, 70]) twentieths / 20
+	];
+
+	// the reach in pixels (step 1); quality below 1 is treated as 1 and above 15 as 15
+	@:noCompletion private static function __reach(blur:Float, quality:Int):Float
+	{
+		return (blur < 1 ? 1 : blur) * __growthByQuality[quality < 1 ? 1 : (quality > 15 ? 15 : quality)];
+	}
+
+	// whole-pixel growth for the effect filters (step 2, first rule)
+	@:noCompletion private static function __effectExtension(blur:Float, quality:Int):Int
+	{
+		var reach = __reach(blur, quality);
+		var extension = Math.ceil(reach);
+		if (extension == reach && (extension % 2) == 1) extension++; // exact odd integer -> next even
+		return extension + (quality <= 1 ? 1 : 0); // the extra painted pixel at quality 1
+	}
+
+	// whole-pixel growth for BlurFilter (up from 1/4 pixel)
+	@:noCompletion private static function __extension(blur:Float, quality:Int):Int
+	{
+		return Math.floor(__reach(blur, quality) + 0.75);
+	}
+
+
 	/**
 		The amount of horizontal blur. Valid values are from 0 to 255(floating
 		point). The default value is 4. Values that are a power of 2 (such as 2,
@@ -213,16 +244,12 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 		return shader;
 	}
 
-	@:noCompletion inline function __padFor(value:Float):Int
+	// blur growth per axis (see __extension above).
+	// Depends on quality as well as the blur, so every setter recomputes it.
+	@:noCompletion private function __updateSize():Void
 	{
-		if (value <= 0) return 0;
-		var passes = (__quality > 0 ? __quality : 1);
-		#if lime
-		var reach = value * passes * 3.0;
-		#else
-		var reach = value;
-		#end
-		return Std.int(Math.ceil(reach)) + 2; 
+		__leftExtension = __rightExtension = __extension(__blurX, __quality);
+		__topExtension = __bottomExtension = __extension(__blurY, __quality);
 	}
 
 	// Get & Set Methods
@@ -237,11 +264,8 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 		{
 			__blurX = value;
 			__renderDirty = true;
-
-			var p = __padFor(value);
-			__leftExtension = p;
-			__rightExtension = p;
 		}
+		__updateSize();
 		return value;
 	}
 
@@ -256,11 +280,8 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 		{
 			__blurY = value;
 			__renderDirty = true;
-
-			var p = __padFor(value);
-			__topExtension = p;
-			__bottomExtension = p;
 		}
+		__updateSize();
 		return value;
 	}
 
@@ -280,8 +301,7 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 
 		if (value != __quality) __renderDirty = true;
 		__quality = value;
-		set_blurX(__blurX);
-		set_blurY(__blurY);
+		__updateSize();
 		return __quality;
 	}
 }
@@ -305,6 +325,14 @@ private class BoxBlurShader extends BitmapFilterShader
 		uniform vec2 uDir;          // blur axis: (1,0) horizontal, (0,1) vertical
 		uniform float uFullSize;    // box width = the blur amount
 
+		// Beyond the bitmap there is nothing (Flash pads with transparent), so
+		// samples outside it must read 0 -- the texture would otherwise clamp
+		// and repeat its edge pixel into the blur.
+		vec4 tap(vec2 uv) {
+			if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return vec4(0.0);
+			return texture2D(openfl_Texture, uv);
+		}
+
 		void main(void) {
 
 			vec2 direction = uDir / uTextureSize;
@@ -320,16 +348,16 @@ private class BoxBlurShader extends BitmapFilterShader
 			float frac  = halfW - (float(n) + 0.5);          // fractional edge weight
 			frac = floor(frac * 255.0) / 255.0;              // 8-bit weight (Flash fixed point)
 
-			vec4 sum = texture2D(openfl_Texture, openfl_TextureCoordv);   // centre
+			vec4 sum = tap(openfl_TextureCoordv);   // centre
 			for (int i = 1; i <= 128; i++) {                             // full interior pairs
 				if (i > n) break;
 				vec2 off = float(i) * direction;
-				sum += texture2D(openfl_Texture, openfl_TextureCoordv + off);
-				sum += texture2D(openfl_Texture, openfl_TextureCoordv - off);
+				sum += tap(openfl_TextureCoordv + off);
+				sum += tap(openfl_TextureCoordv - off);
 			}
 			vec2 edge = float(n + 1) * direction;                        // fractional edges
-			sum += texture2D(openfl_Texture, openfl_TextureCoordv + edge) * frac;
-			sum += texture2D(openfl_Texture, openfl_TextureCoordv - edge) * frac;
+			sum += tap(openfl_TextureCoordv + edge) * frac;
+			sum += tap(openfl_TextureCoordv - edge) * frac;
 
 			vec4 result = sum / fullSize;
 			gl_FragColor = floor(result * 255.0) / 255.0;               // 8-bit round each pass

@@ -65,6 +65,7 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 @:access(openfl.geom.ColorTransform)
 @:access(openfl.geom.Point)
 @:access(openfl.geom.Rectangle)
+@:access(openfl.filters.BlurFilter)
 @:final class GlowFilter extends BitmapFilter
 {
 	@:noCompletion private static var __invertAlphaShader = new InvertAlphaShader();
@@ -269,20 +270,20 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 		}
 		BitmapFilter.__blurMask(mask, width, height, __blurX * __renderScale, __blurY * __renderScale, __quality);
 
-		var cr = ((__color >> 16) & 0xFF) / 255.0;
-		var cg = ((__color >> 8) & 0xFF) / 255.0;
-		var cb = (__color & 0xFF) / 255.0;
+		var colorR = (((__color >> 16) & 0xFF) / 255.0) * __alpha;
+		var colorG = (((__color >> 8) & 0xFF) / 255.0) * __alpha;
+		var colorB = ((__color & 0xFF) / 255.0) * __alpha;
 
 		var fxR = new Array<Float>(), fxG = new Array<Float>(), fxB = new Array<Float>(), fxA = new Array<Float>();
 		for (i in 0...width * height)
 		{
-			var f = mask[i] * __strength;
-			if (f > 1) f = 1;
-			else if (f < 0) f = 0;
-			fxR.push(cr * f);
-			fxG.push(cg * f);
-			fxB.push(cb * f);
-			fxA.push(__alpha * f);
+			var glowCoverage = mask[i] * __strength;
+			if (glowCoverage > 1) glowCoverage = 1;
+			else if (glowCoverage < 0) glowCoverage = 0;
+			fxR.push(colorR * glowCoverage);
+			fxG.push(colorG * glowCoverage);
+			fxB.push(colorB * glowCoverage);
+			fxA.push(__alpha * glowCoverage);
 		}
 
 		return BitmapFilter.__compositeEffect(bitmapData, sourceBitmapData, sourceRect, destPoint, fxR, fxG, fxB, fxA, __inner ? INNER : OUTER, __knockout);
@@ -302,9 +303,13 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 
 		if (blurPass < numBlurPasses)
 		{
-			var strength = blurPass == (numBlurPasses - 1) ? __strength : 1.0;
+			//NOTE: strength and alpha only applied on last pass.
+			var lastPass = blurPass == (numBlurPasses - 1);
+			var strength = lastPass ? __strength : 1.0;
+			var passAlpha = lastPass ? __alpha : 1.0;
 			var horizontal = blurPass < __horizontalPasses;
-			return __setupBlurAlphaShader(horizontal, (horizontal ? blurX : blurY) * __renderScale, color, alpha, strength);
+
+			return __setupBlurAlphaShader(horizontal, (horizontal ? blurX : blurY) * __renderScale, color, passAlpha, strength);
 		}
 		if (__inner)
 		{
@@ -345,12 +350,8 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 
 	@:noCompletion private function __updateSize():Void
 	{
-		// Box blur reach grows to ~quality*blur/2 per side (see DropShadowFilter);
-		var q = (__quality > 0) ? __quality : 1;
-		__leftExtension = (__blurX > 0 ? Math.ceil(__blurX * 0.5 * q) + 4 : 0);
-		__topExtension = (__blurY > 0 ? Math.ceil(__blurY * 0.5 * q) + 4 : 0);
-		__rightExtension = __leftExtension;
-		__bottomExtension = __topExtension;
+		__leftExtension = __rightExtension = BlurFilter.__effectExtension(__blurX, __quality);
+		__topExtension = __bottomExtension = BlurFilter.__effectExtension(__blurY, __quality);
 		__calculateNumShaderPasses();
 	}
 
@@ -368,11 +369,14 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 		var shader = __blurAlphaShader;
 		shader.uDir.value[0] = horizontal ? 1.0 : 0.0;
 		shader.uDir.value[1] = horizontal ? 0.0 : 1.0;
+
 		shader.uFullSize.value[0] = v > 255 ? 255.0 : v;
-		shader.uColor.value[0] = ((color >> 16) & 0xFF) / 255;
-		shader.uColor.value[1] = ((color >> 8) & 0xFF) / 255;
-		shader.uColor.value[2] = (color & 0xFF) / 255;
+
+		shader.uColor.value[0] = (((color >> 16) & 0xFF) / 255) * alpha;
+		shader.uColor.value[1] = (((color >> 8) & 0xFF) / 255) * alpha;
+		shader.uColor.value[2] = ((color & 0xFF) / 255) * alpha;
 		shader.uColor.value[3] = alpha;
+
 		shader.uStrength.value[0] = strength;
 		return shader;
 	}
@@ -536,6 +540,14 @@ private class BoxBlurAlphaShader extends BitmapFilterShader
 		uniform vec2 uDir;          // blur axis: (1,0) horizontal, (0,1) vertical
 		uniform float uFullSize;    // box width = the blur amount
 
+		// Beyond the bitmap there is nothing (Flash pads with transparent), so
+		// samples outside it must read 0 -- the texture would otherwise clamp
+		// and repeat its edge pixel into the blur.
+		float tapA(vec2 uv) {
+			if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return 0.0;
+			return texture2D(openfl_Texture, uv).a;
+		}
+
 		void main(void)
 		{
 			vec2 direction = uDir / uTextureSize;
@@ -550,16 +562,16 @@ private class BoxBlurAlphaShader extends BitmapFilterShader
 				float frac  = halfW - (float(n) + 0.5);
 				frac = floor(frac * 255.0) / 255.0;
 
-				float sum = texture2D(openfl_Texture, openfl_TextureCoordv).a;   // centre
+				float sum = tapA(openfl_TextureCoordv);   // centre
 				for (int i = 1; i <= 128; i++) {                                // full interior
 					if (i > n) break;
 					vec2 off = float(i) * direction;
-					sum += texture2D(openfl_Texture, openfl_TextureCoordv + off).a;
-					sum += texture2D(openfl_Texture, openfl_TextureCoordv - off).a;
+					sum += tapA(openfl_TextureCoordv + off);
+					sum += tapA(openfl_TextureCoordv - off);
 				}
 				vec2 edge = float(n + 1) * direction;                          // fractional edges
-				sum += texture2D(openfl_Texture, openfl_TextureCoordv + edge).a * frac;
-				sum += texture2D(openfl_Texture, openfl_TextureCoordv - edge).a * frac;
+				sum += tapA(openfl_TextureCoordv + edge) * frac;
+				sum += tapA(openfl_TextureCoordv - edge) * frac;
 
 				a = sum / fullSize;
 			}
@@ -606,7 +618,9 @@ private class CombineShader extends BitmapFilterShader
 
 		void main(void) {
 			vec4 src = texture2D(sourceBitmap, textureCoords.xy);
-			vec4 glow = texture2D(openfl_Texture, textureCoords.zw);
+			vec2 glowUV = textureCoords.zw;
+			// the shifted read can leave the bitmap; there is nothing there
+			vec4 glow = (glowUV.x < 0.0 || glowUV.x > 1.0 || glowUV.y < 0.0 || glowUV.y > 1.0) ? vec4(0.0) : texture2D(openfl_Texture, glowUV);
 
 			gl_FragColor = src + glow * (1.0 - src.a);
 		}
@@ -684,7 +698,9 @@ private class CombineKnockoutShader extends BitmapFilterShader
 
 		void main(void) {
 			vec4 src = texture2D(sourceBitmap, textureCoords.xy);
-			vec4 glow = texture2D(openfl_Texture, textureCoords.zw);
+			vec2 glowUV = textureCoords.zw;
+			// the shifted read can leave the bitmap; there is nothing there
+			vec4 glow = (glowUV.x < 0.0 || glowUV.x > 1.0 || glowUV.y < 0.0 || glowUV.y > 1.0) ? vec4(0.0) : texture2D(openfl_Texture, glowUV);
 
 			gl_FragColor = glow * (1.0 - src.a);
 		}
