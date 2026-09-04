@@ -346,6 +346,16 @@ class DisplayObjectRenderer extends EventDispatcher
 				needRender = true;
 			}
 
+			// software and hardware renderers stores cache differently and can not reuse each others cache.
+			// 	__texture (GPU) vs image (software), so when  renderer is switched (ex. BitmapData.draw)
+			// we need to perform a new render.
+			if (!needRender
+				&& displayObject.__cacheBitmapRenderer != null
+				&& displayObject.__cacheBitmapRenderer.__type != renderType)
+			{
+				needRender = true;
+			}
+
 			// Ensure that cached bitmap is updated after changes to scrollRect
 			if (!needRender)
 			{
