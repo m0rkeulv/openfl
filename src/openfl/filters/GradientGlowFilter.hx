@@ -96,15 +96,42 @@ import openfl.geom.Rectangle;
 		if (__rampDirty) __buildRamp();
 		var ramp = __rampChannels();
 
-		var glowOffsetX = Std.int(__offsetX * __renderScale);
-		var glowOffsetY = Std.int(__offsetY * __renderScale);
+		// exact (fractional) offset, read with bilinear filtering as the GPU path does
+		var glowOffsetX = __distance * Math.cos(__angle * Math.PI / 180) * __renderScale;
+		var glowOffsetY = __distance * Math.sin(__angle * Math.PI / 180) * __renderScale;
+
+		var clipX0 = 0.0, clipY0 = 0.0, clipX1:Float = width, clipY1:Float = height;
+
+		if (__type != INNER)
+		{
+			// the object: the source rect itself, or its place inside a padded cache bitmap
+			var objX = __objectRect != null ? __objectRect.x : destPoint.x;
+			var objY = __objectRect != null ? __objectRect.y : destPoint.y;
+			var objW = __objectRect != null ? __objectRect.width : sourceRect.width;
+			var objH = __objectRect != null ? __objectRect.height : sourceRect.height;
+			var reachX = BlurFilter.__effectExtension(__blurX, __quality) * __renderScale;
+			var reachY = BlurFilter.__effectExtension(__blurY, __quality) * __renderScale;
+			var offX = __offsetX * __renderScale, offY = __offsetY * __renderScale;
+			clipX0 = Math.min(objX, objX + offX - reachX);
+			clipX1 = Math.max(objX + objW, objX + objW + offX + reachX);
+			clipY0 = Math.min(objY, objY + offY - reachY);
+			clipY1 = Math.max(objY + objH, objY + objH + offY + reachY);
+		}
 
 		var fxR = new Array<Float>(), fxG = new Array<Float>(), fxB = new Array<Float>(), fxA = new Array<Float>();
 		for (y in 0...height)
 		{
 			for (x in 0...width)
 			{
-				var glowCoverage = BitmapFilter.__maskAt(mask, width, height, x - glowOffsetX, y - glowOffsetY) * __strength;
+				if (x < clipX0 || x >= clipX1 || y < clipY0 || y >= clipY1)
+				{
+					fxR.push(0);
+					fxG.push(0);
+					fxB.push(0);
+					fxA.push(0);
+					continue;
+				}
+				var glowCoverage = BitmapFilter.__maskAtFrac(mask, width, height, x - glowOffsetX, y - glowOffsetY) * __strength;
 				if (glowCoverage > 1) glowCoverage = 1;
 				else if (glowCoverage < 0) glowCoverage = 0;
 
@@ -153,12 +180,22 @@ import openfl.geom.Rectangle;
 		var shader = __gradientShader;
 		shader.sourceBitmap.input = sourceBitmapData;
 		shader.gradientRamp.input = __ramp;
-		shader.offset.value[0] = __offsetX * __renderScale;
-		shader.offset.value[1] = __offsetY * __renderScale;
+		// drawn at the exact offset; the floored __offsetX / __offsetY size the bitmap
+		shader.offset.value[0] = __distance * Math.cos(__angle * Math.PI / 180) * __renderScale;
+		shader.offset.value[1] = __distance * Math.sin(__angle * Math.PI / 180) * __renderScale;
 		shader.uStrength.value[0] = __strength;
 		shader.uInner.value[0] = (__type == INNER) ? 1.0 : 0.0;
 		shader.uFull.value[0] = (__type == FULL) ? 1.0 : 0.0;
 		shader.uKnockout.value[0] = __knockout ? 1.0 : 0.0;
+
+		var w = sourceBitmapData.width, h = sourceBitmapData.height;
+		var ox = __offsetX * __renderScale, oy = __offsetY * __renderScale;
+
+		shader.uClip.value[0] = (__type != INNER && ox > 0) ? ox / w : 0.0;
+		shader.uClip.value[1] = (__type != INNER && oy > 0) ? oy / h : 0.0;
+		shader.uClip.value[2] = (__type != INNER && ox < 0) ? 1.0 + ox / w : 1.0;
+		shader.uClip.value[3] = (__type != INNER && oy < 0) ? 1.0 + oy / h : 1.0;
+
 		return shader;
 		#else
 		return null;
@@ -220,18 +257,28 @@ import openfl.geom.Rectangle;
 
 	@:noCompletion private function __updateSize():Void
 	{
-		__offsetX = Std.int(__distance * Math.cos(__angle * Math.PI / 180));
-		__offsetY = Std.int(__distance * Math.sin(__angle * Math.PI / 180));
-		// Box blur reach grows to approx. `quality * blur / 2` per side (see DropShadowFilter);
-		// reserve the full spread so the gradient glow isn't clipped at high quality.
-		var q = (__quality > 0) ? __quality : 1;
-		var exX = Math.ceil(__blurX * 0.5 * q) + 4;
-		var exY = Math.ceil(__blurY * 0.5 * q) + 4;
-		__topExtension = (__offsetY < 0 ? -__offsetY : 0) + exY;
-		__bottomExtension = (__offsetY > 0 ? __offsetY : 0) + exY;
-		__leftExtension = (__offsetX < 0 ? -__offsetX : 0) + exX;
-		__rightExtension = (__offsetX > 0 ? __offsetX : 0) + exX;
+		__offsetX = BitmapFilter.__offsetFloor(__distance * Math.cos(__angle * Math.PI / 180));
+		__offsetY = BitmapFilter.__offsetFloor(__distance * Math.sin(__angle * Math.PI / 180));
 
+		var exX = BlurFilter.__effectExtension(__blurX, __quality);
+		var exY = BlurFilter.__effectExtension(__blurY, __quality);
+
+		var absX = __offsetX < 0 ? -__offsetX : __offsetX;
+		var absY = __offsetY < 0 ? -__offsetY : __offsetY;
+		if (__type == INNER)
+		{
+			__leftExtension = __rightExtension = exX + absX;
+			__topExtension = __bottomExtension = exY + absY;
+		}
+		else
+		{
+			__leftExtension = exX + (__offsetX < 0 ? absX : 0);
+			__rightExtension = exX + (__offsetX > 0 ? absX : 0);
+			__topExtension = exY + (__offsetY < 0 ? absY : 0);
+			__bottomExtension = exY + (__offsetY > 0 ? absY : 0);
+		}
+
+		var q = (__quality > 0) ? __quality : 1;
 		__horizontalPasses = (__blurX <= 0) ? 0 : q;
 		__verticalPasses = (__blurY <= 0) ? 0 : q;
 		__numShaderPasses = __horizontalPasses + __verticalPasses + 1;
@@ -340,11 +387,18 @@ private class GradientGlowShader extends BitmapFilterShader
 		uniform float uInner;
 		uniform float uFull;
 		uniform float uKnockout;
+		uniform vec4 uClip;          // painted rect (x0, y0, x1, y1) in bitmap UV
 		varying vec4 textureCoords;
 
 		void main(void) {
 			vec4 src = texture2D(sourceBitmap, textureCoords.xy);
-			float mask = texture2D(openfl_Texture, textureCoords.zw).a;
+			vec2 uv = textureCoords.xy;
+			if (uv.x < uClip.x || uv.x > uClip.z || uv.y < uClip.y || uv.y > uClip.w) {
+				gl_FragColor = src;   // outside Flash's filter rect nothing is painted
+				return;
+			}
+			vec2 maskUV = textureCoords.zw;
+			float mask = (maskUV.x < 0.0 || maskUV.x > 1.0 || maskUV.y < 0.0 || maskUV.y > 1.0) ? 0.0 : texture2D(openfl_Texture, maskUV).a;
 			float f = clamp(mask * uStrength, 0.0, 1.0);
 
 			// index the ramp by the distance field (high near the shape = inner
@@ -382,6 +436,7 @@ private class GradientGlowShader extends BitmapFilterShader
 		super();
 		#if !macro
 		offset.value = [0, 0];
+		uClip.value = [0, 0, 1, 1];
 		uStrength.value = [1];
 		uInner.value = [0];
 		uFull.value = [0];
