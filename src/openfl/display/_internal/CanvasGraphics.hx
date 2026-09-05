@@ -45,8 +45,8 @@ class CanvasGraphics
 		(background bleed between abutting fills) rather than eliminating it: the
 		graphic is rendered into an NxN-larger scratch canvas and downsampled with
 		high-quality smoothing, which shrinks the leftover magenta/salmon seam
-		~1/N but never to zero. The MSAA path (see OpenGLGraphics, selected with
-		`-D openfl_canvas_msaa`) is the truly-clean alternative.
+		~1/N but never to zero. The GPU renderer (see OpenGLGraphics, selected with
+		`-D openfl_gpu_graphics`) is the truly-clean alternative.
 
 		The default value 0 means "derive the factor from `Stage.quality`" via
 		`__qualityToSupersample` (LOW=1, MEDIUM=2, HIGH=3, BEST=4). A value > 0
