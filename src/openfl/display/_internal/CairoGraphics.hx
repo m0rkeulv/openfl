@@ -43,23 +43,45 @@ class CairoGraphics
 
 	#if !openfl_cairo_no_supersample
 	private static inline var SUPERSAMPLE_MAX:Int = 8192;
+	private static inline var SCRATCH_MARGIN:Int = 8;
 
 	private static var supersampleByQuality:Map<StageQuality, Int> = [
 		LOW => 1,
 		MEDIUM => 2,
-		HIGH => 3,
+		HIGH => 4,
 		BEST => 4
 	];
-
+	//Note: CairoFilter BEST is slow, it might be worth using 8x supersampling instead.
 	private static var downsampleFilterByQuality:Map<StageQuality, CairoFilter> = [
 		LOW => CairoFilter.GOOD,
 		MEDIUM => CairoFilter.GOOD,
 		HIGH => CairoFilter.GOOD,
-		BEST => CairoFilter.GOOD
+		BEST => CairoFilter.BEST
 	];
 
 	private static var ssSurface:CairoImageSurface;
 	private static var ssCairo:Cairo;
+
+	// Cairo can downsample 2x 2:1 faster than 4:1 so we create intermediate surfaces  trading some memory for speed.
+	private static var ssHalfSurface:CairoImageSurface;
+	private static var ssHalfCairo:Cairo;
+
+	private static function __scaleDown(dst:Cairo, src:CairoImageSurface, factor:Int, filter:CairoFilter, dstWidth:Int, dstHeight:Int):Void
+	{
+		dst.matrix = new Matrix3();
+		dst.newPath();
+		dst.setOperator(CLEAR);
+		dst.rectangle(0, 0, dstWidth + SCRATCH_MARGIN, dstHeight + SCRATCH_MARGIN);
+		dst.fill();
+		dst.setOperator(OVER);
+
+		var pattern = CairoPattern.createForSurface(src);
+		pattern.filter = filter;
+		pattern.matrix = new Matrix3(factor, 0, 0, factor, 0, 0);
+		dst.source = pattern;
+		dst.rectangle(0, 0, dstWidth + SCRATCH_MARGIN, dstHeight + SCRATCH_MARGIN);
+		dst.fill();
+	}
 
 	private static function __qualityToSupersample(quality:StageQuality):Int
 	{
@@ -2087,23 +2109,23 @@ class CairoGraphics
 			#if !openfl_cairo_no_supersample
 			// The supersampling factor follows Stage.quality.
 			var quality = __stageQuality(graphics);
-			var renderSS = __qualityToSupersample(quality);
-			if (renderSS < 1) renderSS = 1;
+			var renderScaleFactor = __qualityToSupersample(quality);
+			if (renderScaleFactor < 1) renderScaleFactor = 1;
 
 			// Reduce the factor for very large shapes so the temporary surface
 			// stays under SUPERSAMPLE_MAX in either dimension.
 			var maxDim = width > height ? width : height;
-			while (renderSS > 1 && maxDim * renderSS > SUPERSAMPLE_MAX)
+			while (renderScaleFactor > 1 && maxDim * renderScaleFactor > SUPERSAMPLE_MAX)
 			{
-				renderSS--;
+				renderScaleFactor--;
 			}
 
-			if (renderSS > 1)
+			if (renderScaleFactor > 1)
 			{
 				// Render into a larger scratch surface with hard-edged fills; it
 				// is downsampled into graphics.__bitmap once all commands run.
-				var ssW = width * renderSS;
-				var ssH = height * renderSS;
+				var ssW = width * renderScaleFactor;
+				var ssH = height * renderScaleFactor;
 
 				if (ssSurface == null || ssCairo == null || ssW > ssSurface.width || ssH > ssSurface.height)
 				{
@@ -2113,11 +2135,23 @@ class CairoGraphics
 
 				cairo = ssCairo;
 
+				// The scratch surface is shared and grows to the largest shape seen:
+				// clear only the part this shape uses (plus the margin the
+				// downsample kernel reads) instead of the whole surface. The path
+				// is reset first: a path left over from the previous shape would
+				// merge into the rectangle and, with the even-odd rule, leave holes.
+				cairo.matrix = new Matrix3();
+				cairo.newPath();
+				cairo.setOperator(CLEAR);
+				cairo.rectangle(0, 0, ssW + SCRATCH_MARGIN, ssH + SCRATCH_MARGIN);
+				cairo.fill();
+				cairo.setOperator(OVER);
+
 				renderer.__setBlendModeCairo(cairo, NORMAL);
 
 				var ssMatrix = Matrix.__pool.get();
 				ssMatrix.copyFrom(graphics.__renderTransform);
-				ssMatrix.scale(renderSS, renderSS);
+				ssMatrix.scale(renderScaleFactor, renderScaleFactor);
 				renderer.applyMatrix(ssMatrix, cairo);
 				Matrix.__pool.release(ssMatrix);
 			}
@@ -2128,16 +2162,25 @@ class CairoGraphics
 				renderer.__setBlendModeCairo(cairo, NORMAL);
 				renderer.applyMatrix(graphics.__renderTransform, cairo);
 			}
+
+			if (renderScaleFactor == 1)
+			{
+				cairo.setOperator(CLEAR);
+				cairo.paint();
+				cairo.setOperator(OVER);
+			}
+
 			#else
 			cairo = graphics.__cairo;
 
 			renderer.__setBlendModeCairo(cairo, NORMAL);
 			renderer.applyMatrix(graphics.__renderTransform, cairo);
-			#end
 
 			cairo.setOperator(CLEAR);
 			cairo.paint();
 			cairo.setOperator(OVER);
+
+			#end
 
 			fillCommands.clear();
 			strokeCommands.clear();
@@ -2372,24 +2415,30 @@ class CairoGraphics
 			data.destroy();
 
 			#if !openfl_cairo_no_supersample
-			if (renderSS > 1)
+			if (renderScaleFactor > 1)
 			{
-				// Downsample the supersampled scratch surface into the final
-				// bitmap. The reconstruction filter averages the hard-edged
-				// source, producing anti-aliasing on every edge: interior edges
-				// blend fill-vs-fill (no background bleed) and the silhouette
-				// blends fill-vs-transparent.
-				var dst = graphics.__cairo;
-				dst.matrix = new Matrix3();
-				dst.setOperator(CLEAR);
-				dst.paint();
-				dst.setOperator(OVER);
+				// Cairo scales 2:1 through an exact 2x2 box average making it faster to perform 2x 2:1 scaling than a single 4:1
+				// some simple benchmarks suggests 80-90%  faster downsampling. depending on the raster time this can be anywere from 20-80%
+				// faster rendering for a given asset. Note that this is not guarantied ad probably depends on CPU and SIMD support.
+				var src = ssSurface;
+				var factor = renderScaleFactor;
+				if (factor == 4)
+				{
+					var halfW = width * 2;
+					var halfH = height * 2;
 
-				var pattern = CairoPattern.createForSurface(ssSurface);
-				pattern.filter = __qualityToDownsampleFilter(quality);
-				pattern.matrix = new Matrix3(renderSS, 0, 0, renderSS, 0, 0);
-				dst.source = pattern;
-				dst.paint();
+					if (ssHalfSurface == null || halfW > ssHalfSurface.width || halfH > ssHalfSurface.height)
+					{
+						ssHalfSurface = new CairoImageSurface(CairoFormat.ARGB32, halfW, halfH);
+						ssHalfCairo = new Cairo(ssHalfSurface);
+					}
+
+					__scaleDown(ssHalfCairo, src, 2, CairoFilter.GOOD, halfW, halfH);
+					src = ssHalfSurface;
+					factor = 2;
+				}
+				var filter = __qualityToDownsampleFilter(quality);
+				__scaleDown(graphics.__cairo, src, factor, filter, graphics.__bitmap.width, graphics.__bitmap.height);
 			}
 			#end
 
