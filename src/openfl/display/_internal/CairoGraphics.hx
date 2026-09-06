@@ -17,6 +17,7 @@ import openfl.Vector;
 #if lime
 import lime.graphics.cairo.Cairo;
 import lime.graphics.cairo.CairoExtend;
+import lime.graphics.cairo.CairoAntialias;
 import lime.graphics.cairo.CairoFilter;
 import lime.graphics.cairo.CairoFormat;
 import lime.graphics.cairo.CairoImageSurface;
@@ -39,44 +40,51 @@ import lime.math.Vector2;
 class CairoGraphics
 {
 	#if lime_cairo
-	/**
-		Supersampling factor used to eliminate background bleed through the
-		interior seams of shapes made of multiple abutting fills (a Cairo
-		conflation artifact). A factor > 1 renders each graphic into an NxN-larger
-		surface with hard-edged fills and then downsamples, so interior edges
-		resolve fill-vs-fill (no bleed) while the outer silhouette keeps clean
-		anti-aliasing. A factor of 1 disables it (legacy per-fill behaviour).
 
-		The default value 0 means "derive the factor from `Stage.quality`" via
-		`__qualityToSupersample` (LOW=1, MEDIUM=2, HIGH=3, BEST=4). Set this to any
-		value > 0 to override the stage quality with an explicit factor.
-	**/
-	public static var supersample:Int = #if openfl_cairo_no_supersample 1 #else 0 #end;
-
-	// Maps Stage.quality to a supersampling factor. Higher quality trades more
-	// transient render memory for smoother edges and no interior bleed.
-	private static function __qualityToSupersample(quality:StageQuality):Int
-	{
-		return switch (quality)
-		{
-			case LOW: 1;
-			case MEDIUM: 2;
-			case HIGH: 3;
-			case BEST: 4;
-			default: 3;
-		}
-	}
-
-	// Upper bound on either dimension of the supersampled surface. Very large
-	// graphics reduce their effective factor to stay under this, bounding the
-	// transient memory a single shape can use.
+	#if !openfl_cairo_no_supersample
 	private static inline var SUPERSAMPLE_MAX:Int = 8192;
+
+	private static var supersampleByQuality:Map<StageQuality, Int> = [
+		LOW => 1,
+		MEDIUM => 2,
+		HIGH => 3,
+		BEST => 4
+	];
+
+	private static var downsampleFilterByQuality:Map<StageQuality, CairoFilter> = [
+		LOW => CairoFilter.GOOD,
+		MEDIUM => CairoFilter.GOOD,
+		HIGH => CairoFilter.GOOD,
+		BEST => CairoFilter.GOOD
+	];
 
 	private static var ssSurface:CairoImageSurface;
 	private static var ssCairo:Cairo;
-	// Effective factor actually used for the graphic currently being rendered;
-	// read by playCommands to pick the fill antialias mode.
-	private static var __activeSS:Int = 1;
+
+	private static function __qualityToSupersample(quality:StageQuality):Int
+	{
+		var factor = supersampleByQuality.get(quality);
+		return factor != null ? factor : 3;
+	}
+
+	private static function __stageQuality(graphics:Graphics):StageQuality
+	{
+		return (graphics.__owner != null && graphics.__owner.stage != null) ? graphics.__owner.stage.quality : StageQuality.HIGH;
+	}
+
+	private static function __tooLargeToSupersample(graphics:Graphics):Bool
+	{
+		var maxDim = graphics.__width > graphics.__height ? graphics.__width : graphics.__height;
+		return __qualityToSupersample(__stageQuality(graphics)) > 1 && maxDim * 2 > SUPERSAMPLE_MAX;
+	}
+
+	private static function __qualityToDownsampleFilter(quality:StageQuality):CairoFilter
+	{
+		var filter = downsampleFilterByQuality.get(quality);
+		return filter != null ? filter : CairoFilter.BEST;
+	}
+	#end
+
 	private static var SIN45:Float = 0.70710678118654752440084436210485;
 	private static var TAN22:Float = 0.4142135623730950488016887242097;
 	private static var KAPPA = 0.5522848;
@@ -935,11 +943,12 @@ class CairoGraphics
 		var setStart = false;
 
 		cairo.fillRule = EVEN_ODD;
-		// When supersampling, fills must be hard-edged so abutting fills partition
-		// pixel coverage exactly (no partial-coverage seams that leak the
-		// background); the anti-aliasing is recovered by the downsample. Without
-		// supersampling, keep the previous per-fill anti-aliasing.
-		cairo.antialias = __activeSS > 1 ? NONE : SUBPIXEL;
+		#if !openfl_cairo_no_supersample
+		//we fallback to antialiasing if too large for supersampling
+		cairo.antialias = __tooLargeToSupersample(graphics) ? GRAY : NONE;
+		#else
+		cairo.antialias = SUBPIXEL;
+		#end
 
 		var hasPath:Bool = false;
 
@@ -2075,15 +2084,10 @@ class CairoGraphics
 				graphics.__bitmap = bitmap;
 			}
 
-			// Determine the requested supersampling factor: an explicit override
-			// (supersample > 0) or, by default, one derived from Stage.quality.
-			var renderSS = supersample;
-			if (renderSS <= 0)
-			{
-				var quality = (graphics.__owner != null
-					&& graphics.__owner.stage != null) ? graphics.__owner.stage.quality : StageQuality.HIGH;
-				renderSS = __qualityToSupersample(quality);
-			}
+			#if !openfl_cairo_no_supersample
+			// The supersampling factor follows Stage.quality.
+			var quality = __stageQuality(graphics);
+			var renderSS = __qualityToSupersample(quality);
 			if (renderSS < 1) renderSS = 1;
 
 			// Reduce the factor for very large shapes so the temporary surface
@@ -2093,7 +2097,6 @@ class CairoGraphics
 			{
 				renderSS--;
 			}
-			__activeSS = renderSS;
 
 			if (renderSS > 1)
 			{
@@ -2125,6 +2128,12 @@ class CairoGraphics
 				renderer.__setBlendModeCairo(cairo, NORMAL);
 				renderer.applyMatrix(graphics.__renderTransform, cairo);
 			}
+			#else
+			cairo = graphics.__cairo;
+
+			renderer.__setBlendModeCairo(cairo, NORMAL);
+			renderer.applyMatrix(graphics.__renderTransform, cairo);
+			#end
 
 			cairo.setOperator(CLEAR);
 			cairo.paint();
@@ -2362,6 +2371,7 @@ class CairoGraphics
 
 			data.destroy();
 
+			#if !openfl_cairo_no_supersample
 			if (renderSS > 1)
 			{
 				// Downsample the supersampled scratch surface into the final
@@ -2376,11 +2386,12 @@ class CairoGraphics
 				dst.setOperator(OVER);
 
 				var pattern = CairoPattern.createForSurface(ssSurface);
-				pattern.filter = CairoFilter.BEST;
+				pattern.filter = __qualityToDownsampleFilter(quality);
 				pattern.matrix = new Matrix3(renderSS, 0, 0, renderSS, 0, 0);
 				dst.source = pattern;
 				dst.paint();
 			}
+			#end
 
 			graphics.__bitmap.image.dirty = true;
 			graphics.__bitmap.image.version++;
