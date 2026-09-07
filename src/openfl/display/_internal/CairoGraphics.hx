@@ -42,6 +42,9 @@ class CairoGraphics
 	#if lime_cairo
 
 	#if !openfl_cairo_no_supersample
+
+	// Cairo is capped at 32767 × 32767 pixels
+	// but setting a lower limit here as max resolution can consume gigabytes of memory.
 	private static inline var SUPERSAMPLE_MAX:Int = 8192;
 	private static inline var SCRATCH_MARGIN:Int = 8;
 
@@ -86,7 +89,7 @@ class CairoGraphics
 	private static function __qualityToSupersample(quality:StageQuality):Int
 	{
 		var factor = supersampleByQuality.get(quality);
-		return factor != null ? factor : 3;
+		return factor != null ? factor : supersampleByQuality.get(HIGH);
 	}
 
 	private static function __stageQuality(graphics:Graphics):StageQuality
@@ -967,7 +970,7 @@ class CairoGraphics
 		cairo.fillRule = EVEN_ODD;
 		#if !openfl_cairo_no_supersample
 		//we fallback to antialiasing if too large for supersampling
-		cairo.antialias = __tooLargeToSupersample(graphics) ? GRAY : NONE;
+		cairo.antialias = __tooLargeToSupersample(graphics) ? SUBPIXEL : NONE;
 		#else
 		cairo.antialias = SUBPIXEL;
 		#end
@@ -2122,8 +2125,8 @@ class CairoGraphics
 
 			if (renderScaleFactor > 1)
 			{
-				// Render into a larger scratch surface with hard-edged fills; it
-				// is downsampled into graphics.__bitmap once all commands run.
+				// Render into a larger scratch surface with hard-edged fills.
+				// it's downsampled into graphics.__bitmap once all commands run.
 				var ssW = width * renderScaleFactor;
 				var ssH = height * renderScaleFactor;
 
@@ -2135,11 +2138,8 @@ class CairoGraphics
 
 				cairo = ssCairo;
 
-				// The scratch surface is shared and grows to the largest shape seen:
-				// clear only the part this shape uses (plus the margin the
-				// downsample kernel reads) instead of the whole surface. The path
-				// is reset first: a path left over from the previous shape would
-				// merge into the rectangle and, with the even-odd rule, leave holes.
+				// The scratch surface is shared and grows to the largest shape seen as allocating new surfaces is a real slowdown so we try to avoid it.
+				// We re use the surface by simply reset draw rules and clear only the part that this shape use (plus the margin the downsample kernel reads).
 				cairo.matrix = new Matrix3();
 				cairo.newPath();
 				cairo.setOperator(CLEAR);
@@ -2418,8 +2418,8 @@ class CairoGraphics
 			if (renderScaleFactor > 1)
 			{
 				// Cairo scales 2:1 through an exact 2x2 box average making it faster to perform 2x 2:1 scaling than a single 4:1
-				// some simple benchmarks suggests 80-90%  faster downsampling. depending on the raster time this can be anywere from 20-80%
-				// faster rendering for a given asset. Note that this is not guarantied ad probably depends on CPU and SIMD support.
+				// some simple benchmarks suggests 80-90%  faster downsampling. depending on the raster time this can give anywere from 20-80%
+				// faster rendering for a given asset. Note that this is not guarantied and probably depends on CPU and SIMD support.
 				var src = ssSurface;
 				var factor = renderScaleFactor;
 				if (factor == 4)
