@@ -534,7 +534,26 @@ import lime.math.Vector2;
 			__setGLScissorTest(false);
 		}
 
+		// a texture rendering into the shared multisampled target only uses its own
+		// w x h corner of it: clear that region, not the whole shared buffer
+		var sharedTarget = __state.renderToTexture != null && __state.renderToTexture.__glMSShared;
+		if (sharedTarget)
+		{
+			gl.enable(gl.SCISSOR_TEST);
+			gl.scissor(0, 0, __state.renderToTexture.__width, __state.renderToTexture.__height);
+		}
 		gl.clear(clearMask);
+		if (sharedTarget)
+		{
+			if (__contextState.scissorEnabled)
+			{
+				gl.scissor(Std.int(__contextState.scissorRectangle.x), Std.int(__contextState.scissorRectangle.y), Std.int(__contextState.scissorRectangle.width), Std.int(__contextState.scissorRectangle.height));
+			}
+			else
+			{
+				gl.disable(gl.SCISSOR_TEST);
+			}
+		}
 	}
 
 	/**
@@ -2191,6 +2210,12 @@ import lime.math.Vector2;
 
 	@:noCompletion private function __flushGLFramebuffer():Void
 	{
+		// leaving a multisampled render target: resolve it into its texture first
+		if (__contextState.renderToTexture != null && __contextState.renderToTexture != __state.renderToTexture)
+		{
+			__contextState.renderToTexture.__resolveGLMultisample();
+		}
+
 		if (__state.renderToTexture != null)
 		{
 			if (#if openfl_disable_context_cache true #else __contextState.renderToTexture != __state.renderToTexture
