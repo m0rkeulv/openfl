@@ -70,7 +70,8 @@ class OpenGLGraphics
 		fall through to this raw-GL path for anything else. Default derives from
 		-D c3d_attr / -D c3d_uniform.
 	**/
-	public static var backend:Int = #if c3d_uniform 2 #elseif c3d_attr 1 #else 0 #end;
+	// native (sys) targets have no raw-WebGL path: default to the Context3D-native variant
+	public static var backend:Int = #if c3d_uniform 2 #elseif (c3d_attr || sys) 1 #else 0 #end;
 
 	#if (js && html5)
 	private static inline var MODE_SOLID = 0;
@@ -413,6 +414,9 @@ class OpenGLGraphics
 		graphics.__softwareDirty = false;
 		graphics.__dirty = false;
 		return true;
+		#elseif sys
+		// experiment: Context3D-native texture-resident renderer on native GL
+		return backend != 0 && Context3DVectorGraphics.render(graphics, renderer, backend);
 		#else
 		return false;
 		#end

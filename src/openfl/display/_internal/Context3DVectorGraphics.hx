@@ -9,7 +9,7 @@ import openfl.display.LineScaleMode;
 import openfl.display.OpenGLRenderer;
 import openfl.display.SpreadMethod;
 import openfl.display._internal.DrawCommandReader;
-#if (js && html5)
+#if ((js && html5) || sys)
 import openfl.display.BitmapData;
 import openfl.display3D.Context3D;
 import openfl.display3D.Context3DBlendFactor;
@@ -72,7 +72,7 @@ class Context3DVectorGraphics
 	private static inline var MODE_RADIAL = 2;
 	private static inline var MODE_BITMAP = 3;
 
-	#if (js && html5)
+	#if ((js && html5) || sys)
 	private static var supported:Bool = true;
 	private static var inited:Bool = false;
 	private static var progStencil:Program3D;
@@ -147,7 +147,7 @@ class Context3DVectorGraphics
 	// gradient/bitmap line styles are rejected so the caller falls back.
 	public static function isCompatible(graphics:Graphics):Bool
 	{
-		#if (js && html5)
+		#if ((js && html5) || sys)
 		if (graphics.__commands == null) return false;
 		var hasContent = false;
 		var data = new DrawCommandReader(graphics.__commands);
@@ -177,7 +177,7 @@ class Context3DVectorGraphics
 
 	public static function render(graphics:Graphics, renderer:OpenGLRenderer, variant:Int):Bool
 	{
-		#if (js && html5)
+		#if ((js && html5) || sys)
 		if (!supported) return false;
 		if (graphics.__owner == null || graphics.__owner.__worldScale9Grid != null) return false;
 		if (!isCompatible(graphics)) return false;
@@ -243,6 +243,7 @@ class Context3DVectorGraphics
 		_mode = MODE_SOLID;
 		_hasStroke = false;
 		_strokeBatches = [];
+		ensureCoverQuad(context);
 
 		// Save the current render target. When this graphic is being rendered
 		// into a filter / cacheAsBitmap cache texture, the active target is that
@@ -341,7 +342,8 @@ class Context3DVectorGraphics
 							case ROUND: 2;
 							default: 0; // BEVEL
 						}
-						_smiter = (c.miterLimit != null && c.miterLimit > 1) ? c.miterLimit : 3;
+						// miterLimit is a plain Float (never null on static targets)
+						_smiter = (c.miterLimit > 1) ? c.miterLimit : 3;
 					}
 
 				case MOVE_TO:
@@ -399,7 +401,7 @@ class Context3DVectorGraphics
 		#end
 	}
 
-	#if (js && html5)
+	#if ((js && html5) || sys)
 	// Restore a previously-saved Context3D render target: the cache texture we
 	// were rendering into (filter / cacheAsBitmap), or the back buffer if none.
 	private static inline function restoreTarget(context:Context3D, target:TextureBase, depthStencil:Bool, antiAlias:Int, surfaceSelector:Int):Void
@@ -488,6 +490,31 @@ class Context3DVectorGraphics
 		}
 	}
 
+	// cover quad in its own 6-vertex buffer, uploaded once per shape (per size)
+	// instead of once per fill; fill / stroke geometry uses vbuf
+	private static var cvbuf:VertexBuffer3D;
+	private static var cvW:Float = -1;
+	private static var cvH:Float = -1;
+	private static var solidConsts:Vector<Float> = new Vector<Float>(4, true);
+
+	private static function ensureCoverQuad(context:Context3D):Void
+	{
+		if (cvbuf != null && cvW == _w && cvH == _h) return;
+		if (cvbuf == null) cvbuf = context.createVertexBuffer(6, vbufStride, Context3DBufferUsage.DYNAMIC_DRAW);
+		var quad = new Vector<Float>();
+		// va1 = render-target pixel (top-down). With clipY no longer flipped,
+		// clip y = -1 is the shape's top (py=0) and clip y = +1 its bottom (py=_h).
+		pushV(quad, -1, -1, 0, 0);
+		pushV(quad, 1, -1, _w, 0);
+		pushV(quad, -1, 1, 0, _h);
+		pushV(quad, -1, 1, 0, _h);
+		pushV(quad, 1, -1, _w, 0);
+		pushV(quad, 1, 1, _w, _h);
+		cvbuf.uploadFromVector(quad, 0, 6);
+		cvW = _w;
+		cvH = _h;
+	}
+
 	private static function ensureBuffers(context:Context3D, verts:Int):Void
 	{
 		if (verts <= vbufCap) return;
@@ -509,6 +536,8 @@ class Context3DVectorGraphics
 		if (_sub == null || _sub.length == 0) return;
 
 		// build stencil fan triangles (pixel coords -> clip); pixel slots unused here
+		// a fresh Vector per fill: reusing one (length = 0 + push) is slower on
+		// HashLink than allocating (measured: Nyan clip 190 -> 340 ms per frame)
 		var verts = new Vector<Float>();
 		var n = 0;
 		for (sp in _sub)
@@ -541,9 +570,8 @@ class Context3DVectorGraphics
 		context.setVertexBufferAt(1, null);
 		context.drawTriangles(ibuf, 0, Std.int(n / 3));
 
-		// cover pass: full-screen quad where stencil != 0, reset stencil to 0.
-		// va1 carries render-target pixel coords for gradient/bitmap shading.
-		uploadCoverQuad(context);
+		// cover pass: full-screen quad (cvbuf, uploaded once per shape) where
+		// stencil != 0, reset stencil to 0.
 
 		context.setColorMask(true, true, true, true);
 		context.setStencilReferenceValue(0, 0xFF, 0xFF);
@@ -556,39 +584,26 @@ class Context3DVectorGraphics
 		// so the same path can be both filled and stroked.
 	}
 
-	private static inline function uploadCoverQuad(context:Context3D):Void
-	{
-		var quad = new Vector<Float>();
-		// va1 = render-target pixel (top-down). With clipY no longer flipped,
-		// clip y = -1 is the shape's top (py=0) and clip y = +1 its bottom (py=_h).
-		pushV(quad, -1, -1, 0, 0);
-		pushV(quad, 1, -1, _w, 0);
-		pushV(quad, -1, 1, 0, _h);
-		pushV(quad, -1, 1, 0, _h);
-		pushV(quad, 1, -1, _w, 0);
-		pushV(quad, 1, 1, _w, _h);
-		vbuf.uploadFromVector(quad, 0, 6);
-	}
-
 	private static function coverPass(context:Context3D):Void
 	{
 		var consts = new Vector<Float>();
+		var cb = cvbuf;
 		switch (_mode)
 		{
 			case MODE_SOLID:
 				context.setProgram(progSolid);
-				context.setVertexBufferAt(0, vbuf, 0, Context3DVertexBufferFormat.FLOAT_2);
+				context.setVertexBufferAt(0, cb, 0, Context3DVertexBufferFormat.FLOAT_2);
 				context.setVertexBufferAt(1, null);
-				consts.push(_r);
-				consts.push(_g);
-				consts.push(_b);
-				consts.push(_a);
-				context.setProgramConstantsFromVector(Context3DProgramType.FRAGMENT, 0, consts);
+				solidConsts[0] = _r;
+				solidConsts[1] = _g;
+				solidConsts[2] = _b;
+				solidConsts[3] = _a;
+				context.setProgramConstantsFromVector(Context3DProgramType.FRAGMENT, 0, solidConsts);
 
 			case MODE_LINEAR, MODE_RADIAL:
 				context.setProgram(progGradient);
-				context.setVertexBufferAt(0, vbuf, 0, Context3DVertexBufferFormat.FLOAT_2);
-				context.setVertexBufferAt(1, vbuf, 2, Context3DVertexBufferFormat.FLOAT_2);
+				context.setVertexBufferAt(0, cb, 0, Context3DVertexBufferFormat.FLOAT_2);
+				context.setVertexBufferAt(1, cb, 2, Context3DVertexBufferFormat.FLOAT_2);
 				consts.push(_mode == MODE_RADIAL ? 2.0 : 1.0);
 				consts.push(_spread);
 				consts.push(0);
@@ -607,8 +622,8 @@ class Context3DVectorGraphics
 
 			case MODE_BITMAP:
 				context.setProgram(progBitmap);
-				context.setVertexBufferAt(0, vbuf, 0, Context3DVertexBufferFormat.FLOAT_2);
-				context.setVertexBufferAt(1, vbuf, 2, Context3DVertexBufferFormat.FLOAT_2);
+				context.setVertexBufferAt(0, cb, 0, Context3DVertexBufferFormat.FLOAT_2);
+				context.setVertexBufferAt(1, cb, 2, Context3DVertexBufferFormat.FLOAT_2);
 				consts.push(0);
 				consts.push(0);
 				consts.push(0);
