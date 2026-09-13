@@ -69,12 +69,12 @@ class CairoGraphics
 	private static var ssHalfSurface:CairoImageSurface;
 	private static var ssHalfCairo:Cairo;
 
-	private static function __scaleDown(dst:Cairo, src:CairoImageSurface, factor:Int, filter:CairoFilter, dstWidth:Int, dstHeight:Int):Void
+	private static function __scaleDown(dst:Cairo, src:CairoImageSurface, factor:Int, filter:CairoFilter, dstWidth:Int, dstHeight:Int, clearWidth:Int, clearHeight:Int):Void
 	{
 		dst.matrix = new Matrix3();
 		dst.newPath();
 		dst.setOperator(CLEAR);
-		dst.rectangle(0, 0, dstWidth + SCRATCH_MARGIN, dstHeight + SCRATCH_MARGIN);
+		dst.rectangle(0, 0, clearWidth, clearHeight);
 		dst.fill();
 		dst.setOperator(OVER);
 
@@ -82,7 +82,7 @@ class CairoGraphics
 		pattern.filter = filter;
 		pattern.matrix = new Matrix3(factor, 0, 0, factor, 0, 0);
 		dst.source = pattern;
-		dst.rectangle(0, 0, dstWidth + SCRATCH_MARGIN, dstHeight + SCRATCH_MARGIN);
+		dst.rectangle(0, 0, dstWidth, dstHeight);
 		dst.fill();
 	}
 
