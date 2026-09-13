@@ -2441,12 +2441,12 @@ class CairoGraphics
 						ssHalfCairo = new Cairo(ssHalfSurface);
 					}
 
-					__scaleDown(ssHalfCairo, src, 2, CairoFilter.GOOD, halfW, halfH);
+					__scaleDown(ssHalfCairo, src, 2, CairoFilter.GOOD, halfW, halfH, halfW + SCRATCH_MARGIN, halfH + SCRATCH_MARGIN);
 					src = ssHalfSurface;
 					factor = 2;
 				}
 				var filter = __qualityToDownsampleFilter(quality);
-				__scaleDown(graphics.__cairo, src, factor, filter, graphics.__bitmap.width, graphics.__bitmap.height);
+				__scaleDown(graphics.__cairo, src, factor, filter, width, height, graphics.__bitmap.width, graphics.__bitmap.height);
 			}
 			#end
 
