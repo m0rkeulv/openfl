@@ -204,9 +204,15 @@ class CairoRenderer extends DisplayObjectRenderer
 			if (__blendGroupDepth == 0)
 			{
 				var blendMode = __overrideBlendMode != null ? __overrideBlendMode : displayObject.__worldBlendMode;
+				if (blendMode == __groupBlendMode) blendMode = NORMAL;
 				if (blendMode == SUBTRACT || blendMode == INVERT || blendMode == ALPHA || blendMode == ERASE)
 				{
 					__renderBlendGroup(object, blendMode);
+					return;
+				}
+				if (__needsContainerGroup(displayObject, blendMode))
+				{
+					__renderOperatorGroup(object, blendMode);
 					return;
 				}
 			}
@@ -214,6 +220,68 @@ class CairoRenderer extends DisplayObjectRenderer
 		#end
 
 		__renderDrawableDirect(object);
+	}
+
+	/**
+		Flash blends an object as a whole: a container of several pieces under one of the
+		operator modes would otherwise have each child blended on its own (a child over a
+		sibling adds twice). Such a container is rendered into a group first, children
+		that only inherit its mode drawing NORMAL, and the group is composited with the
+		mode. A shape is already one piece here: its graphics are rendered to a surface
+		before drawing.
+	**/
+	@:noCompletion private function __needsContainerGroup(displayObject:DisplayObject, blendMode:BlendMode):Bool
+	{
+		var operatorMode = switch (blendMode)
+		{
+			case ADD, MULTIPLY, SCREEN, DIFFERENCE, LIGHTEN, DARKEN, HARDLIGHT, OVERLAY: true;
+			default: false;
+		}
+		if (!operatorMode) return false;
+		var children = displayObject.__children;
+		if (children == null || children.length == 0) return false;
+		var graphics = displayObject.__graphics;
+		return children.length > 1 || (graphics != null && graphics.__commands.length > 0);
+	}
+
+	/**
+		Renders a container into a group clipped to its bounds and paints the group with
+		the mode's Cairo operator (see __needsContainerGroup).
+	**/
+	@:noCompletion private function __renderOperatorGroup(object:IBitmapDrawable, blendMode:BlendMode):Void
+	{
+		#if lime
+		var previousGroupBlendMode = __groupBlendMode;
+		__layerDepth++;
+
+		cairo.save();
+		cairo.identityMatrix();
+
+		// clip to the container's bounds: the group is then allocated at that size
+		var displayObject:DisplayObject = cast object;
+		var bounds = Rectangle.__pool.get();
+		displayObject.__getFilterBounds(bounds, displayObject.__renderTransform);
+		if (__worldTransform != null) bounds.__transform(bounds, __worldTransform);
+		var x0 = Math.floor(bounds.x), y0 = Math.floor(bounds.y);
+		cairo.rectangle(x0, y0, Math.ceil(bounds.right) - x0, Math.ceil(bounds.bottom) - y0);
+		cairo.clip();
+		Rectangle.__pool.release(bounds);
+
+		cairo.pushGroupWithContent(CairoContent.COLOR_ALPHA);
+		__groupBlendMode = blendMode;
+		__blendMode = null;
+		__renderDrawableDirect(object);
+		__groupBlendMode = previousGroupBlendMode;
+
+		cairo.identityMatrix();
+		cairo.popGroupToSource();
+		__setBlendModeCairo(cairo, blendMode);
+		cairo.paint();
+
+		cairo.restore();
+		__blendMode = null; // the operator is set again by the next __setBlendMode
+		__layerDepth--;
+		#end
 	}
 
 	#if lime
@@ -461,6 +529,7 @@ class CairoRenderer extends DisplayObjectRenderer
 	@:noCompletion private override function __setBlendMode(value:BlendMode):Void
 	{
 		if (__overrideBlendMode != null) value = __overrideBlendMode;
+		if (value == __groupBlendMode) value = NORMAL;
 		if (__blendMode == value) return;
 
 		__blendMode = value;
