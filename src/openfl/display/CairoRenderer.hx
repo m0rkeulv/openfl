@@ -325,6 +325,15 @@ class CairoRenderer extends DisplayObjectRenderer
 	**/
 	@:noCompletion private function __compositeInvert(destination:CairoSurface, objectPattern:CairoPattern):Void
 	{
+		if (__backdropIsOpaque())
+		{
+			// in place: nothing to preserve, no copy
+			cairo.setSourceRGB(1, 1, 1);
+			cairo.setOperator(CairoOperator.DIFFERENCE);
+			cairo.mask(objectPattern);
+			return;
+		}
+
 		cairo.pushGroupWithContent(CairoContent.COLOR_ALPHA);
 		cairo.setSourceSurface(destination, 0, 0);
 		cairo.setOperator(CairoOperator.SOURCE);
@@ -361,6 +370,17 @@ class CairoRenderer extends DisplayObjectRenderer
 	**/
 	@:noCompletion private function __compositeSubtract(destination:CairoSurface, objectPattern:CairoPattern):Void
 	{
+		if (__backdropIsOpaque())
+		{
+			// in place: nothing to preserve, no copy
+			cairo.source = objectPattern;
+			cairo.setOperator(CairoOperator.LIGHTEN);
+			cairo.paint();
+			cairo.setOperator(CairoOperator.DIFFERENCE);
+			cairo.paint();
+			return;
+		}
+
 		cairo.pushGroupWithContent(CairoContent.COLOR_ALPHA);
 		cairo.setSourceSurface(destination, 0, 0);
 		cairo.setOperator(CairoOperator.SOURCE);
