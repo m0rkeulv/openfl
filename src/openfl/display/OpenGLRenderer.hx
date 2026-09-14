@@ -920,6 +920,16 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		}
 	}
 
+	/**
+		True when the current target is the opaque stage itself: not a LAYER group, a
+		transparent stage or a bitmap. Groups reset the cached blend mode, so a mode set
+		here is not reused at another depth.
+	**/
+	@:noCompletion private inline function __backdropIsOpaque():Bool
+	{
+		return __layerDepth == 0 && __stage != null && !__stage.__transparent;
+	}
+
 	@:noCompletion private static function __blendGroupMode(blendMode:BlendMode):Int
 	{
 		return switch (blendMode)
@@ -1413,12 +1423,16 @@ class OpenGLRenderer extends DisplayObjectRenderer
 				__context3D.__setGLBlendEquation(__gl.FUNC_REVERSE_SUBTRACT, __gl.FUNC_ADD);
 
 			// ERASE and ALPHA: the backdrop times one minus the object's alpha / times the
-			// object's alpha; on an opaque target the cut out pixels go black, as in Flash
+			// object's alpha. Flash keeps the stage opaque, so the cut out pixels go black:
+			// on the stage the framebuffer alpha is left alone (a WebGL canvas has one and
+			// would show the page through); inside a LAYER the alpha is cut as well
 			case ERASE:
-				__context3D.setBlendFactors(ZERO, ONE_MINUS_SOURCE_ALPHA);
+				if (__backdropIsOpaque()) __context3D.setBlendFactorsSeparate(ZERO, ONE_MINUS_SOURCE_ALPHA, ZERO, ONE);
+				else __context3D.setBlendFactors(ZERO, ONE_MINUS_SOURCE_ALPHA);
 
 			case ALPHA:
-				__context3D.setBlendFactors(ZERO, SOURCE_ALPHA);
+				if (__backdropIsOpaque()) __context3D.setBlendFactorsSeparate(ZERO, SOURCE_ALPHA, ZERO, ONE);
+				else __context3D.setBlendFactors(ZERO, SOURCE_ALPHA);
 
 			// DIFFERENCE, INVERT, DARKEN, LIGHTEN, HARDLIGHT, OVERLAY and LAYER need the
 			// backdrop as a shader input: composed by __renderGroup

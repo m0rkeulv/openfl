@@ -299,14 +299,22 @@ class CairoRenderer extends DisplayObjectRenderer
 		ALPHA and ERASE: DEST_IN / DEST_OUT through the object, within the clip to
 		the object's bounds set by __renderBlendGroup (DEST_IN is unbounded: it
 		clears everything outside the source). Inside a LAYER group that cuts the
-		layer; on an opaque surface such as the stage the cut out pixels go black,
-		which is what Flash does too.
+		layer; on the opaque stage the cut out pixels go black, which is what Flash
+		does too.
 	**/
 	@:noCompletion private function __compositeAlphaErase(objectPattern:CairoPattern, blendMode:BlendMode):Void
 	{
 		cairo.source = objectPattern;
 		cairo.setOperator(blendMode == ERASE ? CairoOperator.DEST_OUT : CairoOperator.DEST_IN);
 		cairo.paint();
+
+		if (__backdropIsOpaque())
+		{
+			// Flash keeps the stage opaque: black behind the cut out pixels
+			cairo.setSourceRGB(0, 0, 0);
+			cairo.setOperator(CairoOperator.DEST_OVER);
+			cairo.paint();
+		}
 	}
 
 	/**
@@ -367,6 +375,16 @@ class CairoRenderer extends DisplayObjectRenderer
 		cairo.popGroupToSource();
 		cairo.setOperator(CairoOperator.ATOP);
 		cairo.paint();
+	}
+
+	/**
+		True when the current target is the opaque stage surface itself: not a LAYER
+		group, a transparent stage or a bitmap. The composites can then work in place,
+		since there is no destination alpha to preserve.
+	**/
+	@:noCompletion private inline function __backdropIsOpaque():Bool
+	{
+		return __layerDepth == 0 && __stage != null && !__stage.__transparent;
 	}
 	#end
 

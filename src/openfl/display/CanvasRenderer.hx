@@ -379,8 +379,8 @@ class CanvasRenderer extends DisplayObjectRenderer
 	/**
 		ALPHA and ERASE: destination-in / destination-out through the object. Both
 		operations are unbounded (they touch the whole canvas), hence the clip to the
-		group's bounds. Inside a LAYER group that cuts the layer; on an opaque surface
-		such as the stage the cut out pixels go black, as in Flash.
+		group's bounds. Inside a LAYER group that cuts the layer; on the opaque stage
+		the cut out pixels go black, as in Flash.
 	**/
 	@:noCompletion private function __compositeAlphaErase(object:js.html.CanvasElement, x0:Int, y0:Int, width:Int, height:Int, blendMode:BlendMode):Void
 	{
@@ -389,6 +389,14 @@ class CanvasRenderer extends DisplayObjectRenderer
 		context.clip();
 		context.globalCompositeOperation = (blendMode == ERASE) ? "destination-out" : "destination-in";
 		context.drawImage(object, 0, 0, width, height, x0, y0, width, height);
+
+		if (__backdropIsOpaque())
+		{
+			// Flash keeps the stage opaque: black behind the cut out pixels, not the page
+			context.globalCompositeOperation = "destination-over";
+			context.fillStyle = "#000000";
+			context.fillRect(x0, y0, width, height);
+		}
 	}
 
 	/**
