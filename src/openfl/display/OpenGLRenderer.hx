@@ -5,6 +5,7 @@ import openfl.display._internal.Context3DBitmap;
 import openfl.display._internal.Context3DBitmapData;
 import openfl.display._internal.Context3DDisplayObject;
 import openfl.display._internal.Context3DDisplayObjectContainer;
+import openfl.display._internal.CoverageDisplayShader;
 import openfl.display._internal.Context3DGraphics;
 import openfl.display._internal.Context3DMaskShader;
 import openfl.display._internal.Context3DSimpleButton;
@@ -73,6 +74,7 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	public var gl:#if lime WebGLRenderContext #else Dynamic #end;
 
 	@:noCompletion private static var __staticDefaultDisplayShader:DisplayObjectShader;
+	@:noCompletion private static var __staticCoverageDisplayShader:CoverageDisplayShader;
 	@:noCompletion private static var __staticDefaultGraphicsShader:GraphicsShader;
 	@:noCompletion private static var __staticMaskShader:Context3DMaskShader;
 
@@ -84,6 +86,7 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	@:noCompletion private var __currentShader:Shader;
 	@:noCompletion private var __currentShaderBuffer:ShaderBuffer;
 	@:noCompletion private var __defaultDisplayShader:DisplayObjectShader;
+	@:noCompletion private var __coverageDisplayShader:CoverageDisplayShader;
 	@:noCompletion private var __defaultGraphicsShader:GraphicsShader;
 	@:noCompletion private var __defaultRenderTarget:BitmapData;
 	@:noCompletion private var __defaultShader:Shader;
@@ -177,10 +180,12 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		__tempRect = new Rectangle();
 
 		if (__staticDefaultDisplayShader == null) __staticDefaultDisplayShader = new DisplayObjectShader();
+		if (__staticCoverageDisplayShader == null) __staticCoverageDisplayShader = new CoverageDisplayShader();
 		if (__staticDefaultGraphicsShader == null) __staticDefaultGraphicsShader = new GraphicsShader();
 		if (__staticMaskShader == null) __staticMaskShader = new Context3DMaskShader();
 
 		__defaultDisplayShader = __staticDefaultDisplayShader;
+		__coverageDisplayShader = __staticCoverageDisplayShader;
 		__defaultGraphicsShader = __staticDefaultGraphicsShader;
 		__defaultShader = __defaultDisplayShader;
 
@@ -572,6 +577,16 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		return __defaultShader;
 	}
 
+	/**
+		The display shader for a shape's texture: the default one, or CoverageDisplayShader
+		under ALPHA so that the pixels the shape does not cover keep the backdrop.
+	**/
+	@:noCompletion private function __initShapeShader(shader:Shader):Shader
+	{
+		if (shader == null && __blendMode == ALPHA) return __initShader(__coverageDisplayShader);
+		return __initDisplayShader(shader);
+	}
+
 	@:noCompletion private function __initDisplayShader(shader:Shader):Shader
 	{
 		if (shader != null)
@@ -906,8 +921,9 @@ class OpenGLRenderer extends DisplayObjectRenderer
 			if (__blendGroupDepth == 0)
 			{
 				var blendMode = __overrideBlendMode != null ? __overrideBlendMode : displayObject.__worldBlendMode;
+				if (blendMode == __groupBlendMode) blendMode = NORMAL;
 
-				if (__needsBlendGroup(blendMode))
+				if (__needsBlendGroup(blendMode) || __needsWholeObjectGroup(displayObject, blendMode))
 				{
 					__renderGroup(displayObject, blendMode);
 					return;
@@ -916,6 +932,42 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		}
 
 		__renderDrawableDirect(object);
+	}
+
+	/**
+		Flash blends an object as a whole. A Bitmap or a cached texture is one quad, so the
+		blend factors give that directly; a container with several pieces, or graphics the
+		direct path draws as several fills or a batch of quads, would blend piece by piece
+		(a second fill adds onto the first instead of covering it). Those are composed like
+		a LAYER first and the composite is drawn with the mode.
+	**/
+	@:noCompletion private function __needsWholeObjectGroup(displayObject:DisplayObject, blendMode:BlendMode):Bool
+	{
+		if (blendMode == NORMAL || blendMode == LAYER || blendMode == null) return false;
+
+		var pieces = 0;
+		var graphics = displayObject.__graphics;
+		if (graphics != null && graphics.__commands.length > 0)
+		{
+			if (graphics.__bitmap != null)
+			{
+				pieces = 1;
+			}
+			else
+			{
+				for (type in graphics.__commands.types)
+				{
+					switch (type)
+					{
+						case BEGIN_FILL, BEGIN_BITMAP_FILL, BEGIN_GRADIENT_FILL, BEGIN_SHADER_FILL: pieces++;
+						case DRAW_QUADS, DRAW_TRIANGLES: pieces += 2;
+						default:
+					}
+				}
+			}
+		}
+		if (displayObject.__children != null) pieces += displayObject.__children.length;
+		return pieces > 1;
 	}
 
 	@:noCompletion private function __needsBlendGroup(blendMode:BlendMode):Bool
@@ -950,10 +1002,11 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		Renders `displayObject` into a scratchBuffer buffer (a texture) covering its bounds and composes the
-		result onto the current target: LAYER as a normal source-over of the group, the
-		other modes through BlendModeShader with a copy of the backdrop, which gives the
-		Flash result (blend on straight colour, mixed in by the object's alpha).
+		Renders `displayObject` into a scratch buffer (a texture) covering its bounds and composes the
+		result onto the current target: LAYER and the fixed-function modes as one draw of the
+		group with the mode's blend factors, the other modes through BlendModeShader with a
+		copy of the backdrop, which gives the Flash result (blend on straight colour, mixed
+		in by the object's alpha).
 	**/
 	@:noCompletion private function __renderGroup(displayObject:DisplayObject, blendMode:BlendMode):Void
 	{
@@ -968,19 +1021,20 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		var level = __groupDepth * 2;
 		var scratchBuffer = __getGroupScratchBuffer(level, width, height);
 		var backdrop = __groupScratchBuffers[level + 1];
-		if (blendMode != LAYER) __copyBackdrop(backdrop, x0, y0, width, height);
+		var shaded = __needsBlendGroup(blendMode);
+		if (shaded) __copyBackdrop(backdrop, x0, y0, width, height);
 
 		__renderIntoGroup(displayObject, scratchBuffer, x0, y0, width, height, blendMode);
 
 		scratchBuffer.__setUVRect(__context3D, 0, 0, width, height);
 
-		if (blendMode == LAYER)
+		if (shaded)
 		{
-			__compositeLayer(scratchBuffer, displayObject, x0, y0);
+			__compositeBlend(scratchBuffer, backdrop, x0, y0, width, height, blendMode);
 		}
 		else
 		{
-			__compositeBlend(scratchBuffer, backdrop, x0, y0, width, height, blendMode);
+			__compositeLayer(scratchBuffer, displayObject, x0, y0, blendMode);
 		}
 	}
 
@@ -1020,18 +1074,20 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		the projection moves the group origin to (x0, y0) so objects keep their render
 		transforms, and the scissor rectangles follow through __groupOffsetX/Y. Ancestor
 		masks and clips are suspended (they apply to the composite) and the group gets
-		its own clip stack and stencil reference. Inside a LAYER the layer's alpha is
-		divided out of the children (it applies once, on the composite); inside the
-		other groups the children's blend modes are forced to NORMAL. Every piece of
-		renderer and context state is put back afterwards.
+		its own clip stack and stencil reference. Inside a LAYER, or a whole-object group
+		of a fixed-function mode, the object's alpha is divided out of the children (it
+		applies once, on the composite) and children that only inherit the object's mode
+		render NORMAL; inside the shader groups the children's blend modes are forced to
+		NORMAL. Every piece of renderer and context state is put back afterwards.
 	**/
 	@:noCompletion private function __renderIntoGroup(displayObject:DisplayObject, scratchBuffer:BitmapData, x0:Int, y0:Int, width:Int, height:Int,
 			blendMode:BlendMode):Void
 	{
 		var context = __context3D;
+		var layer = !__needsBlendGroup(blendMode);
 
 		__groupDepth++;
-		if (blendMode == LAYER) __layerDepth++; else __blendGroupDepth++;
+		if (layer) __layerDepth++; else __blendGroupDepth++;
 
 		var cacheRTT = context.__state.renderToTexture;
 		var cacheRTTDepthStencil = context.__state.renderToTextureDepthStencil;
@@ -1044,6 +1100,7 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		var cacheClipRects = __clipRects, cacheNumClipRects = __numClipRects;
 		var cacheStencilReference = __stencilReference;
 		var cacheOverrideBlendMode = __overrideBlendMode;
+		var cacheGroupBlendMode = __groupBlendMode;
 		var cacheWorldAlpha = __worldAlpha;
 
 		__suspendClipAndMask();
@@ -1067,9 +1124,10 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		__displayHeight = scratchBuffer.height;
 		__projection.createOrtho(x0, x0 + scratchBuffer.width, y0, y0 + scratchBuffer.height, -1000, 1000);
 
-		if (blendMode == LAYER)
+		if (layer)
 		{
 			__worldAlpha = 1 / displayObject.__worldAlpha;
+			if (blendMode != LAYER) __groupBlendMode = blendMode;
 		}
 		else
 		{
@@ -1082,6 +1140,7 @@ class OpenGLRenderer extends DisplayObjectRenderer
 
 		__worldAlpha = cacheWorldAlpha;
 		__overrideBlendMode = cacheOverrideBlendMode;
+		__groupBlendMode = cacheGroupBlendMode;
 		__blendMode = null;
 
 		if (cacheRTT != null)
@@ -1106,16 +1165,20 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		__resumeClipAndMask(this);
 
 		__groupDepth--;
-		if (blendMode == LAYER) __layerDepth--; else __blendGroupDepth--;
+		if (layer) __layerDepth--; else __blendGroupDepth--;
 	}
 
 	/**
-		LAYER: the group goes on as one object, source-over with the layer's alpha.
+		LAYER and the fixed-function modes: the group goes on as one object with the mode's
+		blend factors (LAYER: source-over) and the object's alpha. A group of a shape alone
+		keeps the shape's ALPHA coverage rule (__initShapeShader); a container's transparent
+		pixels count as covered, as a Bitmap's do.
 	**/
-	@:noCompletion private function __compositeLayer(scratchBuffer:BitmapData, displayObject:DisplayObject, x0:Int, y0:Int):Void
+	@:noCompletion private function __compositeLayer(scratchBuffer:BitmapData, displayObject:DisplayObject, x0:Int, y0:Int, blendMode:BlendMode):Void
 	{
-		__setBlendMode(NORMAL);
-		__drawGroupScratchBuffer(scratchBuffer, x0, y0, __defaultDisplayShader, displayObject.__worldAlpha);
+		__setBlendMode(blendMode);
+		var shape = displayObject.__children == null || displayObject.__children.length == 0;
+		__drawGroupScratchBuffer(scratchBuffer, x0, y0, shape ? __initShapeShader(null) : __defaultDisplayShader, displayObject.__worldAlpha);
 	}
 
 	/**
@@ -1408,6 +1471,7 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	@:noCompletion private override function __setBlendMode(value:BlendMode):Void
 	{
 		if (__overrideBlendMode != null) value = __overrideBlendMode;
+		if (value == __groupBlendMode) value = NORMAL;
 		if (__blendMode == value) return;
 
 		__blendMode = value;

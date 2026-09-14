@@ -42,7 +42,7 @@ class Context3DShape
 			{
 				var context = renderer.__context3D;
 
-				var shader = renderer.__initDisplayShader(cast shape.__worldShader);
+				var shader = renderer.__initShapeShader(cast shape.__worldShader);
 				renderer.setShader(shader);
 				renderer.applyBitmapData(graphics.__bitmap, true);
 

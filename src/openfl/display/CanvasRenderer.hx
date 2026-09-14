@@ -26,6 +26,7 @@ import lime.graphics.Canvas2DRenderContext;
 @:noDebug
 #end
 @:access(openfl.display.DisplayObject)
+@:access(openfl.display.Graphics)
 @:access(openfl.geom.Matrix)
 @:access(openfl.geom.Rectangle)
 @:access(openfl.display.IBitmapDrawable)
@@ -220,6 +221,7 @@ class CanvasRenderer extends DisplayObjectRenderer
 			if (__blendGroupDepth == 0)
 			{
 				var blendMode = __overrideBlendMode != null ? __overrideBlendMode : displayObject.__worldBlendMode;
+				if (blendMode == __groupBlendMode) blendMode = NORMAL;
 
 				switch (blendMode)
 				{
@@ -227,6 +229,11 @@ class CanvasRenderer extends DisplayObjectRenderer
 						__renderGroup(displayObject, blendMode);
 						return;
 					default:
+						if (__needsContainerGroup(displayObject, blendMode))
+						{
+							__renderGroup(displayObject, blendMode);
+							return;
+						}
 				}
 			}
 		}
@@ -235,10 +242,33 @@ class CanvasRenderer extends DisplayObjectRenderer
 		__renderDrawableDirect(object);
 	}
 
+	/**
+		Flash blends an object as a whole: a container of several pieces under one of the
+		operator modes would otherwise have each child blended on its own (a child over a
+		sibling adds twice). Such a container is rendered into a group first, children
+		that only inherit its mode drawing NORMAL, and the group is composited with the
+		mode. A shape is already one piece here: its graphics are rendered to a surface
+		before drawing.
+	**/
+	@:noCompletion private function __needsContainerGroup(displayObject:DisplayObject, blendMode:BlendMode):Bool
+	{
+		var operatorMode = switch (blendMode)
+		{
+			case ADD, MULTIPLY, SCREEN, DIFFERENCE, LIGHTEN, DARKEN, HARDLIGHT, OVERLAY: true;
+			default: false;
+		}
+		if (!operatorMode) return false;
+		var children = displayObject.__children;
+		if (children == null || children.length == 0) return false;
+		var graphics = displayObject.__graphics;
+		return children.length > 1 || (graphics != null && graphics.__commands.length > 0);
+	}
+
 	#if (js && html5)
 	/**
 		Renders `displayObject` into a group canvas covering its bounds and composes it onto
-		the current context: LAYER as a source-over of the group, ERASE and ALPHA through
+		the current context: LAYER and the operator modes as one drawImage of the group with
+		the mode's composite operation, ERASE and ALPHA through
 		destination-out / destination-in (unbounded operations, so clipped to the bounds),
 		INVERT and SUBTRACT in place on the opaque stage or else as pixel loops on the
 		region, keeping the backdrop alpha.
@@ -278,7 +308,7 @@ class CanvasRenderer extends DisplayObjectRenderer
 			case SUBTRACT:
 				__compositeSubtract(object, x0, y0, width, height);
 			default:
-				__compositeLayer(object, displayObject, x0, y0, width, height);
+				__compositeLayer(object, displayObject, x0, y0, width, height, blendMode);
 		}
 
 		context.restore();
@@ -327,19 +357,27 @@ class CanvasRenderer extends DisplayObjectRenderer
 	/**
 		Renders the object into the group with the renderer redirected to it: the
 		world transform moves the group origin to (x0, y0) so objects keep their render
-		transforms. Inside a LAYER the layer's alpha is divided out of the children (it
-		applies once, on the composite); inside the other groups the children's blend
-		modes are forced to NORMAL. Every piece of renderer state is put back afterwards.
+		transforms. Inside a LAYER, or a container group of an operator mode, the object's
+		alpha is divided out of the children (it applies once, on the composite) and
+		children that only inherit the object's mode render NORMAL; inside the other groups
+		the children's blend modes are forced to NORMAL. Every piece of renderer state is
+		put back afterwards.
 	**/
 	@:noCompletion private function __renderIntoGroup(displayObject:DisplayObject, groupContext:js.html.CanvasRenderingContext2D, x0:Int, y0:Int,
 			blendMode:BlendMode):Void
 	{
+		var layer = switch (blendMode)
+		{
+			case SUBTRACT, INVERT, ERASE, ALPHA: false;
+			default: true;
+		}
 		__groupDepth++;
-		if (blendMode == LAYER) __layerDepth++; else __blendGroupDepth++;
+		if (layer) __layerDepth++; else __blendGroupDepth++;
 
 		var cacheContext = context;
 		var cacheWorldTransform = __worldTransform;
 		var cacheOverrideBlendMode = __overrideBlendMode;
+		var cacheGroupBlendMode = __groupBlendMode;
 		var cacheWorldAlpha = __worldAlpha;
 
 		var worldTransform = Matrix.__pool.get();
@@ -349,9 +387,10 @@ class CanvasRenderer extends DisplayObjectRenderer
 		__worldTransform = worldTransform;
 		context = groupContext;
 
-		if (blendMode == LAYER)
+		if (layer)
 		{
 			__worldAlpha = 1 / displayObject.__worldAlpha;
+			if (blendMode != LAYER) __groupBlendMode = blendMode;
 		}
 		else
 		{
@@ -368,17 +407,19 @@ class CanvasRenderer extends DisplayObjectRenderer
 		context = cacheContext;
 		__worldAlpha = cacheWorldAlpha;
 		__overrideBlendMode = cacheOverrideBlendMode;
+		__groupBlendMode = cacheGroupBlendMode;
 		__blendMode = null;
 		__groupDepth--;
-		if (blendMode == LAYER) __layerDepth--; else __blendGroupDepth--;
+		if (layer) __layerDepth--; else __blendGroupDepth--;
 	}
 
 	/**
 		LAYER: the group goes on as one object with the layer's alpha.
 	**/
-	@:noCompletion private function __compositeLayer(object:js.html.CanvasElement, displayObject:DisplayObject, x0:Int, y0:Int, width:Int, height:Int):Void
+	@:noCompletion private function __compositeLayer(object:js.html.CanvasElement, displayObject:DisplayObject, x0:Int, y0:Int, width:Int, height:Int,
+			blendMode:BlendMode):Void
 	{
-		context.globalCompositeOperation = "source-over";
+		__setBlendModeContext(context, blendMode); // LAYER: source-over
 		context.globalAlpha = __getAlpha(displayObject.__worldAlpha);
 		context.drawImage(object, 0, 0, width, height, x0, y0, width, height);
 	}
@@ -599,6 +640,7 @@ class CanvasRenderer extends DisplayObjectRenderer
 	@:noCompletion private override function __setBlendMode(value:BlendMode):Void
 	{
 		if (__overrideBlendMode != null) value = __overrideBlendMode;
+		if (value == __groupBlendMode) value = NORMAL;
 		if (__blendMode == value) return;
 
 		__blendMode = value;
