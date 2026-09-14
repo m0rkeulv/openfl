@@ -32,23 +32,15 @@ class BlendModeShader extends BitmapFilterShader
 			float da = dst.a;
 			vec3 s = sa > 0.0 ? src.rgb / sa : vec3(0.0);
 			vec3 d = da > 0.0 ? dst.rgb / da : vec3(0.0);
-			vec4 result;
+			vec3 b;
+			if (uMode == 0) b = abs(d - s);
+			else if (uMode == 2) b = min(d, s);
+			else if (uMode == 3) b = max(d, s);
+			else if (uMode == 4) b = hardLight(d, s);
+			else b = hardLight(s, d);
 
-			if (uMode == 1) {
-				// INVERT: the backdrop is inverted through the object's alpha, the colour is not used
-				result = vec4(mix(dst.rgb, vec3(da) - dst.rgb, sa), da);
-			} else {
-				vec3 b;
-				if (uMode == 0) b = abs(d - s);
-				else if (uMode == 2) b = min(d, s);
-				else if (uMode == 3) b = max(d, s);
-				else if (uMode == 4) b = hardLight(d, s);
-				else b = hardLight(s, d);
-				// separable blend over a possibly transparent backdrop (PDF compositing)
-				result = vec4(src.rgb * (1.0 - da) + dst.rgb * (1.0 - sa) + sa * da * b, sa + da - sa * da);
-			}
-
-			gl_FragColor = result;
+			// separable blend over a possibly transparent backdrop (PDF compositing)
+			gl_FragColor = vec4(src.rgb * (1.0 - da) + dst.rgb * (1.0 - sa) + sa * da * b, sa + da - sa * da);
 		}")
 	public function new()
 	{

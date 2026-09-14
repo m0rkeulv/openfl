@@ -118,6 +118,7 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	@:noCompletion private static var __groupDepth:Int = 0;
 	@:noCompletion private static var __groupScratchBuffers:Array<BitmapData> = [];
 	@:noCompletion private static var __staticBlendShader:BlendModeShader;
+	@:noCompletion private static var __invertSilhouette:ColorTransform = new ColorTransform(0, 0, 0, 1, 255, 255, 255, 0);
 
 	@:noCompletion private function new(context:Context3D, defaultRenderTarget:BitmapData = null)
 	{
@@ -263,6 +264,12 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	**/
 	public function applyColorTransform(colorTransform:ColorTransform):Void
 	{
+		if (__blendMode == INVERT)
+		{
+			// INVERT only uses the object's alpha: draw it as a white silhouette (see __setBlendMode)
+			colorTransform = __invertSilhouette;
+		}
+
 		var enabled = (colorTransform != null && !colorTransform.__isDefault(true));
 		applyHasColorTransform(enabled);
 
@@ -915,7 +922,7 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	{
 		return switch (blendMode)
 		{
-			case DIFFERENCE, INVERT, DARKEN, LIGHTEN, HARDLIGHT, OVERLAY: true;
+			case DIFFERENCE, DARKEN, LIGHTEN, HARDLIGHT, OVERLAY: true;
 			default: false;
 		}
 	}
@@ -934,7 +941,6 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	{
 		return switch (blendMode)
 		{
-			case INVERT: 1;
 			case DARKEN: 2;
 			case LIGHTEN: 3;
 			case HARDLIGHT: 4;
@@ -1434,8 +1440,14 @@ class OpenGLRenderer extends DisplayObjectRenderer
 				if (__backdropIsOpaque()) __context3D.setBlendFactorsSeparate(ZERO, SOURCE_ALPHA, ZERO, ONE);
 				else __context3D.setBlendFactors(ZERO, SOURCE_ALPHA);
 
-			// DIFFERENCE, INVERT, DARKEN, LIGHTEN, HARDLIGHT, OVERLAY and LAYER need the
-			// backdrop as a shader input: composed by __renderGroup
+			case INVERT:
+				// Flash: d * (1 - 2a) + a = a * (1 - d) + d * (1 - a). With the object drawn as a
+				// white silhouette (a, a, a, a) (applyColorTransform) that is one blend:
+				// source * (1 - destination colour) + destination * (1 - source alpha)
+				__context3D.setBlendFactorsSeparate(ONE_MINUS_DESTINATION_COLOR, ONE_MINUS_SOURCE_ALPHA, ONE, ONE_MINUS_SOURCE_ALPHA);
+
+			// DIFFERENCE, DARKEN, LIGHTEN, HARDLIGHT, OVERLAY and LAYER need the backdrop as a
+			// shader input: composed by __renderGroup
 
 			default:
 				__context3D.setBlendFactors(ONE, ONE_MINUS_SOURCE_ALPHA);
