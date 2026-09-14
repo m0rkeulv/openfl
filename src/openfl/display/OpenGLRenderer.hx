@@ -5,6 +5,7 @@ import openfl.display._internal.Context3DBitmap;
 import openfl.display._internal.Context3DBitmapData;
 import openfl.display._internal.Context3DDisplayObject;
 import openfl.display._internal.Context3DDisplayObjectContainer;
+import openfl.display._internal.CoverageDisplayShader;
 import openfl.display._internal.Context3DGraphics;
 import openfl.display._internal.Context3DMaskShader;
 import openfl.display._internal.Context3DSimpleButton;
@@ -73,6 +74,7 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	public var gl:#if lime WebGLRenderContext #else Dynamic #end;
 
 	@:noCompletion private static var __staticDefaultDisplayShader:DisplayObjectShader;
+	@:noCompletion private static var __staticCoverageDisplayShader:CoverageDisplayShader;
 	@:noCompletion private static var __staticDefaultGraphicsShader:GraphicsShader;
 	@:noCompletion private static var __staticMaskShader:Context3DMaskShader;
 
@@ -84,6 +86,7 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	@:noCompletion private var __currentShader:Shader;
 	@:noCompletion private var __currentShaderBuffer:ShaderBuffer;
 	@:noCompletion private var __defaultDisplayShader:DisplayObjectShader;
+	@:noCompletion private var __coverageDisplayShader:CoverageDisplayShader;
 	@:noCompletion private var __defaultGraphicsShader:GraphicsShader;
 	@:noCompletion private var __defaultRenderTarget:BitmapData;
 	@:noCompletion private var __defaultShader:Shader;
@@ -177,10 +180,12 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		__tempRect = new Rectangle();
 
 		if (__staticDefaultDisplayShader == null) __staticDefaultDisplayShader = new DisplayObjectShader();
+		if (__staticCoverageDisplayShader == null) __staticCoverageDisplayShader = new CoverageDisplayShader();
 		if (__staticDefaultGraphicsShader == null) __staticDefaultGraphicsShader = new GraphicsShader();
 		if (__staticMaskShader == null) __staticMaskShader = new Context3DMaskShader();
 
 		__defaultDisplayShader = __staticDefaultDisplayShader;
+		__coverageDisplayShader = __staticCoverageDisplayShader;
 		__defaultGraphicsShader = __staticDefaultGraphicsShader;
 		__defaultShader = __defaultDisplayShader;
 
@@ -570,6 +575,16 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		}
 
 		return __defaultShader;
+	}
+
+	/**
+		The display shader for a shape's texture: the default one, or CoverageDisplayShader
+		under ALPHA so that the pixels the shape does not cover keep the backdrop.
+	**/
+	@:noCompletion private function __initShapeShader(shader:Shader):Shader
+	{
+		if (shader == null && __blendMode == ALPHA) return __initShader(__coverageDisplayShader);
+		return __initDisplayShader(shader);
 	}
 
 	@:noCompletion private function __initDisplayShader(shader:Shader):Shader
@@ -1155,12 +1170,15 @@ class OpenGLRenderer extends DisplayObjectRenderer
 
 	/**
 		LAYER and the fixed-function modes: the group goes on as one object with the mode's
-		blend factors (LAYER: source-over) and the object's alpha.
+		blend factors (LAYER: source-over) and the object's alpha. A group of a shape alone
+		keeps the shape's ALPHA coverage rule (__initShapeShader); a container's transparent
+		pixels count as covered, as a Bitmap's do.
 	**/
 	@:noCompletion private function __compositeLayer(scratchBuffer:BitmapData, displayObject:DisplayObject, x0:Int, y0:Int, blendMode:BlendMode):Void
 	{
 		__setBlendMode(blendMode);
-		__drawGroupScratchBuffer(scratchBuffer, x0, y0, __defaultDisplayShader, displayObject.__worldAlpha);
+		var shape = displayObject.__children == null || displayObject.__children.length == 0;
+		__drawGroupScratchBuffer(scratchBuffer, x0, y0, shape ? __initShapeShader(null) : __defaultDisplayShader, displayObject.__worldAlpha);
 	}
 
 	/**
