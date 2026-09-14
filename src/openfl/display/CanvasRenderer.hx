@@ -47,8 +47,15 @@ class CanvasRenderer extends DisplayObjectRenderer
 	@:noCompletion private var __blendGroupDepth:Int = 0;
 	@:noCompletion private var __layerDepth:Int = 0;
 	#if (js && html5)
-	// group canvases (object, backdrop copy) per nesting level, shared by every renderer
-	@:noCompletion private static var __groupCanvases:Array<js.html.CanvasElement> = [];
+	// group canvases per nesting level, shared by every renderer. Browsers keep canvases below
+	// about 128x128 pixels in CPU memory and accelerate larger ones: drawing from a small
+	// canvas after modifying it costs a few microseconds, from an accelerated one about 80
+	// plus its area (it waits for the GPU), and onto an accelerated target the small source
+	// costs by its own area. So objects up to 120 pixels get a canvas of about their size
+	// (16 pixel steps, at most 64 per level), larger objects share one canvas that grows
+	@:noCompletion private static var __groupCanvases:Array<Array<js.html.CanvasElement>> = [];
+	@:noCompletion private static inline var SMALL_GROUP_CANVAS = 120;
+	@:noCompletion private static inline var SMALL_GROUP_STEP = 16;
 	@:noCompletion private static var __groupDepth:Int = 0;
 	#end
 
@@ -233,8 +240,8 @@ class CanvasRenderer extends DisplayObjectRenderer
 		Renders `displayObject` into a group canvas covering its bounds and composes it onto
 		the current context: LAYER as a source-over of the group, ERASE and ALPHA through
 		destination-out / destination-in (unbounded operations, so clipped to the bounds),
-		INVERT and SUBTRACT in place on the opaque stage or else on a copy of the backdrop
-		that goes back with source-atop, keeping the backdrop alpha.
+		INVERT and SUBTRACT in place on the opaque stage or else as pixel loops on the
+		region, keeping the backdrop alpha.
 	**/
 	@:noCompletion private function __renderGroup(displayObject:DisplayObject, blendMode:BlendMode):Void
 	{
@@ -251,7 +258,7 @@ class CanvasRenderer extends DisplayObjectRenderer
 		Rectangle.__pool.release(bounds);
 		if (!visible) return;
 
-		var level = __groupDepth * 2;
+		var level = __groupDepth;
 		var object = __beginGroupCanvas(level, width, height);
 		__renderIntoGroup(displayObject, object.getContext2d(), x0, y0, blendMode);
 
@@ -267,9 +274,9 @@ class CanvasRenderer extends DisplayObjectRenderer
 			case ALPHA, ERASE:
 				__compositeAlphaErase(object, x0, y0, width, height, blendMode);
 			case INVERT:
-				__compositeInvert(object, level, x0, y0, width, height);
+				__compositeInvert(object, x0, y0, width, height);
 			case SUBTRACT:
-				__compositeSubtract(object, level, x0, y0, width, height);
+				__compositeSubtract(object, x0, y0, width, height);
 			default:
 				__compositeLayer(object, displayObject, x0, y0, width, height);
 		}
@@ -400,46 +407,59 @@ class CanvasRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		INVERT: a white silhouette of the object (source-in on the group canvas) is
-		differenced with a copy of the backdrop, (1 - a) * x + a * (1 - x) per
-		channel, and the copy goes back with source-atop so the backdrop keeps
-		its own alpha (nothing appears where it was transparent, as in Flash).
+		INVERT: (1 - a) * x + a * (1 - x) per channel through the object's alpha a, the
+		backdrop keeps its own alpha. On the opaque stage that is a white silhouette of
+		the object (source-in) drawn with difference. Elsewhere the backdrop may be
+		transparent, and drawing the target canvas into another canvas costs a snapshot of
+		its whole area, so the region is read back and computed directly instead.
 	**/
-	@:noCompletion private function __compositeInvert(object:js.html.CanvasElement, level:Int, x0:Int, y0:Int, width:Int, height:Int):Void
+	@:noCompletion private function __compositeInvert(object:js.html.CanvasElement, x0:Int, y0:Int, width:Int, height:Int):Void
 	{
-		var objectContext = object.getContext2d();
-		objectContext.globalCompositeOperation = "source-in";
-		objectContext.fillStyle = "#FFFFFF";
-		objectContext.fillRect(0, 0, width, height);
-
 		if (__backdropIsOpaque())
 		{
-			// in place: nothing to preserve, no copy
+			var objectContext = object.getContext2d();
+			objectContext.globalCompositeOperation = "source-in";
+			objectContext.fillStyle = "#FFFFFF";
+			objectContext.fillRect(0, 0, width, height);
+
 			context.globalCompositeOperation = "difference";
 			context.drawImage(object, 0, 0, width, height, x0, y0, width, height);
 			return;
 		}
 
-		var backdropContext = __copyBackdrop(level, x0, y0, width, height);
-		backdropContext.globalCompositeOperation = "difference";
-		backdropContext.drawImage(object, 0, 0, width, height, 0, 0, width, height);
+		var backdrop = context.getImageData(x0, y0, width, height);
+		var d = backdrop.data;
+		var o = object.getContext2d().getImageData(0, 0, width, height).data;
+		var n = width * height * 4;
+		var i = 0;
 
-		context.globalCompositeOperation = "source-atop";
-		context.drawImage(backdropContext.canvas, 0, 0, width, height, x0, y0, width, height);
+		while (i < n)
+		{
+			var a = o[i + 3] / 255;
+			if (a > 0)
+			{
+				d[i] = __clampByte(d[i] + (255 - 2 * d[i]) * a);
+				d[i + 1] = __clampByte(d[i + 1] + (255 - 2 * d[i + 1]) * a);
+				d[i + 2] = __clampByte(d[i + 2] + (255 - 2 * d[i + 2]) * a);
+			}
+			i += 4;
+		}
+
+		context.putImageData(backdrop, x0, y0);
 	}
 
 	/**
-		SUBTRACT: canvas has no subtract operation. On a copy of the backdrop x,
-		max(0, x - p) with the premultiplied object p is built as
-		invert(invert(x) + p): a white difference inverts, lighter adds the
-		object, a white difference inverts back. The copy goes back with
-		source-atop so the backdrop keeps its own alpha.
+		SUBTRACT: max(0, x - p) with the premultiplied object p, the backdrop keeps its
+		own alpha. Canvas has no subtract operation: on the opaque stage it is built in
+		place as invert(invert(x) + p), a white difference, lighter with the object, a
+		white difference. Elsewhere the backdrop may be transparent, and drawing the
+		target canvas into another canvas costs a snapshot of its whole area, so the
+		region is read back and computed directly instead.
 	**/
-	@:noCompletion private function __compositeSubtract(object:js.html.CanvasElement, level:Int, x0:Int, y0:Int, width:Int, height:Int):Void
+	@:noCompletion private function __compositeSubtract(object:js.html.CanvasElement, x0:Int, y0:Int, width:Int, height:Int):Void
 	{
 		if (__backdropIsOpaque())
 		{
-			// in place: nothing to preserve, no copy
 			context.fillStyle = "#FFFFFF";
 			context.globalCompositeOperation = "difference";
 			context.fillRect(x0, y0, width, height);
@@ -450,20 +470,33 @@ class CanvasRenderer extends DisplayObjectRenderer
 			return;
 		}
 
-		var backdropContext = __copyBackdrop(level, x0, y0, width, height);
-		backdropContext.fillStyle = "#FFFFFF";
+		var backdrop = context.getImageData(x0, y0, width, height);
+		var d = backdrop.data;
+		var o = object.getContext2d().getImageData(0, 0, width, height).data;
+		var n = width * height * 4;
+		var i = 0;
 
-		backdropContext.globalCompositeOperation = "difference";
-		backdropContext.fillRect(0, 0, width, height);
+		while (i < n)
+		{
+			var da = d[i + 3];
+			var sa = o[i + 3];
+			if (da > 0 && sa > 0)
+			{
+				// straight colours: (x * da - s * sa) / da = x - s * sa / da
+				var k = sa / da;
+				d[i] = __clampByte(d[i] - o[i] * k);
+				d[i + 1] = __clampByte(d[i + 1] - o[i + 1] * k);
+				d[i + 2] = __clampByte(d[i + 2] - o[i + 2] * k);
+			}
+			i += 4;
+		}
 
-		backdropContext.globalCompositeOperation = "lighter";
-		backdropContext.drawImage(object, 0, 0, width, height, 0, 0, width, height);
+		context.putImageData(backdrop, x0, y0);
+	}
 
-		backdropContext.globalCompositeOperation = "difference";
-		backdropContext.fillRect(0, 0, width, height);
-
-		context.globalCompositeOperation = "source-atop";
-		context.drawImage(backdropContext.canvas, 0, 0, width, height, x0, y0, width, height);
+	@:noCompletion private static inline function __clampByte(value:Float):Int
+	{
+		return value <= 0 ? 0 : (value >= 255 ? 255 : Std.int(value + 0.5));
 	}
 
 	/**
@@ -476,36 +509,38 @@ class CanvasRenderer extends DisplayObjectRenderer
 		return __layerDepth == 0 && __stage != null && !__stage.__transparent;
 	}
 
-	/**
-		Copies the group's region of the current target into the level's backdrop
-		canvas and returns that canvas' context, ready for compositing.
-	**/
-	@:noCompletion private function __copyBackdrop(level:Int, x0:Int, y0:Int, width:Int, height:Int):js.html.CanvasRenderingContext2D
-	{
-		var backdropCanvas = __getGroupCanvas(level + 1, width, height);
-		var backdropContext = backdropCanvas.getContext2d();
-		backdropContext.setTransform(1, 0, 0, 1, 0, 0);
-		backdropContext.globalAlpha = 1;
-		// clearRect + source-over rather than the "copy" operation, which clears the whole canvas
-		backdropContext.globalCompositeOperation = "source-over";
-		backdropContext.clearRect(0, 0, width, height);
-		backdropContext.drawImage(context.canvas, x0, y0, width, height, 0, 0, width, height);
-		return backdropContext;
-	}
-
 	@:noCompletion private static function __getGroupCanvas(level:Int, width:Int, height:Int):js.html.CanvasElement
 	{
-		var canvas = __groupCanvases[level];
+		var canvases = __groupCanvases[level];
+		if (canvases == null) __groupCanvases[level] = canvases = [];
 
+		// index 0: the large canvas; then one per (width, height) step for small objects
+		var index = 0, stepsX = 0, stepsY = 0;
+		if (width <= SMALL_GROUP_CANVAS && height <= SMALL_GROUP_CANVAS)
+		{
+			stepsX = Math.ceil(width / SMALL_GROUP_STEP);
+			stepsY = Math.ceil(height / SMALL_GROUP_STEP);
+			index = 1 + (stepsX - 1) * Math.ceil(SMALL_GROUP_CANVAS / SMALL_GROUP_STEP) + (stepsY - 1);
+		}
+
+		var canvas = canvases[index];
 		if (canvas == null)
 		{
 			canvas = js.Browser.document.createCanvasElement();
-			__groupCanvases[level] = canvas;
+			if (index > 0)
+			{
+				canvas.width = stepsX * SMALL_GROUP_STEP;
+				canvas.height = stepsY * SMALL_GROUP_STEP;
+			}
+			canvases[index] = canvas;
 		}
 
-		// grow only: a new size clears the canvas
-		if (canvas.width < width) canvas.width = width;
-		if (canvas.height < height) canvas.height = height;
+		if (index == 0)
+		{
+			// grow only: a new size clears the canvas
+			if (canvas.width < width) canvas.width = width;
+			if (canvas.height < height) canvas.height = height;
+		}
 
 		return canvas;
 	}
