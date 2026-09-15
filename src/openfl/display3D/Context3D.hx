@@ -534,6 +534,9 @@ import lime.math.Vector2;
 		else
 		{
 			__setGLScissorTest(false);
+			// keep the flush-level flag in step with the GL enable: the shared-target clear
+			// below restores the scissor from it
+			__contextState.scissorEnabled = false;
 		}
 
 		// a texture rendering into the shared multisampled target only uses its own
@@ -547,14 +550,11 @@ import lime.math.Vector2;
 		gl.clear(clearMask);
 		if (sharedTarget)
 		{
-			if (__contextState.scissorEnabled)
-			{
-				gl.scissor(Std.int(__contextState.scissorRectangle.x), Std.int(__contextState.scissorRectangle.y), Std.int(__contextState.scissorRectangle.width), Std.int(__contextState.scissorRectangle.height));
-			}
-			else
-			{
-				gl.disable(gl.SCISSOR_TEST);
-			}
+			// the clear used its own box: leave the enable as the flush cache has it and record
+			// the box, so the next flush sees the difference and puts the right one back (the
+			// html5 stage always draws with a scissor rectangle; a stale box clipped it all)
+			if (!__contextState.scissorEnabled) gl.disable(gl.SCISSOR_TEST);
+			__contextState.scissorRectangle.setTo(0, 0, __state.renderToTexture.__width, __state.renderToTexture.__height);
 		}
 	}
 

@@ -11,6 +11,7 @@ import openfl.display.SpreadMethod;
 import openfl.display._internal.DrawCommandReader;
 #if ((js && html5) || sys)
 import openfl.display.BitmapData;
+import openfl.display.BlendMode;
 import openfl.display3D.Context3D;
 import openfl.display3D.Context3DBlendFactor;
 import openfl.display3D.Context3DBufferUsage;
@@ -59,6 +60,7 @@ import openfl.Vector;
 @:access(openfl.display.Graphics)
 @:access(openfl.display.BitmapData)
 @:access(openfl.display.DisplayObject)
+@:access(openfl.display.OpenGLRenderer)
 @:access(openfl.display3D.Context3D)
 @:access(openfl.display3D.Program3D)
 @SuppressWarnings("checkstyle:FieldDocComment")
@@ -253,6 +255,11 @@ class Context3DVectorGraphics
 		var prevDepthStencil = context.__state.renderToTextureDepthStencil;
 		var prevAntiAlias = context.__state.renderToTextureAntiAlias;
 		var prevSurfaceSelector = context.__state.renderToTextureSurfaceSelector;
+		// The compositor has already set the blend mode it will draw this shape's texture
+		// with (SUBTRACT, INVERT, ...); the fills below need plain source-over, so the mode
+		// is set again once the texture is done (restoreTarget). Its blend factors are not
+		// part of the saved Context3D state, hence through the renderer.
+		var prevBlendMode = renderer.__blendMode;
 
 		context.setRenderToTexture(tex, true, OpenGLGraphics.samples);
 		context.clear(0, 0, 0, 0, 1, 0);
@@ -297,7 +304,7 @@ class Context3DVectorGraphics
 					if (!setupBitmap(c.bitmap, c.matrix, c.repeat, c.smooth))
 					{
 						data.destroy();
-						restoreTarget(context, prevTarget, prevDepthStencil, prevAntiAlias, prevSurfaceSelector);
+						restoreTarget(context, renderer, prevTarget, prevDepthStencil, prevAntiAlias, prevSurfaceSelector, prevBlendMode);
 						return false;
 					}
 					hasFill = true;
@@ -378,7 +385,7 @@ class Context3DVectorGraphics
 			Context3DStencilAction.KEEP, Context3DStencilAction.KEEP);
 		context.setDepthTest(false, Context3DCompareMode.ALWAYS);
 
-		restoreTarget(context, prevTarget, prevDepthStencil, prevAntiAlias, prevSurfaceSelector);
+		restoreTarget(context, renderer, prevTarget, prevDepthStencil, prevAntiAlias, prevSurfaceSelector, prevBlendMode);
 		// leave no samplers bound into the compositor's state
 		context.setTextureAt(0, null);
 
@@ -403,11 +410,15 @@ class Context3DVectorGraphics
 
 	#if ((js && html5) || sys)
 	// Restore a previously-saved Context3D render target: the cache texture we
-	// were rendering into (filter / cacheAsBitmap), or the back buffer if none.
-	private static inline function restoreTarget(context:Context3D, target:TextureBase, depthStencil:Bool, antiAlias:Int, surfaceSelector:Int):Void
+	// were rendering into (filter / cacheAsBitmap / blend group), or the back buffer if
+	// none; and the blend factors of the mode the compositor is about to draw with.
+	private static inline function restoreTarget(context:Context3D, renderer:OpenGLRenderer, target:TextureBase, depthStencil:Bool, antiAlias:Int,
+			surfaceSelector:Int, blendMode:BlendMode):Void
 	{
 		if (target != null) context.setRenderToTexture(target, depthStencil, antiAlias, surfaceSelector);
 		else context.setRenderToBackBuffer();
+		renderer.__blendMode = null; // forces update
+		renderer.__setBlendMode(blendMode);
 	}
 
 	private static function initGL(context:Context3D):Bool

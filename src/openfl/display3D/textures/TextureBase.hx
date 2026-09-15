@@ -354,7 +354,6 @@ class TextureBase extends EventDispatcher
 		}
 
 		__glMSSamples = samples;
-		#if gpu_msaa_debug Sys.println('MSAA fbo created samples=' + samples + ' max=' + maxSamples + ' size=' + __width + 'x' + __height + ' status=' + code + ' err=' + gl2.getError()); #end
 		return __glMSFramebuffer;
 		#else
 		return null;
@@ -434,7 +433,6 @@ class TextureBase extends EventDispatcher
 		gl2.bindFramebuffer(gl2.READ_FRAMEBUFFER, source);
 		gl2.bindFramebuffer(gl2.DRAW_FRAMEBUFFER, __glFramebuffer);
 		gl2.blitFramebuffer(0, 0, __width, __height, 0, 0, __width, __height, gl2.COLOR_BUFFER_BIT, gl2.NEAREST);
-#if gpu_msaa_debug Sys.println('MSAA resolve ' + __width + 'x' + __height + ' readStatus=' + gl2.checkFramebufferStatus(gl2.READ_FRAMEBUFFER) + ' drawStatus=' + gl2.checkFramebufferStatus(gl2.DRAW_FRAMEBUFFER) + ' err=' + gl2.getError()); #end
 		// the read/draw bindings replaced the FRAMEBUFFER binding: put back the one
 		// the context believes is bound (clearing the cache would not work: the
 		// stage's primary framebuffer is null too, so the next bind would be skipped)
