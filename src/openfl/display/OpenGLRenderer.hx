@@ -1193,20 +1193,13 @@ class OpenGLRenderer extends DisplayObjectRenderer
 
 		if (__staticBlendShader == null) __staticBlendShader = new BlendModeShader();
 		var shader = __staticBlendShader;
-		shader.uBackdrop.input = backdrop;
-		shader.uBackdrop.filter = NEAREST;
-		shader.uBackdrop.mipFilter = MIPNONE;
-		shader.uBackdrop.wrap = CLAMP;
-		shader.uMode.value[0] = __blendGroupMode(blendMode);
 		// the window framebuffer is copied bottom-up
 		var window = (context.__state.renderToTexture == null);
-		shader.uBackdropFlip.value[0] = window ? -1 : 1;
-		shader.uBackdropFlip.value[1] = window ? height / backdrop.__textureHeight : 0;
+		shader.init(backdrop, __blendGroupMode(blendMode), window ? -1 : 1, window ? height / backdrop.__textureHeight : 0);
 
 		// the shader writes the finished pixel
 		context.setBlendFactors(ONE, ZERO);
 		__drawGroupScratchBuffer(scratchBuffer, x0, y0, shader, 1);
-		shader.uBackdrop.input = null;
 	}
 
 	@:noCompletion private function __copyBackdrop(backdrop:BitmapData, x:Int, y:Int, width:Int, height:Int):Void

@@ -1,6 +1,7 @@
 package openfl.display._internal;
 
 #if !flash
+import openfl.display.BitmapData;
 import openfl.filters.BitmapFilterShader;
 
 /**
@@ -49,6 +50,25 @@ class BlendModeShader extends BitmapFilterShader
 		#if !macro
 		uBackdropFlip.value = [1, 0];
 		uMode.value = [0];
+		#end
+	}
+
+	/**
+		The backdrop copy, how its rows map to the group's (scale and offset on the texture
+		y: the window framebuffer is copied bottom-up) and the mode. Like the filter shaders,
+		the uniforms are only touched under `#if !macro`: the fields come from ShaderMacro,
+		which does not run when the class is typed in a macro context.
+	**/
+	public function init(backdrop:BitmapData, mode:Int, flipScale:Float, flipOffset:Float):Void
+	{
+		#if !macro
+		uBackdrop.input = backdrop;
+		uBackdrop.filter = NEAREST;
+		uBackdrop.mipFilter = MIPNONE;
+		uBackdrop.wrap = CLAMP;
+		uMode.value[0] = mode;
+		uBackdropFlip.value[0] = flipScale;
+		uBackdropFlip.value[1] = flipOffset;
 		#end
 	}
 }
