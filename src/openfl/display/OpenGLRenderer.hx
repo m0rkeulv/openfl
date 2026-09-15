@@ -5,6 +5,7 @@ import openfl.display._internal.Context3DBitmap;
 import openfl.display._internal.Context3DBitmapData;
 import openfl.display._internal.Context3DDisplayObject;
 import openfl.display._internal.Context3DDisplayObjectContainer;
+import openfl.display._internal.CoverageDisplayShader;
 import openfl.display._internal.Context3DGraphics;
 import openfl.display._internal.Context3DMaskShader;
 import openfl.display._internal.Context3DSimpleButton;
@@ -15,6 +16,7 @@ import openfl.display._internal.ShaderBuffer;
 import openfl.utils.ObjectPool;
 import openfl.display3D.Context3DClearMask;
 import openfl.display3D.Context3D;
+import openfl.display._internal.BlendModeShader;
 import openfl.geom.ColorTransform;
 import openfl.geom.Matrix;
 import openfl.geom.Rectangle;
@@ -37,6 +39,7 @@ import lime.math.Matrix4;
 @:access(lime.graphics.GLRenderContext)
 @:access(openfl.display._internal.ShaderBuffer)
 @:access(openfl.display3D.Context3D)
+@:access(openfl.display3D.textures.TextureBase)
 @:access(openfl.display.BitmapData)
 @:access(openfl.display.DisplayObject)
 @:access(openfl.display.Graphics)
@@ -71,6 +74,7 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	public var gl:#if lime WebGLRenderContext #else Dynamic #end;
 
 	@:noCompletion private static var __staticDefaultDisplayShader:DisplayObjectShader;
+	@:noCompletion private static var __staticCoverageDisplayShader:CoverageDisplayShader;
 	@:noCompletion private static var __staticDefaultGraphicsShader:GraphicsShader;
 	@:noCompletion private static var __staticMaskShader:Context3DMaskShader;
 
@@ -82,6 +86,7 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	@:noCompletion private var __currentShader:Shader;
 	@:noCompletion private var __currentShaderBuffer:ShaderBuffer;
 	@:noCompletion private var __defaultDisplayShader:DisplayObjectShader;
+	@:noCompletion private var __coverageDisplayShader:CoverageDisplayShader;
 	@:noCompletion private var __defaultGraphicsShader:GraphicsShader;
 	@:noCompletion private var __defaultRenderTarget:BitmapData;
 	@:noCompletion private var __defaultShader:Shader;
@@ -106,6 +111,17 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	@:noCompletion private var __upscaled:Bool;
 	@:noCompletion private var __values:Array<Float>;
 	@:noCompletion private var __width:Int;
+	@:noCompletion private var __blendGroupDepth:Int = 0;
+	@:noCompletion private var __groupOffsetX:Int = 0;
+	@:noCompletion private var __groupOffsetY:Int = 0;
+	@:noCompletion private var __layerDepth:Int = 0;
+	// group scratchBuffer buffers (textures: object, backdrop) and clip stacks per nesting level, shared by
+	// every renderer on the context: a cacheAsBitmap child renderer can run inside a group
+	@:noCompletion private static var __groupClipRects:Array<Array<Rectangle>> = [];
+	@:noCompletion private static var __groupDepth:Int = 0;
+	@:noCompletion private static var __groupScratchBuffers:Array<BitmapData> = [];
+	@:noCompletion private static var __staticBlendShader:BlendModeShader;
+	@:noCompletion private static var __invertSilhouette:ColorTransform = new ColorTransform(0, 0, 0, 1, 255, 255, 255, 0);
 
 	@:noCompletion private function new(context:Context3D, defaultRenderTarget:BitmapData = null)
 	{
@@ -164,10 +180,12 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		__tempRect = new Rectangle();
 
 		if (__staticDefaultDisplayShader == null) __staticDefaultDisplayShader = new DisplayObjectShader();
+		if (__staticCoverageDisplayShader == null) __staticCoverageDisplayShader = new CoverageDisplayShader();
 		if (__staticDefaultGraphicsShader == null) __staticDefaultGraphicsShader = new GraphicsShader();
 		if (__staticMaskShader == null) __staticMaskShader = new Context3DMaskShader();
 
 		__defaultDisplayShader = __staticDefaultDisplayShader;
+		__coverageDisplayShader = __staticCoverageDisplayShader;
 		__defaultGraphicsShader = __staticDefaultGraphicsShader;
 		__defaultShader = __defaultDisplayShader;
 
@@ -251,6 +269,12 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	**/
 	public function applyColorTransform(colorTransform:ColorTransform):Void
 	{
+		if (__blendMode == INVERT)
+		{
+			// INVERT only uses the object's alpha: draw it as a white silhouette (see __setBlendMode)
+			colorTransform = __invertSilhouette;
+		}
+
 		var enabled = (colorTransform != null && !colorTransform.__isDefault(true));
 		applyHasColorTransform(enabled);
 
@@ -551,6 +575,16 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		}
 
 		return __defaultShader;
+	}
+
+	/**
+		The display shader for a shape's texture: the default one, or CoverageDisplayShader
+		under ALPHA so that the pixels the shape does not cover keep the backdrop.
+	**/
+	@:noCompletion private function __initShapeShader(shader:Shader):Shader
+	{
+		if (shader == null && __blendMode == ALPHA) return __initShader(__coverageDisplayShader);
+		return __initDisplayShader(shader);
 	}
 
 	@:noCompletion private function __initDisplayShader(shader:Shader):Shader
@@ -872,6 +906,397 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	{
 		if (object == null) return;
 
+		if (object.__drawableType != BITMAP_DATA)
+		{
+			var displayObject:DisplayObject = cast object;
+
+			// LAYER composes the subtree offscreen; the modes that need the backdrop as a
+			// shader input are composed the same way (see __renderGroup)
+			if (displayObject.__blendMode == LAYER && __blendGroupDepth == 0)
+			{
+				__renderGroup(displayObject, LAYER);
+				return;
+			}
+
+			if (__blendGroupDepth == 0)
+			{
+				var blendMode = __overrideBlendMode != null ? __overrideBlendMode : displayObject.__worldBlendMode;
+				if (blendMode == __groupBlendMode) blendMode = NORMAL;
+
+				if (__needsBlendGroup(blendMode) || __needsWholeObjectGroup(displayObject, blendMode))
+				{
+					__renderGroup(displayObject, blendMode);
+					return;
+				}
+			}
+		}
+
+		__renderDrawableDirect(object);
+	}
+
+	/**
+		Flash blends an object as a whole. A Bitmap or a cached texture is one quad, so the
+		blend factors give that directly; a container with several pieces, or graphics the
+		direct path draws as several fills or a batch of quads, would blend piece by piece
+		(a second fill adds onto the first instead of covering it). Those are composed like
+		a LAYER first and the composite is drawn with the mode.
+	**/
+	@:noCompletion private function __needsWholeObjectGroup(displayObject:DisplayObject, blendMode:BlendMode):Bool
+	{
+		if (blendMode == NORMAL || blendMode == LAYER || blendMode == null) return false;
+
+		var pieces = 0;
+		var graphics = displayObject.__graphics;
+		if (graphics != null && graphics.__commands.length > 0)
+		{
+			if (graphics.__bitmap != null)
+			{
+				pieces = 1;
+			}
+			else
+			{
+				for (type in graphics.__commands.types)
+				{
+					switch (type)
+					{
+						case BEGIN_FILL, BEGIN_BITMAP_FILL, BEGIN_GRADIENT_FILL, BEGIN_SHADER_FILL: pieces++;
+						case DRAW_QUADS, DRAW_TRIANGLES: pieces += 2;
+						default:
+					}
+				}
+			}
+		}
+		if (displayObject.__children != null) pieces += displayObject.__children.length;
+		return pieces > 1;
+	}
+
+	@:noCompletion private function __needsBlendGroup(blendMode:BlendMode):Bool
+	{
+		return switch (blendMode)
+		{
+			case DIFFERENCE, DARKEN, LIGHTEN, HARDLIGHT, OVERLAY: true;
+			default: false;
+		}
+	}
+
+	/**
+		True when the current target is the opaque stage itself: not a LAYER group, a
+		transparent stage or a bitmap. Groups reset the cached blend mode, so a mode set
+		here is not reused at another depth.
+	**/
+	@:noCompletion private inline function __backdropIsOpaque():Bool
+	{
+		return __layerDepth == 0 && __stage != null && !__stage.__transparent;
+	}
+
+	@:noCompletion private static function __blendGroupMode(blendMode:BlendMode):Int
+	{
+		return switch (blendMode)
+		{
+			case DARKEN: 2;
+			case LIGHTEN: 3;
+			case HARDLIGHT: 4;
+			case OVERLAY: 5;
+			default: 0; // DIFFERENCE
+		}
+	}
+
+	/**
+		Renders `displayObject` into a scratch buffer (a texture) covering its bounds and composes the
+		result onto the current target: LAYER and the fixed-function modes as one draw of the
+		group with the mode's blend factors, the other modes through BlendModeShader with a
+		copy of the backdrop, which gives the Flash result (blend on straight colour, mixed
+		in by the object's alpha).
+	**/
+	@:noCompletion private function __renderGroup(displayObject:DisplayObject, blendMode:BlendMode):Void
+	{
+		if (!displayObject.__renderable || displayObject.__worldAlpha <= 0) return;
+
+		var bounds = Rectangle.__pool.get();
+		var visible = __getGroupBounds(displayObject, bounds);
+		var x0 = Std.int(bounds.x), y0 = Std.int(bounds.y), width = Std.int(bounds.width), height = Std.int(bounds.height);
+		Rectangle.__pool.release(bounds);
+		if (!visible) return;
+
+		var level = __groupDepth * 2;
+		var scratchBuffer = __getGroupScratchBuffer(level, width, height);
+		var backdrop = __groupScratchBuffers[level + 1];
+		var shaded = __needsBlendGroup(blendMode);
+		if (shaded) __copyBackdrop(backdrop, x0, y0, width, height);
+
+		__renderIntoGroup(displayObject, scratchBuffer, x0, y0, width, height, blendMode);
+
+		scratchBuffer.__setUVRect(__context3D, 0, 0, width, height);
+
+		if (shaded)
+		{
+			__compositeBlend(scratchBuffer, backdrop, x0, y0, width, height, blendMode);
+		}
+		else
+		{
+			__compositeLayer(scratchBuffer, displayObject, x0, y0, blendMode);
+		}
+	}
+
+	/**
+		The group's rectangle in target pixels: the object's bounds including filters,
+		rounded outward to whole pixels and limited to the target (or the enclosing
+		group) and the current clip. Returns false when nothing is left.
+	**/
+	@:noCompletion private function __getGroupBounds(displayObject:DisplayObject, bounds:Rectangle):Bool
+	{
+		displayObject.__getFilterBounds(bounds, displayObject.__renderTransform);
+		bounds.__transform(bounds, __worldTransform);
+
+		var x0 = Math.floor(bounds.x), y0 = Math.floor(bounds.y);
+		var x1 = Math.ceil(bounds.right), y1 = Math.ceil(bounds.bottom);
+
+		if (x0 < __groupOffsetX) x0 = __groupOffsetX;
+		if (y0 < __groupOffsetY) y0 = __groupOffsetY;
+		if (x1 > __groupOffsetX + __displayWidth) x1 = __groupOffsetX + __displayWidth;
+		if (y1 > __groupOffsetY + __displayHeight) y1 = __groupOffsetY + __displayHeight;
+
+		if (__numClipRects > 0)
+		{
+			var clipRect = __clipRects[__numClipRects - 1];
+			if (x0 < clipRect.x) x0 = Math.floor(clipRect.x);
+			if (y0 < clipRect.y) y0 = Math.floor(clipRect.y);
+			if (x1 > clipRect.right) x1 = Math.ceil(clipRect.right);
+			if (y1 > clipRect.bottom) y1 = Math.ceil(clipRect.bottom);
+		}
+
+		bounds.setTo(x0, y0, x1 - x0, y1 - y0);
+		return bounds.width > 0 && bounds.height > 0;
+	}
+
+	/**
+		Renders the object into the scratchBuffer buffer with the renderer redirected to it:
+		the projection moves the group origin to (x0, y0) so objects keep their render
+		transforms, and the scissor rectangles follow through __groupOffsetX/Y. Ancestor
+		masks and clips are suspended (they apply to the composite) and the group gets
+		its own clip stack and stencil reference. Inside a LAYER, or a whole-object group
+		of a fixed-function mode, the object's alpha is divided out of the children (it
+		applies once, on the composite) and children that only inherit the object's mode
+		render NORMAL; inside the shader groups the children's blend modes are forced to
+		NORMAL. Every piece of renderer and context state is put back afterwards.
+	**/
+	@:noCompletion private function __renderIntoGroup(displayObject:DisplayObject, scratchBuffer:BitmapData, x0:Int, y0:Int, width:Int, height:Int,
+			blendMode:BlendMode):Void
+	{
+		var context = __context3D;
+		var layer = !__needsBlendGroup(blendMode);
+
+		__groupDepth++;
+		if (layer) __layerDepth++; else __blendGroupDepth++;
+
+		var cacheRTT = context.__state.renderToTexture;
+		var cacheRTTDepthStencil = context.__state.renderToTextureDepthStencil;
+		var cacheRTTAntiAlias = context.__state.renderToTextureAntiAlias;
+		var cacheRTTSurfaceSelector = context.__state.renderToTextureSurfaceSelector;
+
+		var cacheFlipped = __flipped;
+		var cacheDisplayWidth = __displayWidth, cacheDisplayHeight = __displayHeight;
+		var cacheOffsetX = __groupOffsetX, cacheOffsetY = __groupOffsetY;
+		var cacheClipRects = __clipRects, cacheNumClipRects = __numClipRects;
+		var cacheStencilReference = __stencilReference;
+		var cacheOverrideBlendMode = __overrideBlendMode;
+		var cacheGroupBlendMode = __groupBlendMode;
+		var cacheWorldAlpha = __worldAlpha;
+
+		__suspendClipAndMask();
+		if (__groupClipRects[__groupDepth] == null) __groupClipRects[__groupDepth] = [];
+		__clipRects = __groupClipRects[__groupDepth];
+		__numClipRects = 0;
+		__stencilReference = 0;
+
+		context.setRenderToTexture(scratchBuffer.getTexture(context), true);
+
+		// clear only the group's area: the scratch buffer can be as large as the target
+		__scissorRectangle.setTo(0, 0, width, height);
+		context.setScissorRectangle(__scissorRectangle);
+		context.__clear(true, 0, 0, 0, 0, 0, 0, Context3DClearMask.ALL);
+		context.setScissorRectangle(null);
+
+		__flipped = false;
+		__groupOffsetX = x0;
+		__groupOffsetY = y0;
+		__displayWidth = scratchBuffer.width;
+		__displayHeight = scratchBuffer.height;
+		__projection.createOrtho(x0, x0 + scratchBuffer.width, y0, y0 + scratchBuffer.height, -1000, 1000);
+
+		if (layer)
+		{
+			__worldAlpha = 1 / displayObject.__worldAlpha;
+			if (blendMode != LAYER) __groupBlendMode = blendMode;
+		}
+		else
+		{
+			__overrideBlendMode = NORMAL;
+		}
+
+		__blendMode = null;
+		__setBlendMode(NORMAL);
+		__renderDrawableDirect(displayObject);
+
+		__worldAlpha = cacheWorldAlpha;
+		__overrideBlendMode = cacheOverrideBlendMode;
+		__groupBlendMode = cacheGroupBlendMode;
+		__blendMode = null;
+
+		if (cacheRTT != null)
+		{
+			context.setRenderToTexture(cacheRTT, cacheRTTDepthStencil, cacheRTTAntiAlias, cacheRTTSurfaceSelector);
+		}
+		else
+		{
+			context.setRenderToBackBuffer();
+		}
+
+		__flipped = cacheFlipped;
+		__groupOffsetX = cacheOffsetX;
+		__groupOffsetY = cacheOffsetY;
+		__displayWidth = cacheDisplayWidth;
+		__displayHeight = cacheDisplayHeight;
+		__projection.createOrtho(cacheOffsetX, cacheOffsetX + cacheDisplayWidth, cacheOffsetY, cacheOffsetY + cacheDisplayHeight, -1000, 1000);
+		__clipRects = cacheClipRects;
+		__numClipRects = cacheNumClipRects;
+		__stencilReference = cacheStencilReference;
+
+		__resumeClipAndMask(this);
+
+		__groupDepth--;
+		if (layer) __layerDepth--; else __blendGroupDepth--;
+	}
+
+	/**
+		LAYER and the fixed-function modes: the group goes on as one object with the mode's
+		blend factors (LAYER: source-over) and the object's alpha. A group of a shape alone
+		keeps the shape's ALPHA coverage rule (__initShapeShader); a container's transparent
+		pixels count as covered, as a Bitmap's do.
+	**/
+	@:noCompletion private function __compositeLayer(scratchBuffer:BitmapData, displayObject:DisplayObject, x0:Int, y0:Int, blendMode:BlendMode):Void
+	{
+		__setBlendMode(blendMode);
+		var shape = displayObject.__children == null || displayObject.__children.length == 0;
+		__drawGroupScratchBuffer(scratchBuffer, x0, y0, shape ? __initShapeShader(null) : __defaultDisplayShader, displayObject.__worldAlpha);
+	}
+
+	/**
+		The blend modes: BlendModeShader reads the group and the backdrop copy and writes
+		the finished pixel (blend on straight colour, mixed in by the object's alpha).
+	**/
+	@:noCompletion private function __compositeBlend(scratchBuffer:BitmapData, backdrop:BitmapData, x0:Int, y0:Int, width:Int, height:Int,
+			blendMode:BlendMode):Void
+	{
+		var context = __context3D;
+		backdrop.__setUVRect(context, 0, 0, width, height);
+
+		if (__staticBlendShader == null) __staticBlendShader = new BlendModeShader();
+		var shader = __staticBlendShader;
+		// the window framebuffer is copied bottom-up
+		var window = (context.__state.renderToTexture == null);
+		shader.init(backdrop, __blendGroupMode(blendMode), window ? -1 : 1, window ? height / backdrop.__textureHeight : 0);
+
+		// the shader writes the finished pixel
+		context.setBlendFactors(ONE, ZERO);
+		__drawGroupScratchBuffer(scratchBuffer, x0, y0, shader, 1);
+	}
+
+	@:noCompletion private function __copyBackdrop(backdrop:BitmapData, x:Int, y:Int, width:Int, height:Int):Void
+	{
+		var context = __context3D;
+		context.__flushGLFramebuffer();
+		context.__bindGLTexture2D(backdrop.getTexture(context).__getTexture());
+
+		x -= __groupOffsetX;
+		y -= __groupOffsetY;
+
+		if (context.__state.renderToTexture == null)
+		{
+			// mirrors __flushGLScissor: the window framebuffer is bottom-up and may be scaled
+			#if !openfl_dpi_aware
+			if (context.__backBufferWantsBestResolution)
+			{
+				var scale = context.__stage.window.scale;
+				x = Std.int(x * scale);
+				y = Std.int(y * scale);
+				width = Std.int(width * scale);
+				height = Std.int(height * scale);
+			}
+			#end
+			y = Std.int(context.__stage.window.height * context.__stage.window.scale) - height - y;
+		}
+
+		__gl.copyTexSubImage2D(__gl.TEXTURE_2D, 0, 0, 0, x, y, width, height);
+	}
+
+	@:noCompletion private function __drawGroupScratchBuffer(scratchBuffer:BitmapData, x:Int, y:Int, shader:Shader, alpha:Float):Void
+	{
+		var context = __context3D;
+		shader = __initShader(shader);
+		setShader(shader);
+		applyBitmapData(scratchBuffer, false);
+
+		// place the scratchBuffer buffer at (x, y) in target pixels: __getMatrix appends __worldTransform
+		var inverse = Matrix.__pool.get();
+		inverse.copyFrom(__worldTransform);
+		inverse.invert();
+
+		var placement = Matrix.__pool.get();
+		placement.identity();
+		placement.translate(x, y);
+		placement.concat(inverse);
+
+		applyMatrix(__getMatrix(placement, ALWAYS));
+
+		Matrix.__pool.release(placement);
+		Matrix.__pool.release(inverse);
+
+		applyAlpha(alpha);
+		applyColorTransform(null);
+		updateShader();
+
+		var vertexBuffer = scratchBuffer.getVertexBuffer(context);
+		if (shader.__position != null) context.setVertexBufferAt(shader.__position.index, vertexBuffer, 0, FLOAT_3);
+		if (shader.__textureCoord != null) context.setVertexBufferAt(shader.__textureCoord.index, vertexBuffer, 3, FLOAT_2);
+		var indexBuffer = scratchBuffer.getIndexBuffer(context);
+		context.drawTriangles(indexBuffer);
+
+		#if gl_stats
+		Context3DStats.incrementDrawCall(DrawCallContext.STAGE);
+		#end
+
+		__clearShader();
+	}
+
+	@:noCompletion private function __getGroupScratchBuffer(level:Int, width:Int, height:Int):BitmapData
+	{
+		var scratchBuffer = __groupScratchBuffers[level];
+
+		if (scratchBuffer == null || scratchBuffer.width < width || scratchBuffer.height < height || scratchBuffer.__textureContext != __context3D.__context)
+		{
+			if (scratchBuffer != null)
+			{
+				if (scratchBuffer.width > width) width = scratchBuffer.width;
+				if (scratchBuffer.height > height) height = scratchBuffer.height;
+				scratchBuffer.dispose();
+				__groupScratchBuffers[level + 1].dispose();
+			}
+
+			// the object and its backdrop share one size so one set of texture coordinates fits both
+			for (i in 0...2)
+			{
+				var bitmapData = new BitmapData(width, height, true, 0);
+				bitmapData.readable = false; // texture only, once uploaded
+				__groupScratchBuffers[level + i] = bitmapData;
+			}
+		}
+
+		return __groupScratchBuffers[level];
+	}
+
+	@:noCompletion private function __renderDrawableDirect(object:IBitmapDrawable):Void
+	{
 		switch (object.__drawableType)
 		{
 			case BITMAP_DATA:
@@ -1022,6 +1447,10 @@ class OpenGLRenderer extends DisplayObjectRenderer
 			if (width < 0) width = 0;
 			if (height < 0) height = 0;
 
+			// inside a blend group the target is the group's scratchBuffer buffer
+			x -= __groupOffsetX;
+			y -= __groupOffsetY;
+
 			// __scissorRectangle.setTo (x, __flipped ? __height - y - height : y, width, height);
 			__scissorRectangle.setTo(x, y, width, height);
 			__context3D.setScissorRectangle(__scissorRectangle);
@@ -1035,6 +1464,7 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	@:noCompletion private override function __setBlendMode(value:BlendMode):Void
 	{
 		if (__overrideBlendMode != null) value = __overrideBlendMode;
+		if (value == __groupBlendMode) value = NORMAL;
 		if (__blendMode == value) return;
 
 		__blendMode = value;
@@ -1051,18 +1481,30 @@ class OpenGLRenderer extends DisplayObjectRenderer
 				__context3D.setBlendFactors(ONE, ONE_MINUS_SOURCE_COLOR);
 
 			case SUBTRACT:
-				__context3D.setBlendFactors(ONE, ONE);
-				__context3D.__setGLBlendEquation(__gl.FUNC_REVERSE_SUBTRACT);
+				// Flash subtracts the premultiplied colour and keeps the destination alpha
+				__context3D.setBlendFactorsSeparate(ONE, ONE, ZERO, ONE);
+				__context3D.__setGLBlendEquation(__gl.FUNC_REVERSE_SUBTRACT, __gl.FUNC_ADD);
 
-			#if desktop
-			case DARKEN:
-				__context3D.setBlendFactors(ONE, ONE);
-				__context3D.__setGLBlendEquation(0x8007); // GL_MIN
+			// ERASE and ALPHA: the backdrop times one minus the object's alpha / times the
+			// object's alpha. Flash keeps the stage opaque, so the cut out pixels go black:
+			// on the stage the framebuffer alpha is left alone (a WebGL canvas has one and
+			// would show the page through); inside a LAYER the alpha is cut as well
+			case ERASE:
+				if (__backdropIsOpaque()) __context3D.setBlendFactorsSeparate(ZERO, ONE_MINUS_SOURCE_ALPHA, ZERO, ONE);
+				else __context3D.setBlendFactors(ZERO, ONE_MINUS_SOURCE_ALPHA);
 
-			case LIGHTEN:
-				__context3D.setBlendFactors(ONE, ONE);
-				__context3D.__setGLBlendEquation(0x8008); // GL_MAX
-			#end
+			case ALPHA:
+				if (__backdropIsOpaque()) __context3D.setBlendFactorsSeparate(ZERO, SOURCE_ALPHA, ZERO, ONE);
+				else __context3D.setBlendFactors(ZERO, SOURCE_ALPHA);
+
+			case INVERT:
+				// Flash: d * (1 - 2a) + a = a * (1 - d) + d * (1 - a). With the object drawn as a
+				// white silhouette (a, a, a, a) (applyColorTransform) that is one blend:
+				// source * (1 - destination colour) + destination * (1 - source alpha)
+				__context3D.setBlendFactorsSeparate(ONE_MINUS_DESTINATION_COLOR, ONE_MINUS_SOURCE_ALPHA, ONE, ONE_MINUS_SOURCE_ALPHA);
+
+			// DIFFERENCE, DARKEN, LIGHTEN, HARDLIGHT, OVERLAY and LAYER need the backdrop as a
+			// shader input: composed by __renderGroup
 
 			default:
 				__context3D.setBlendFactors(ONE, ONE_MINUS_SOURCE_ALPHA);
