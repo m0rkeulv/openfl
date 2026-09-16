@@ -29,19 +29,28 @@ class BlendModeShader extends BitmapFilterShader
 		void main(void) {
 			vec4 src = texture2D(openfl_Texture, openfl_TextureCoordv);
 			vec4 dst = texture2D(uBackdrop, vec2(openfl_TextureCoordv.x, openfl_TextureCoordv.y * uBackdropFlip.x + uBackdropFlip.y));
-			float sa = src.a;
-			float da = dst.a;
-			vec3 s = sa > 0.0 ? src.rgb / sa : vec3(0.0);
-			vec3 d = da > 0.0 ? dst.rgb / da : vec3(0.0);
-			vec3 b;
-			if (uMode == 0) b = abs(d - s);
-			else if (uMode == 2) b = min(d, s);
-			else if (uMode == 3) b = max(d, s);
-			else if (uMode == 4) b = hardLight(d, s);
-			else b = hardLight(s, d);
+
+			float srcAlpha = src.a;
+			float dstAlpha = dst.a;
+
+			vec3 s = srcAlpha > 0.0 ? src.rgb / srcAlpha : vec3(0.0);
+			vec3 d = dstAlpha > 0.0 ? dst.rgb / dstAlpha : vec3(0.0);
+
+			vec3 blend;
+
+			if (uMode == 0) blend = abs(d - s); 			// DIFFERENCE
+			else if (uMode == 2) blend = min(d, s); 		// DARKEN
+			else if (uMode == 3) blend = max(d, s); 		// LIGHTEN
+			else if (uMode == 4) blend = hardLight(d, s); 	// HARDLIGHT
+			else blend = hardLight(s, d); 					// OVERLAY
 
 			// separable blend over a possibly transparent backdrop (PDF compositing)
-			gl_FragColor = vec4(src.rgb * (1.0 - da) + dst.rgb * (1.0 - sa) + sa * da * b, sa + da - sa * da);
+			vec3 sourceOnly = source.rgb * (1.0 - backdropAlpha);
+			vec3 backdropOnly = backdrop.rgb * (1.0 - sourceAlpha);
+			vec3 weightedBlend = sourceAlpha * backdropAlpha * blended;
+			float coverage = sourceAlpha + backdropAlpha - sourceAlpha * backdropAlpha;
+
+			gl_FragColor = vec4(sourceOnly + backdropOnly + weightedBlend, coverage);
 		}")
 	public function new()
 	{
