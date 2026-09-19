@@ -15,10 +15,12 @@ import openfl.geom.Rectangle;
 #if lime
 import lime.graphics.cairo.Cairo;
 import lime.graphics.cairo.CairoContent;
+import lime.graphics.cairo.CairoImageSurface;
 import lime.graphics.cairo.CairoOperator;
 import lime.graphics.cairo.CairoPattern;
 import lime.graphics.cairo.CairoSurface;
 import lime.graphics.CairoRenderContext;
+import lime.graphics.Image;
 import lime.math.Matrix3;
 #end
 
@@ -328,7 +330,8 @@ class CairoRenderer extends DisplayObjectRenderer
 		if (__worldTransform != null) bounds.__transform(bounds, __worldTransform);
 		// whole pixels, exactly covering the bounds: DEST_IN cuts everything inside the clip
 		var x0 = Math.floor(bounds.x), y0 = Math.floor(bounds.y);
-		cairo.rectangle(x0, y0, Math.ceil(bounds.right) - x0, Math.ceil(bounds.bottom) - y0);
+		var width = Math.ceil(bounds.right) - x0, height = Math.ceil(bounds.bottom) - y0;
+		cairo.rectangle(x0, y0, width, height);
 		cairo.clip();
 		Rectangle.__pool.release(bounds);
 
@@ -347,7 +350,9 @@ class CairoRenderer extends DisplayObjectRenderer
 		switch (blendMode)
 		{
 			case ALPHA, ERASE:
-				__compositeAlphaErase(objectPattern, blendMode);
+				// a shape's graphics are the whole object: ALPHA only touches the pixels they drew
+				var isShape = displayObject.__graphics != null && (displayObject.__children == null || displayObject.__children.length == 0);
+				__compositeAlphaErase(objectPattern, blendMode, isShape, x0, y0, width, height);
 			case INVERT:
 				__compositeInvert(destination, objectPattern);
 			case SUBTRACT:
@@ -360,9 +365,37 @@ class CairoRenderer extends DisplayObjectRenderer
 		__blendGroupDepth--;
 	}
 
-	@:noCompletion private function __compositeAlphaErase(objectPattern:CairoPattern, blendMode:BlendMode):Void
+	@:noCompletion private function __compositeAlphaErase(objectPattern:CairoPattern, blendMode:BlendMode, isShape:Bool, x:Int, y:Int, width:Int,
+			height:Int):Void
 	{
-		cairo.source = objectPattern;
+		if (blendMode == ALPHA && isShape)
+		{
+			// Flash's ALPHA only touches the pixels a shape draws, the empty part of its bounds
+			// keeps the backdrop (a Bitmap's transparent pixels do cut it). DEST_IN cuts wherever
+			// the source is transparent, so the group is copied to an image and the pixels the
+			// shape left untouched are made opaque there, which keeps the backdrop under them
+			var image = new Image(null, 0, 0, width, height, 0);
+			var copy = new Cairo(CairoImageSurface.fromImage(image));
+			copy.translate(-x, -y);
+			copy.source = objectPattern;
+			copy.paint();
+			copy.target.flush();
+
+			var data = image.data;
+			var i = 3, n = width * height * 4;
+			while (i < n)
+			{
+				if (data[i] == 0) data[i] = 0xFF;
+				i += 4;
+			}
+
+			cairo.setSourceSurface(copy.target, x, y);
+		}
+		else
+		{
+			cairo.source = objectPattern;
+		}
+
 		cairo.setOperator(blendMode == ERASE ? CairoOperator.DEST_OUT : CairoOperator.DEST_IN);
 		cairo.paint();
 
