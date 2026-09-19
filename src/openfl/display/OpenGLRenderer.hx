@@ -948,6 +948,7 @@ class OpenGLRenderer extends DisplayObjectRenderer
 			if (displayObject.__blendMode == LAYER && __blendGroupDepth == 0)
 			{
 				__renderGroup(displayObject, LAYER);
+				__markDrawn(displayObject);
 				return;
 			}
 
@@ -959,12 +960,14 @@ class OpenGLRenderer extends DisplayObjectRenderer
 				if (__needsBlendGroup(blendMode) || __needsWholeObjectGroup(displayObject, blendMode))
 				{
 					__renderGroup(displayObject, blendMode);
+					__markDrawn(displayObject);
 					return;
 				}
 			}
 		}
 
 		__renderDrawableDirect(object);
+		if (object.__drawableType != BITMAP_DATA) __markDrawn(cast object);
 	}
 
 	/**
@@ -1151,6 +1154,9 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		var cacheOverrideBlendMode = __overrideBlendMode;
 		var cacheGroupBlendMode = __groupBlendMode;
 		var cacheWorldAlpha = __worldAlpha;
+		var cacheDrawnBounds = __drawnBounds;
+		__drawnBounds = Rectangle.__pool.get();
+		__drawnBounds.setTo(0, 0, 0, 0);
 
 		__suspendClipAndMask();
 		if (__groupClipRects[__groupDepth] == null) __groupClipRects[__groupDepth] = [];
@@ -1188,6 +1194,8 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		__renderDrawableDirect(displayObject);
 
 		__worldAlpha = cacheWorldAlpha;
+		Rectangle.__pool.release(__drawnBounds);
+		__drawnBounds = cacheDrawnBounds;
 		__overrideBlendMode = cacheOverrideBlendMode;
 		__groupBlendMode = cacheGroupBlendMode;
 		__blendMode = null;
@@ -1243,6 +1251,20 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		// the window framebuffer is copied bottom-up
 		var window = (context.__state.renderToTexture == null);
 		shader.init(backdrop, __blendGroupMode(blendMode), window ? -1 : 1, window ? height / backdrop.__textureHeight : 0, discardTransparent);
+
+		// the part of the group that was drawn into before, as texture coordinates of the
+		// scratch buffer (see __markDrawn): outside it the shader draws the object as it is
+		var drawn = Rectangle.__pool.get();
+		if (__drawnWithin(x0, y0, width, height, drawn))
+		{
+			shader.setDrawn((drawn.x - x0) / scratchBuffer.__textureWidth, (drawn.y - y0) / scratchBuffer.__textureHeight,
+				(drawn.right - x0) / scratchBuffer.__textureWidth, (drawn.bottom - y0) / scratchBuffer.__textureHeight);
+		}
+		else
+		{
+			shader.setDrawn(0, 0, 0, 0);
+		}
+		Rectangle.__pool.release(drawn);
 
 		// the shader writes the finished pixel
 		context.setBlendFactors(ONE, ZERO);

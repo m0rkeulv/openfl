@@ -210,6 +210,7 @@ class CanvasRenderer extends DisplayObjectRenderer
 			if (displayObject.__blendMode == LAYER && __blendGroupDepth == 0)
 			{
 				__renderGroup(displayObject, LAYER);
+				__markDrawn(displayObject);
 				return;
 			}
 
@@ -222,11 +223,13 @@ class CanvasRenderer extends DisplayObjectRenderer
 				{
 					case SUBTRACT, INVERT, ERASE, ALPHA:
 						__renderGroup(displayObject, blendMode);
+						__markDrawn(displayObject);
 						return;
 					default:
 						if (__needsContainerGroup(displayObject, blendMode))
 						{
 							__renderGroup(displayObject, blendMode);
+							__markDrawn(displayObject);
 							return;
 						}
 				}
@@ -235,6 +238,9 @@ class CanvasRenderer extends DisplayObjectRenderer
 		#end
 
 		__renderDrawableDirect(object);
+		#if (js && html5)
+		if (object.__drawableType != BITMAP_DATA) __markDrawn(cast object);
+		#end
 	}
 
 	/**
@@ -288,12 +294,17 @@ class CanvasRenderer extends DisplayObjectRenderer
 		var object = __beginGroupCanvas(level, width, height);
 		__renderIntoGroup(displayObject, object.getContext2d(), x0, y0, blendMode);
 
-		// where the backdrop is transparent Flash draws the object as it is, under every
-		// mode. None of the composites below does that, so the object is kept where the
-		// target is transparent and added back after the composite (never on the opaque
-		// stage, where it would be empty)
+		// where nothing has been drawn into the target yet Flash draws the object as it is,
+		// under every mode (see __markDrawn). None of the composites below does that, so the
+		// object is kept outside the drawn rectangle and added back after the composite.
+		// Inside it, over a backdrop a mask left transparent, the composites give what Flash
+		// gives: nothing for ALPHA and ERASE, and for SUBTRACT and INVERT a black or white
+		// silhouette of the object, drawn under the result
+		var drawn = Rectangle.__pool.get();
+		var drawnAll = __drawnWithin(x0, y0, width, height, drawn);
+		var formulaMode = blendMode == SUBTRACT || blendMode == INVERT || blendMode == ERASE || blendMode == ALPHA;
 		var uncovered:js.html.CanvasElement = null;
-		if (!__backdropIsOpaque())
+		if (formulaMode && (!drawnAll || drawn.width < width || drawn.height < height))
 		{
 			uncovered = __getGroupCanvas(level + 2, width, height);
 			var uncoveredContext = uncovered.getContext2d();
@@ -301,8 +312,11 @@ class CanvasRenderer extends DisplayObjectRenderer
 			uncoveredContext.globalAlpha = 1;
 			uncoveredContext.globalCompositeOperation = "copy";
 			uncoveredContext.drawImage(object, 0, 0, width, height, 0, 0, width, height);
-			uncoveredContext.globalCompositeOperation = "destination-out";
-			uncoveredContext.drawImage(context.canvas, x0, y0, width, height, 0, 0, width, height);
+			if (drawnAll)
+			{
+				uncoveredContext.globalCompositeOperation = "destination-out";
+				uncoveredContext.fillRect(drawn.x - x0, drawn.y - y0, drawn.width, drawn.height);
+			}
 		}
 
 		// compose the group onto the target. No clip here: an advanced blend mode under a
@@ -331,6 +345,27 @@ class CanvasRenderer extends DisplayObjectRenderer
 			context.globalCompositeOperation = "lighter";
 			context.drawImage(uncovered, 0, 0, width, height, x0, y0, width, height);
 		}
+
+		if (drawnAll && (blendMode == SUBTRACT || blendMode == INVERT) && !__backdropIsOpaque())
+		{
+			var silhouette = __getGroupCanvas(level + 2, width, height);
+			var silhouetteContext = silhouette.getContext2d();
+			silhouetteContext.setTransform(1, 0, 0, 1, 0, 0);
+			silhouetteContext.globalAlpha = 1;
+			silhouetteContext.globalCompositeOperation = "copy";
+			silhouetteContext.drawImage(object, 0, 0, width, height, 0, 0, width, height);
+			silhouetteContext.globalCompositeOperation = "source-in";
+			silhouetteContext.fillStyle = (blendMode == SUBTRACT) ? "#000000" : "#FFFFFF";
+			silhouetteContext.fillRect(0, 0, width, height);
+			context.save();
+			context.beginPath();
+			context.rect(drawn.x, drawn.y, drawn.width, drawn.height);
+			context.clip();
+			context.globalCompositeOperation = "destination-over";
+			context.drawImage(silhouette, 0, 0, width, height, x0, y0, width, height);
+			context.restore();
+		}
+		Rectangle.__pool.release(drawn);
 
 		context.restore();
 	}
@@ -400,6 +435,9 @@ class CanvasRenderer extends DisplayObjectRenderer
 		var cacheOverrideBlendMode = __overrideBlendMode;
 		var cacheGroupBlendMode = __groupBlendMode;
 		var cacheWorldAlpha = __worldAlpha;
+		var cacheDrawnBounds = __drawnBounds;
+		__drawnBounds = Rectangle.__pool.get();
+		__drawnBounds.setTo(0, 0, 0, 0);
 
 		var worldTransform = Matrix.__pool.get();
 		worldTransform.copyFrom(__worldTransform);
@@ -427,6 +465,8 @@ class CanvasRenderer extends DisplayObjectRenderer
 		__worldTransform = cacheWorldTransform;
 		context = cacheContext;
 		__worldAlpha = cacheWorldAlpha;
+		Rectangle.__pool.release(__drawnBounds);
+		__drawnBounds = cacheDrawnBounds;
 		__overrideBlendMode = cacheOverrideBlendMode;
 		__groupBlendMode = cacheGroupBlendMode;
 		__blendMode = null;

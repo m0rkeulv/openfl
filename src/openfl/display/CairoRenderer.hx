@@ -202,6 +202,7 @@ class CairoRenderer extends DisplayObjectRenderer
 			if (displayObject.__blendMode == LAYER && __blendGroupDepth == 0)
 			{
 				__renderLayerGroup(object);
+				__markDrawn(displayObject);
 				return;
 			}
 			// SUBTRACT and INVERT have no Cairo operator, ERASE and ALPHA need a
@@ -213,11 +214,13 @@ class CairoRenderer extends DisplayObjectRenderer
 				if (blendMode == SUBTRACT || blendMode == INVERT || blendMode == ALPHA || blendMode == ERASE)
 				{
 					__renderBlendGroup(object, blendMode);
+					__markDrawn(displayObject);
 					return;
 				}
 				if (__needsContainerGroup(displayObject, blendMode))
 				{
 					__renderOperatorGroup(object, blendMode);
+					__markDrawn(displayObject);
 					return;
 				}
 			}
@@ -225,6 +228,9 @@ class CairoRenderer extends DisplayObjectRenderer
 		#end
 
 		__renderDrawableDirect(object);
+		#if lime
+		if (object.__drawableType != BITMAP_DATA) __markDrawn(cast object);
+		#end
 	}
 
 	/**
@@ -272,13 +278,24 @@ class CairoRenderer extends DisplayObjectRenderer
 		cairo.pushGroupWithContent(CairoContent.COLOR_ALPHA);
 		__groupBlendMode = blendMode;
 		__blendMode = null;
+		var parentDrawn = __drawnBounds;
+		__drawnBounds = Rectangle.__pool.get();
+		__drawnBounds.setTo(0, 0, 0, 0);
+		// the container's alpha applies once, to the composite: divided out of the children here
+		var cacheWorldAlpha = __worldAlpha;
+		__worldAlpha = 1 / displayObject.__worldAlpha;
 		__renderDrawableDirect(object);
+		__worldAlpha = cacheWorldAlpha;
+		Rectangle.__pool.release(__drawnBounds);
+		__drawnBounds = parentDrawn;
 		__groupBlendMode = previousGroupBlendMode;
 
 		cairo.identityMatrix();
 		cairo.popGroupToSource();
 		__setBlendModeCairo(cairo, blendMode);
-		cairo.paint();
+		var alpha = __getAlpha(displayObject.__worldAlpha);
+		if (alpha >= 1) cairo.paint();
+		else cairo.paintWithAlpha(alpha);
 
 		cairo.restore();
 		__blendMode = null; // the operator is set again by the next __setBlendMode
@@ -298,11 +315,23 @@ class CairoRenderer extends DisplayObjectRenderer
 		cairo.identityMatrix();
 		cairo.pushGroupWithContent(CairoContent.COLOR_ALPHA);
 		__blendMode = null;
+		var parentDrawn = __drawnBounds;
+		__drawnBounds = Rectangle.__pool.get();
+		__drawnBounds.setTo(0, 0, 0, 0);
+		// the layer's alpha applies once, to the composite: divided out of the children here
+		var displayObject:DisplayObject = cast object;
+		var cacheWorldAlpha = __worldAlpha;
+		__worldAlpha = 1 / displayObject.__worldAlpha;
 		__renderDrawableDirect(object);
+		__worldAlpha = cacheWorldAlpha;
+		Rectangle.__pool.release(__drawnBounds);
+		__drawnBounds = parentDrawn;
 		cairo.identityMatrix();
 		cairo.popGroupToSource();
 		cairo.setOperator(CairoOperator.OVER);
-		cairo.paint();
+		var alpha = __getAlpha(displayObject.__worldAlpha);
+		if (alpha >= 1) cairo.paint();
+		else cairo.paintWithAlpha(alpha);
 		cairo.restore();
 		__blendMode = null;
 		__layerDepth--;
@@ -343,25 +372,37 @@ class CairoRenderer extends DisplayObjectRenderer
 		// the object and its children draw normally inside the group
 		__overrideBlendMode = NORMAL;
 		__blendMode = null;
+		var parentDrawn = __drawnBounds;
+		__drawnBounds = Rectangle.__pool.get();
+		__drawnBounds.setTo(0, 0, 0, 0);
 		__renderDrawableDirect(object);
+		Rectangle.__pool.release(__drawnBounds);
+		__drawnBounds = parentDrawn;
 		__overrideBlendMode = previousOverride;
 
 		cairo.identityMatrix();
 		var objectPattern = cairo.popGroup();
 
-		// where the backdrop is transparent Flash draws the object as it is, under every
-		// mode. None of these four composites does that, so the object is kept where the
-		// destination is transparent and added back after the composite (never on the
-		// opaque stage, where it would be empty)
+		// where nothing has been drawn into the target yet Flash draws the object as it is,
+		// under every mode (see __markDrawn). None of these four composites does that, so the
+		// object is kept outside the drawn rectangle and added back after the composite.
+		// Inside it, over a backdrop a mask left transparent, the composites give what Flash
+		// gives: nothing for ALPHA and ERASE, and for SUBTRACT and INVERT a black or white
+		// silhouette of the object, painted under the result
+		var drawn = Rectangle.__pool.get();
+		var drawnAll = __drawnWithin(x0, y0, width, height, drawn);
+		var untouched = !drawnAll || drawn.width < width || drawn.height < height;
 		var uncovered:CairoPattern = null;
-		if (!__backdropIsOpaque())
+		if (untouched)
 		{
 			cairo.pushGroupWithContent(CairoContent.COLOR_ALPHA);
+			cairo.rectangle(x0, y0, width, height);
+			if (drawnAll) cairo.rectangle(drawn.x, drawn.y, drawn.width, drawn.height);
+			cairo.fillRule = EVEN_ODD;
+			cairo.clip();
+			cairo.fillRule = WINDING;
 			cairo.source = objectPattern;
 			cairo.setOperator(CairoOperator.OVER);
-			cairo.paint();
-			cairo.setSourceSurface(destination, 0, 0);
-			cairo.setOperator(CairoOperator.DEST_OUT);
 			cairo.paint();
 			uncovered = cairo.popGroup();
 		}
@@ -376,6 +417,19 @@ class CairoRenderer extends DisplayObjectRenderer
 				__compositeSubtract(destination, __overBlack(objectPattern));
 			default:
 		}
+
+		if (drawnAll && (blendMode == SUBTRACT || blendMode == INVERT) && !__backdropIsOpaque())
+		{
+			cairo.save();
+			cairo.rectangle(drawn.x, drawn.y, drawn.width, drawn.height);
+			cairo.clip();
+			if (blendMode == SUBTRACT) cairo.setSourceRGB(0, 0, 0);
+			else cairo.setSourceRGB(1, 1, 1);
+			cairo.setOperator(CairoOperator.DEST_OVER);
+			cairo.mask(objectPattern);
+			cairo.restore();
+		}
+		Rectangle.__pool.release(drawn);
 
 		if (uncovered != null)
 		{

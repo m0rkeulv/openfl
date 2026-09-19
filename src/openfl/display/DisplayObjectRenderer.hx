@@ -49,6 +49,8 @@ class DisplayObjectRenderer extends EventDispatcher
 	@SuppressWarnings("checkstyle:Dynamic") @:noCompletion private var __context:#if lime RenderContext #else Dynamic #end;
 	@:noCompletion private var __overrideBlendMode:BlendMode;
 	@:noCompletion private var __groupBlendMode:BlendMode;
+	// what has been drawn into the current target so far, in target pixels (see __markDrawn)
+	@:noCompletion private var __drawnBounds:Rectangle;
 	@:noCompletion private var __pixelRatio:Float;
 	@:noCompletion private var __roundPixels:Bool;
 	@:noCompletion private var __stage:Stage;
@@ -58,6 +60,43 @@ class DisplayObjectRenderer extends EventDispatcher
 	@:noCompletion private var __worldAlpha:Float;
 	@:noCompletion private var __worldColorTransform:ColorTransform;
 	@:noCompletion private var __worldTransform:Matrix;
+
+	/**
+		Flash draws a SUBTRACT, INVERT, ERASE or ALPHA object as it is where the target has never
+		been drawn into, and runs the mode's formula everywhere else, also where an earlier
+		mask left the backdrop transparent (ALPHA and ERASE then show nothing, SUBTRACT black,
+		INVERT white). __drawnBounds is the union of what was drawn into the current target so
+		far: a LAYER group starts empty, the stage is null (opaque, everything counts as drawn)
+		and so is a BitmapData.draw target. Every rendered object widens it.
+	**/
+	@:noCompletion private function __markDrawn(displayObject:DisplayObject):Void
+	{
+		if (__drawnBounds == null) return;
+		var bounds = Rectangle.__pool.get();
+		displayObject.__getFilterBounds(bounds, displayObject.__renderTransform);
+		if (__worldTransform != null) bounds.__transform(bounds, __worldTransform);
+		__drawnBounds.__expand(bounds.x, bounds.y, bounds.width, bounds.height);
+		Rectangle.__pool.release(bounds);
+	}
+
+	/**
+		The part of the rectangle (x, y, width, height) that __drawnBounds covers, in whole
+		pixels, into `drawn`. Returns false when nothing was drawn there (the whole rectangle
+		is untouched); when everything counts as drawn, `drawn` is the rectangle itself.
+	**/
+	@:noCompletion private function __drawnWithin(x:Int, y:Int, width:Int, height:Int, drawn:Rectangle):Bool
+	{
+		if (__drawnBounds == null)
+		{
+			drawn.setTo(x, y, width, height);
+			return true;
+		}
+		var x0 = Math.max(x, Math.floor(__drawnBounds.x)), y0 = Math.max(y, Math.floor(__drawnBounds.y));
+		var x1 = Math.min(x + width, Math.ceil(__drawnBounds.right)), y1 = Math.min(y + height, Math.ceil(__drawnBounds.bottom));
+		if (__drawnBounds.width <= 0 || __drawnBounds.height <= 0 || x1 <= x0 || y1 <= y0) return false;
+		drawn.setTo(x0, y0, x1 - x0, y1 - y0);
+		return true;
+	}
 
 	@:noCompletion private function new()
 	{
