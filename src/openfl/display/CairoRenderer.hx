@@ -223,12 +223,13 @@ class CairoRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		Flash blends an object as a whole: a container of several pieces under one of the
-		operator modes would otherwise have each child blended on its own (a child over a
-		sibling adds twice). Such a container is rendered into a group first, children
-		that only inherit its mode drawing NORMAL, and the group is composited with the
-		mode. A shape is already one piece here: its graphics are rendered to a surface
-		before drawing.
+		Flash blends an object as a whole. If a container with several children were drawn
+		child by child under one of the operator modes, the mode would apply to each child
+		separately, and where a child overlaps a sibling it would be blended twice. So such a
+		container is first rendered into a group, with children that only inherit its mode
+		drawing as NORMAL, and the finished group is then composited with the mode once.
+		A shape needs none of this: its graphics are rendered to a surface before drawing,
+		so it is already a single piece.
 	**/
 	@:noCompletion private function __needsContainerGroup(displayObject:DisplayObject, blendMode:BlendMode):Bool
 	{
@@ -244,10 +245,6 @@ class CairoRenderer extends DisplayObjectRenderer
 		return children.length > 1 || (graphics != null && graphics.__commands.length > 0);
 	}
 
-	/**
-		Renders a container into a group clipped to its bounds and paints the group with
-		the mode's Cairo operator (see __needsContainerGroup).
-	**/
 	@:noCompletion private function __renderOperatorGroup(object:IBitmapDrawable, blendMode:BlendMode):Void
 	{
 		#if lime
@@ -363,13 +360,6 @@ class CairoRenderer extends DisplayObjectRenderer
 		__blendGroupDepth--;
 	}
 
-	/**
-		ALPHA and ERASE: DEST_IN / DEST_OUT through the object, within the clip to
-		the object's bounds set by __renderBlendGroup (DEST_IN is unbounded: it
-		clears everything outside the source). Inside a LAYER group that cuts the
-		layer; on the opaque stage the cut out pixels go black, which is what Flash
-		does too.
-	**/
 	@:noCompletion private function __compositeAlphaErase(objectPattern:CairoPattern, blendMode:BlendMode):Void
 	{
 		cairo.source = objectPattern;
@@ -385,12 +375,6 @@ class CairoRenderer extends DisplayObjectRenderer
 		}
 	}
 
-	/**
-		INVERT: white is painted with DIFFERENCE through the object's alpha on a
-		copy of the destination, (1 - a) * x + a * (1 - x) per channel, and put
-		back with ATOP so the destination keeps its own alpha (nothing appears
-		where it was transparent, as in Flash).
-	**/
 	@:noCompletion private function __compositeInvert(destination:CairoSurface, objectPattern:CairoPattern):Void
 	{
 		if (__backdropIsOpaque())
@@ -416,12 +400,6 @@ class CairoRenderer extends DisplayObjectRenderer
 		cairo.paint();
 	}
 
-	/**
-		SUBTRACT, before the object renders: the group is painted opaque black,
-		so once the object is drawn over it the group holds the premultiplied
-		object p = a * s inside the object and 0 elsewhere, which is what
-		__compositeSubtract works with.
-	**/
 	@:noCompletion private function __prepareSubtract():Void
 	{
 		cairo.setSourceRGB(0, 0, 0);
@@ -429,13 +407,6 @@ class CairoRenderer extends DisplayObjectRenderer
 		cairo.paint();
 	}
 
-	/**
-		SUBTRACT, after the object rendered over black (__prepareSubtract): Cairo has no subtract operator. A copy of the destination x is
-		lightened with the premultiplied object p = a * s and then differenced
-		with it, max(x, p) - p = max(0, x - p), which is Flash's SUBTRACT (p is 0
-		outside the object, so the copy is unchanged there), and put back with
-		ATOP so the destination keeps its own alpha.
-	**/
 	@:noCompletion private function __compositeSubtract(destination:CairoSurface, objectPattern:CairoPattern):Void
 	{
 		if (__backdropIsOpaque())
@@ -542,7 +513,7 @@ class CairoRenderer extends DisplayObjectRenderer
 		#if lime
 		switch (value)
 		{
-			// NOTE: ALPHA, ERASE, INVERT and SUBTRACT are rendered into a Cairo group and
+			// ALPHA, ERASE, INVERT and SUBTRACT are rendered into a Cairo group and
 			// composited with the destination in __renderBlendGroup. Cairo has no operator
 			// for the last two, and the first two need the object as one clipped piece.
 
