@@ -220,6 +220,7 @@ class Shader
 	@:noCompletion private var __glFragmentSource:String;
 	@:noCompletion private var __glSourceDirty:Bool;
 	@:noCompletion private var __glVertexSource:String;
+	@:noCompletion private var __discardTransparent:ShaderParameter<Bool>;
 	@:noCompletion private var __hasColorTransform:ShaderParameter<Bool>;
 	@:noCompletion private var __inputBitmapData:Array<ShaderInput<BitmapData>>;
 	@:noCompletion private var __isGenerated:Bool;
@@ -675,6 +676,10 @@ class Shader
 						if (name == "openfl_HasColorTransform")
 						{
 							__hasColorTransform = parameter;
+						}
+						else if (name == "openfl_DiscardTransparent")
+						{
+							__discardTransparent = parameter;
 						}
 
 						Reflect.setField(__data, name, parameter);

@@ -48,6 +48,7 @@ class DisplayObjectRenderer extends EventDispatcher
 	@:noCompletion private var __cleared:Bool;
 	@SuppressWarnings("checkstyle:Dynamic") @:noCompletion private var __context:#if lime RenderContext #else Dynamic #end;
 	@:noCompletion private var __overrideBlendMode:BlendMode;
+	@:noCompletion private var __groupBlendMode:BlendMode;
 	@:noCompletion private var __pixelRatio:Float;
 	@:noCompletion private var __roundPixels:Bool;
 	@:noCompletion private var __stage:Stage;

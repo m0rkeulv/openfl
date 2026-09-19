@@ -14,7 +14,10 @@ import openfl.geom.Matrix;
 import openfl.geom.Rectangle;
 #if lime
 import lime.graphics.cairo.Cairo;
+import lime.graphics.cairo.CairoContent;
 import lime.graphics.cairo.CairoOperator;
+import lime.graphics.cairo.CairoPattern;
+import lime.graphics.cairo.CairoSurface;
 import lime.graphics.CairoRenderContext;
 import lime.math.Matrix3;
 #end
@@ -36,6 +39,7 @@ import lime.math.Matrix3;
 @:access(openfl.display.Stage3D)
 @:allow(openfl.display._internal)
 @:allow(openfl.display)
+@:access(openfl.geom.Rectangle)
 class CairoRenderer extends DisplayObjectRenderer
 {
 	/**
@@ -184,6 +188,267 @@ class CairoRenderer extends DisplayObjectRenderer
 	{
 		if (object == null) return;
 
+		#if lime
+		if (object.__drawableType != BITMAP_DATA)
+		{
+			var displayObject:DisplayObject = cast object;
+			// a LAYER container is rendered into its own group, so ERASE and ALPHA
+			// children only affect what is inside it, as in Flash
+			if (displayObject.__blendMode == LAYER && __blendGroupDepth == 0)
+			{
+				__renderLayerGroup(object);
+				return;
+			}
+			// SUBTRACT and INVERT have no Cairo operator, ERASE and ALPHA need a
+			// clip: the object is rendered into a group and composited afterwards
+			if (__blendGroupDepth == 0)
+			{
+				var blendMode = __overrideBlendMode != null ? __overrideBlendMode : displayObject.__worldBlendMode;
+				if (blendMode == __groupBlendMode) blendMode = NORMAL;
+				if (blendMode == SUBTRACT || blendMode == INVERT || blendMode == ALPHA || blendMode == ERASE)
+				{
+					__renderBlendGroup(object, blendMode);
+					return;
+				}
+				if (__needsContainerGroup(displayObject, blendMode))
+				{
+					__renderOperatorGroup(object, blendMode);
+					return;
+				}
+			}
+		}
+		#end
+
+		__renderDrawableDirect(object);
+	}
+
+	/**
+		Flash blends an object as a whole. If a container with several children were drawn
+		child by child under one of the operator modes, the mode would apply to each child
+		separately, and where a child overlaps a sibling it would be blended twice. So such a
+		container is first rendered into a group, with children that only inherit its mode
+		drawing as NORMAL, and the finished group is then composited with the mode once.
+		A shape needs none of this: its graphics are rendered to a surface before drawing,
+		so it is already a single piece.
+	**/
+	@:noCompletion private function __needsContainerGroup(displayObject:DisplayObject, blendMode:BlendMode):Bool
+	{
+		var operatorMode = switch (blendMode)
+		{
+			case ADD, MULTIPLY, SCREEN, DIFFERENCE, LIGHTEN, DARKEN, HARDLIGHT, OVERLAY: true;
+			default: false;
+		}
+		if (!operatorMode) return false;
+		var children = displayObject.__children;
+		if (children == null || children.length == 0) return false;
+		var graphics = displayObject.__graphics;
+		return children.length > 1 || (graphics != null && graphics.__commands.length > 0);
+	}
+
+	@:noCompletion private function __renderOperatorGroup(object:IBitmapDrawable, blendMode:BlendMode):Void
+	{
+		#if lime
+		var previousGroupBlendMode = __groupBlendMode;
+		__layerDepth++;
+
+		cairo.save();
+		cairo.identityMatrix();
+
+		// clip to the container's bounds: the group is then allocated at that size
+		var displayObject:DisplayObject = cast object;
+		var bounds = Rectangle.__pool.get();
+		displayObject.__getFilterBounds(bounds, displayObject.__renderTransform);
+		if (__worldTransform != null) bounds.__transform(bounds, __worldTransform);
+		var x0 = Math.floor(bounds.x), y0 = Math.floor(bounds.y);
+		cairo.rectangle(x0, y0, Math.ceil(bounds.right) - x0, Math.ceil(bounds.bottom) - y0);
+		cairo.clip();
+		Rectangle.__pool.release(bounds);
+
+		cairo.pushGroupWithContent(CairoContent.COLOR_ALPHA);
+		__groupBlendMode = blendMode;
+		__blendMode = null;
+		__renderDrawableDirect(object);
+		__groupBlendMode = previousGroupBlendMode;
+
+		cairo.identityMatrix();
+		cairo.popGroupToSource();
+		__setBlendModeCairo(cairo, blendMode);
+		cairo.paint();
+
+		cairo.restore();
+		__blendMode = null; // the operator is set again by the next __setBlendMode
+		__layerDepth--;
+		#end
+	}
+
+	#if lime
+	@:noCompletion private var __blendGroupDepth:Int = 0;
+	@:noCompletion private var __layerDepth:Int = 0;
+
+	/** Renders a LAYER container into a group and composites it with OVER. **/
+	@:noCompletion private function __renderLayerGroup(object:IBitmapDrawable):Void
+	{
+		__layerDepth++;
+		cairo.save();
+		cairo.identityMatrix();
+		cairo.pushGroupWithContent(CairoContent.COLOR_ALPHA);
+		__blendMode = null;
+		__renderDrawableDirect(object);
+		cairo.identityMatrix();
+		cairo.popGroupToSource();
+		cairo.setOperator(CairoOperator.OVER);
+		cairo.paint();
+		cairo.restore();
+		__blendMode = null;
+		__layerDepth--;
+	}
+
+	/**
+		Renders `object` alone into a Cairo group and composites the group with
+		the destination, see the __composite functions for each mode.
+	**/
+	@:noCompletion private function __renderBlendGroup(object:IBitmapDrawable, blendMode:BlendMode):Void
+	{
+		var previousOverride = __overrideBlendMode;
+		__blendGroupDepth++;
+
+		// the surface being drawn on right now: the window, the bitmap, or the
+		// enclosing LAYER group
+		var destination = cairo.groupTarget;
+
+		cairo.save();
+		cairo.identityMatrix();
+
+		// clip to the object's bounds first: the group and the destination copies are then
+		// allocated and painted at that size instead of the whole surface, and DEST_IN
+		// (ALPHA), which is unbounded, cannot reach outside it
+		var displayObject:DisplayObject = cast object;
+		var bounds = Rectangle.__pool.get();
+		displayObject.__getFilterBounds(bounds, displayObject.__renderTransform);
+		if (__worldTransform != null) bounds.__transform(bounds, __worldTransform);
+		// whole pixels, exactly covering the bounds: DEST_IN cuts everything inside the clip
+		var x0 = Math.floor(bounds.x), y0 = Math.floor(bounds.y);
+		cairo.rectangle(x0, y0, Math.ceil(bounds.right) - x0, Math.ceil(bounds.bottom) - y0);
+		cairo.clip();
+		Rectangle.__pool.release(bounds);
+
+		cairo.pushGroupWithContent(CairoContent.COLOR_ALPHA);
+		if (blendMode == SUBTRACT) __prepareSubtract();
+
+		// the object and its children draw normally inside the group
+		__overrideBlendMode = NORMAL;
+		__blendMode = null;
+		__renderDrawableDirect(object);
+		__overrideBlendMode = previousOverride;
+
+		cairo.identityMatrix();
+		var objectPattern = cairo.popGroup();
+
+		switch (blendMode)
+		{
+			case ALPHA, ERASE:
+				__compositeAlphaErase(objectPattern, blendMode);
+			case INVERT:
+				__compositeInvert(destination, objectPattern);
+			case SUBTRACT:
+				__compositeSubtract(destination, objectPattern);
+			default:
+		}
+
+		cairo.restore();
+		__blendMode = null; // the operator is set again by the next __setBlendMode
+		__blendGroupDepth--;
+	}
+
+	@:noCompletion private function __compositeAlphaErase(objectPattern:CairoPattern, blendMode:BlendMode):Void
+	{
+		cairo.source = objectPattern;
+		cairo.setOperator(blendMode == ERASE ? CairoOperator.DEST_OUT : CairoOperator.DEST_IN);
+		cairo.paint();
+
+		if (__backdropIsOpaque())
+		{
+			// Flash keeps the stage opaque: black behind the cut out pixels
+			cairo.setSourceRGB(0, 0, 0);
+			cairo.setOperator(CairoOperator.DEST_OVER);
+			cairo.paint();
+		}
+	}
+
+	@:noCompletion private function __compositeInvert(destination:CairoSurface, objectPattern:CairoPattern):Void
+	{
+		if (__backdropIsOpaque())
+		{
+			// in place: nothing to preserve, no copy
+			cairo.setSourceRGB(1, 1, 1);
+			cairo.setOperator(CairoOperator.DIFFERENCE);
+			cairo.mask(objectPattern);
+			return;
+		}
+
+		cairo.pushGroupWithContent(CairoContent.COLOR_ALPHA);
+		cairo.setSourceSurface(destination, 0, 0);
+		cairo.setOperator(CairoOperator.SOURCE);
+		cairo.paint();
+
+		cairo.setSourceRGB(1, 1, 1);
+		cairo.setOperator(CairoOperator.DIFFERENCE);
+		cairo.mask(objectPattern);
+
+		cairo.popGroupToSource();
+		cairo.setOperator(CairoOperator.ATOP);
+		cairo.paint();
+	}
+
+	@:noCompletion private function __prepareSubtract():Void
+	{
+		cairo.setSourceRGB(0, 0, 0);
+		cairo.setOperator(CairoOperator.SOURCE);
+		cairo.paint();
+	}
+
+	@:noCompletion private function __compositeSubtract(destination:CairoSurface, objectPattern:CairoPattern):Void
+	{
+		if (__backdropIsOpaque())
+		{
+			// in place: nothing to preserve, no copy
+			cairo.source = objectPattern;
+			cairo.setOperator(CairoOperator.LIGHTEN);
+			cairo.paint();
+			cairo.setOperator(CairoOperator.DIFFERENCE);
+			cairo.paint();
+			return;
+		}
+
+		cairo.pushGroupWithContent(CairoContent.COLOR_ALPHA);
+		cairo.setSourceSurface(destination, 0, 0);
+		cairo.setOperator(CairoOperator.SOURCE);
+		cairo.paint();
+
+		cairo.source = objectPattern;
+		cairo.setOperator(CairoOperator.LIGHTEN);
+		cairo.paint();
+		cairo.setOperator(CairoOperator.DIFFERENCE);
+		cairo.paint();
+
+		cairo.popGroupToSource();
+		cairo.setOperator(CairoOperator.ATOP);
+		cairo.paint();
+	}
+
+	/**
+		True when the current target is the opaque stage surface itself: not a LAYER
+		group, a transparent stage or a bitmap. The composites can then work in place,
+		since there is no destination alpha to preserve.
+	**/
+	@:noCompletion private inline function __backdropIsOpaque():Bool
+	{
+		return __layerDepth == 0 && __stage != null && !__stage.__transparent;
+	}
+	#end
+
+	@:noCompletion private function __renderDrawableDirect(object:IBitmapDrawable):Void
+	{
 		switch (object.__drawableType)
 		{
 			case BITMAP_DATA:
@@ -235,6 +500,7 @@ class CairoRenderer extends DisplayObjectRenderer
 	@:noCompletion private override function __setBlendMode(value:BlendMode):Void
 	{
 		if (__overrideBlendMode != null) value = __overrideBlendMode;
+		if (value == __groupBlendMode) value = NORMAL;
 		if (__blendMode == value) return;
 
 		__blendMode = value;
@@ -247,12 +513,12 @@ class CairoRenderer extends DisplayObjectRenderer
 		#if lime
 		switch (value)
 		{
+			// ALPHA, ERASE, INVERT and SUBTRACT are rendered into a Cairo group and
+			// composited with the destination in __renderBlendGroup. Cairo has no operator
+			// for the last two, and the first two need the object as one clipped piece.
+
 			case ADD:
 				cairo.setOperator(CairoOperator.ADD);
-
-			// case ALPHA:
-
-			// TODO;
 
 			case DARKEN:
 				cairo.setOperator(CairoOperator.DARKEN);
@@ -260,16 +526,8 @@ class CairoRenderer extends DisplayObjectRenderer
 			case DIFFERENCE:
 				cairo.setOperator(CairoOperator.DIFFERENCE);
 
-			// case ERASE:
-
-			// TODO;
-
 			case HARDLIGHT:
 				cairo.setOperator(CairoOperator.HARD_LIGHT);
-
-			// case INVERT:
-
-			// TODO
 
 			case LAYER:
 				cairo.setOperator(CairoOperator.OVER);
@@ -289,10 +547,6 @@ class CairoRenderer extends DisplayObjectRenderer
 			// case SHADER:
 
 			// TODO
-
-			// case SUBTRACT:
-
-			// TODO;
 
 			default:
 				cairo.setOperator(CairoOperator.OVER);
