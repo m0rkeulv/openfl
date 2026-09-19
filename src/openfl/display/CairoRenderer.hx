@@ -41,6 +41,7 @@ import lime.math.Matrix3;
 @:access(openfl.display.Stage3D)
 @:allow(openfl.display._internal)
 @:allow(openfl.display)
+@:access(openfl.geom.Matrix)
 @:access(openfl.geom.Rectangle)
 class CairoRenderer extends DisplayObjectRenderer
 {
@@ -183,7 +184,9 @@ class CairoRenderer extends DisplayObjectRenderer
 	{
 		if (cairo == null) return;
 
-		__renderDrawable(object);
+		// the root is rendered as it is: its own blend mode is for its parent to apply, and
+		// BitmapData.draw applies the blendMode it was given instead (see __renderDrawable)
+		__renderDrawableDirect(object);
 	}
 
 	@:noCompletion private function __renderDrawable(object:IBitmapDrawable):Void
@@ -336,7 +339,6 @@ class CairoRenderer extends DisplayObjectRenderer
 		Rectangle.__pool.release(bounds);
 
 		cairo.pushGroupWithContent(CairoContent.COLOR_ALPHA);
-		if (blendMode == SUBTRACT) __prepareSubtract();
 
 		// the object and its children draw normally inside the group
 		__overrideBlendMode = NORMAL;
@@ -347,17 +349,39 @@ class CairoRenderer extends DisplayObjectRenderer
 		cairo.identityMatrix();
 		var objectPattern = cairo.popGroup();
 
+		// where the backdrop is transparent Flash draws the object as it is, under every
+		// mode. None of these four composites does that, so the object is kept where the
+		// destination is transparent and added back after the composite (never on the
+		// opaque stage, where it would be empty)
+		var uncovered:CairoPattern = null;
+		if (!__backdropIsOpaque())
+		{
+			cairo.pushGroupWithContent(CairoContent.COLOR_ALPHA);
+			cairo.source = objectPattern;
+			cairo.setOperator(CairoOperator.OVER);
+			cairo.paint();
+			cairo.setSourceSurface(destination, 0, 0);
+			cairo.setOperator(CairoOperator.DEST_OUT);
+			cairo.paint();
+			uncovered = cairo.popGroup();
+		}
+
 		switch (blendMode)
 		{
 			case ALPHA, ERASE:
-				// a shape's graphics are the whole object: ALPHA only touches the pixels they drew
-				var isShape = displayObject.__graphics != null && (displayObject.__children == null || displayObject.__children.length == 0);
-				__compositeAlphaErase(objectPattern, blendMode, isShape, x0, y0, width, height);
+				__compositeAlphaErase(objectPattern, blendMode, displayObject, x0, y0, width, height);
 			case INVERT:
 				__compositeInvert(destination, objectPattern);
 			case SUBTRACT:
-				__compositeSubtract(destination, objectPattern);
+				__compositeSubtract(destination, __overBlack(objectPattern));
 			default:
+		}
+
+		if (uncovered != null)
+		{
+			cairo.source = uncovered;
+			cairo.setOperator(CairoOperator.ADD);
+			cairo.paint();
 		}
 
 		cairo.restore();
@@ -365,9 +389,13 @@ class CairoRenderer extends DisplayObjectRenderer
 		__blendGroupDepth--;
 	}
 
-	@:noCompletion private function __compositeAlphaErase(objectPattern:CairoPattern, blendMode:BlendMode, isShape:Bool, x:Int, y:Int, width:Int,
-			height:Int):Void
+	@:noCompletion private function __compositeAlphaErase(objectPattern:CairoPattern, blendMode:BlendMode, displayObject:DisplayObject, x:Int, y:Int,
+			width:Int, height:Int):Void
 	{
+		// a shape's graphics are the whole object: ALPHA only touches the pixels they drew
+		var graphics = displayObject.__graphics;
+		var isShape = graphics != null && (displayObject.__children == null || displayObject.__children.length == 0);
+
 		if (blendMode == ALPHA && isShape)
 		{
 			// Flash's ALPHA only touches the pixels a shape draws, the empty part of its bounds
@@ -383,10 +411,47 @@ class CairoRenderer extends DisplayObjectRenderer
 
 			var data = image.data;
 			var i = 3, n = width * height * 4;
-			while (i < n)
+
+			if (graphics.__coverage != null)
 			{
-				if (data[i] == 0) data[i] = 0xFF;
-				i += 4;
+				// at an anti-aliased edge Flash keeps coverage and fill alpha apart: the covered
+				// part of the pixel keeps dst * alpha and the rest is untouched, so the backdrop is
+				// kept by 1 - coverage + alpha. The coverage render is drawn the way CairoShape
+				// draws the shape's surface, into the group's space
+				var coverageImage = new Image(null, 0, 0, width, height, 0);
+				var coverageCopy = new Cairo(CairoImageSurface.fromImage(coverageImage));
+				var matrix = Matrix.__pool.get();
+				matrix.scale(1 / graphics.__bitmapScaleX, 1 / graphics.__bitmapScaleY);
+				matrix.concat(graphics.__worldTransform);
+				if (__worldTransform != null) matrix.concat(__worldTransform);
+				if (__roundPixels)
+				{
+					matrix.tx = Math.round(matrix.tx);
+					matrix.ty = Math.round(matrix.ty);
+				}
+				matrix.translate(-x, -y);
+				coverageCopy.matrix = matrix.__toMatrix3();
+				Matrix.__pool.release(matrix);
+				coverageCopy.setSourceSurface(graphics.__coverage.getSurface(), 0, 0);
+				coverageCopy.rectangle(0, 0, graphics.__coverage.width, graphics.__coverage.height);
+				coverageCopy.fill();
+				coverageCopy.target.flush();
+
+				var coverageData = coverageImage.data;
+				while (i < n)
+				{
+					var keep = 255 - coverageData[i] + data[i];
+					data[i] = keep > 255 ? 255 : keep;
+					i += 4;
+				}
+			}
+			else
+			{
+				while (i < n)
+				{
+					if (data[i] == 0) data[i] = 0xFF;
+					i += 4;
+				}
 			}
 
 			cairo.setSourceSurface(copy.target, x, y);
@@ -433,11 +498,20 @@ class CairoRenderer extends DisplayObjectRenderer
 		cairo.paint();
 	}
 
-	@:noCompletion private function __prepareSubtract():Void
+	/**
+		The object over opaque black: the premultiplied object p = a * s inside it and 0
+		elsewhere, which is what __compositeSubtract works with.
+	**/
+	@:noCompletion private function __overBlack(objectPattern:CairoPattern):CairoPattern
 	{
+		cairo.pushGroupWithContent(CairoContent.COLOR_ALPHA);
 		cairo.setSourceRGB(0, 0, 0);
 		cairo.setOperator(CairoOperator.SOURCE);
 		cairo.paint();
+		cairo.source = objectPattern;
+		cairo.setOperator(CairoOperator.OVER);
+		cairo.paint();
+		return cairo.popGroup();
 	}
 
 	@:noCompletion private function __compositeSubtract(destination:CairoSurface, objectPattern:CairoPattern):Void

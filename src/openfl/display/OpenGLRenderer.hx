@@ -63,6 +63,7 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	@:noCompletion private static var __emptyColorValue:Array<Float> = [0, 0, 0, 0];
 	@:noCompletion private static var __emptyAlphaValue:Array<Float> = [1];
 	@:noCompletion private static var __discardTransparentValue:Array<Bool> = [false];
+	@:noCompletion private static var __hasCoverageValue:Array<Bool> = [false];
 	@:noCompletion private static var __hasColorTransformValue:Array<Bool> = [false];
 	@:noCompletion private static var __scissorRectangle:Rectangle = new Rectangle();
 	@:noCompletion private static var __textureSizeValue:Array<Float> = [0, 0];
@@ -216,6 +217,7 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	{
 		// every quad starts as a bitmap: its transparent texels count as covered (see applyDiscardTransparent)
 		applyDiscardTransparent(false);
+		applyCoverage(null);
 
 		if (__currentShaderBuffer != null)
 		{
@@ -316,6 +318,23 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		texture is transparent wherever nothing was drawn, and those texels lie
 		outside the object, so they must leave the backdrop alone.
 	**/
+	/**
+		The coverage of the shape being drawn under ALPHA (Graphics.__coverage, every fill
+		opaque), or null. With it the display shader keeps the backdrop by
+		1 - coverage + alpha, as Flash does at an anti-aliased edge, instead of by the alpha alone.
+		Reset to null by applyBitmapData.
+	**/
+	public function applyCoverage(bitmapData:BitmapData):Void
+	{
+		__hasCoverageValue[0] = bitmapData != null;
+
+		if (__currentShader != null)
+		{
+			if (__currentShader.__coverage != null) __currentShader.__coverage.input = bitmapData;
+			if (__currentShader.__hasCoverage != null) __currentShader.__hasCoverage.value = __hasCoverageValue;
+		}
+	}
+
 	public function applyDiscardTransparent(enabled:Bool):Void
 	{
 		__discardTransparentValue[0] = enabled;
@@ -826,7 +845,9 @@ class OpenGLRenderer extends DisplayObjectRenderer
 
 			__upscaled = (__worldTransform.a != 1 || __worldTransform.d != 1);
 
-			__renderDrawable(object);
+			// the root is rendered as it is: its own blend mode is for its parent to apply, and
+			// BitmapData.draw applies the blendMode it was given instead (see __renderDrawable)
+			__renderDrawableDirect(object);
 
 			// TODO: Handle this in Context3D as a viewport?
 
@@ -905,7 +926,7 @@ class OpenGLRenderer extends DisplayObjectRenderer
 			object.__mask = null;
 			object.__scrollRect = null;
 
-			__renderDrawable(object);
+			__renderDrawableDirect(object);
 
 			object.__mask = cacheMask;
 			object.__scrollRect = cacheScrollRect;
@@ -982,11 +1003,18 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		return pieces > 1;
 	}
 
+	/**
+		The modes composed by BlendModeShader with a copy of the backdrop. The first five
+		have no blend factors. The others do, but the factors draw nothing where the
+		backdrop is transparent, whereas Flash draws the object as it is there, so off the
+		opaque stage they take the shader too.
+	**/
 	@:noCompletion private function __needsBlendGroup(blendMode:BlendMode):Bool
 	{
 		return switch (blendMode)
 		{
 			case DIFFERENCE, DARKEN, LIGHTEN, HARDLIGHT, OVERLAY: true;
+			case MULTIPLY, SUBTRACT, INVERT, ERASE, ALPHA: !__backdropIsOpaque();
 			default: false;
 		}
 	}
@@ -1005,10 +1033,15 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	{
 		return switch (blendMode)
 		{
+			case MULTIPLY: 1;
 			case DARKEN: 2;
 			case LIGHTEN: 3;
 			case HARDLIGHT: 4;
 			case OVERLAY: 5;
+			case SUBTRACT: 6;
+			case INVERT: 7;
+			case ERASE: 8;
+			case ALPHA: 9;
 			default: 0; // DIFFERENCE
 		}
 	}
@@ -1040,13 +1073,17 @@ class OpenGLRenderer extends DisplayObjectRenderer
 
 		scratchBuffer.__setUVRect(__context3D, 0, 0, width, height);
 
+		// a shape's graphics are the whole object: ALPHA only touches the pixels they drew
+		// (a Bitmap's transparent pixels do cut the backdrop)
+		var isShape = displayObject.__graphics != null && (displayObject.__children == null || displayObject.__children.length == 0);
+
 		if (shaded)
 		{
-			__compositeBlend(scratchBuffer, backdrop, x0, y0, width, height, blendMode);
+			__compositeBlend(scratchBuffer, backdrop, x0, y0, width, height, blendMode, isShape && blendMode == ALPHA);
 		}
 		else
 		{
-			__compositeLayer(scratchBuffer, displayObject, x0, y0, blendMode);
+			__compositeLayer(scratchBuffer, displayObject, x0, y0, blendMode, isShape && blendMode == ALPHA);
 		}
 	}
 
@@ -1183,20 +1220,20 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	/**
 	handles blendmodes LAYER, ADD, MULTIPLY, SCREEN, SUBTRACT, INVERT, ERASE, ALPHA
 	**/
-	@:noCompletion private function __compositeLayer(scratchBuffer:BitmapData, displayObject:DisplayObject, x0:Int, y0:Int, blendMode:BlendMode):Void
+	@:noCompletion private function __compositeLayer(scratchBuffer:BitmapData, displayObject:DisplayObject, x0:Int, y0:Int, blendMode:BlendMode,
+			discardTransparent:Bool):Void
 	{
 		__setBlendMode(blendMode);
 
-		var isShape = displayObject.__children == null || displayObject.__children.length == 0;
-
-		__drawGroupScratchBuffer(scratchBuffer, x0, y0, __defaultDisplayShader, displayObject.__worldAlpha, isShape && blendMode == ALPHA);
+		__drawGroupScratchBuffer(scratchBuffer, x0, y0, __defaultDisplayShader, displayObject.__worldAlpha, discardTransparent);
 	}
 
 	/**
-		handles blendmodes DIFFERENCE, DARKEN, LIGHTEN, HARDLIGHT and OVERLAY.
+		The modes of __needsBlendGroup: BlendModeShader reads the group and a copy of the
+		backdrop and writes the finished pixel.
 	**/
 	@:noCompletion private function __compositeBlend(scratchBuffer:BitmapData, backdrop:BitmapData, x0:Int, y0:Int, width:Int, height:Int,
-			blendMode:BlendMode):Void
+			blendMode:BlendMode, discardTransparent:Bool):Void
 	{
 		var context = __context3D;
 		backdrop.__setUVRect(context, 0, 0, width, height);
@@ -1205,7 +1242,7 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		var shader = __staticBlendShader;
 		// the window framebuffer is copied bottom-up
 		var window = (context.__state.renderToTexture == null);
-		shader.init(backdrop, __blendGroupMode(blendMode), window ? -1 : 1, window ? height / backdrop.__textureHeight : 0);
+		shader.init(backdrop, __blendGroupMode(blendMode), window ? -1 : 1, window ? height / backdrop.__textureHeight : 0, discardTransparent);
 
 		// the shader writes the finished pixel
 		context.setBlendFactors(ONE, ZERO);
@@ -1508,7 +1545,8 @@ class OpenGLRenderer extends DisplayObjectRenderer
 				__context3D.setBlendFactorsSeparate(ONE_MINUS_DESTINATION_COLOR, ONE_MINUS_SOURCE_ALPHA, ONE, ONE_MINUS_SOURCE_ALPHA);
 
 			// DIFFERENCE, DARKEN, LIGHTEN, HARDLIGHT and OVERLAY are composed by
-			// __renderGroup with BlendModeShader and never drawn directly
+			// __renderGroup with BlendModeShader and never drawn directly, and so are
+			// MULTIPLY, SUBTRACT, INVERT, ERASE and ALPHA off the opaque stage
 
 			// LAYER, NORMAL
 			default:

@@ -191,7 +191,9 @@ class CanvasRenderer extends DisplayObjectRenderer
 
 	@:noCompletion private override function __render(object:IBitmapDrawable):Void
 	{
-		__renderDrawable(object);
+		// the root is rendered as it is: its own blend mode is for its parent to apply, and
+		// BitmapData.draw applies the blendMode it was given instead (see __renderDrawable)
+		__renderDrawableDirect(object);
 	}
 
 	@:noCompletion private function __renderDrawable(object:IBitmapDrawable):Void
@@ -281,9 +283,27 @@ class CanvasRenderer extends DisplayObjectRenderer
 		Rectangle.__pool.release(bounds);
 		if (!visible) return;
 
-		var level = __groupDepth * 2;
+		// three canvases per nesting level: the object, a backdrop copy, the uncovered object
+		var level = __groupDepth * 3;
 		var object = __beginGroupCanvas(level, width, height);
 		__renderIntoGroup(displayObject, object.getContext2d(), x0, y0, blendMode);
+
+		// where the backdrop is transparent Flash draws the object as it is, under every
+		// mode. None of the composites below does that, so the object is kept where the
+		// target is transparent and added back after the composite (never on the opaque
+		// stage, where it would be empty)
+		var uncovered:js.html.CanvasElement = null;
+		if (!__backdropIsOpaque())
+		{
+			uncovered = __getGroupCanvas(level + 2, width, height);
+			var uncoveredContext = uncovered.getContext2d();
+			uncoveredContext.setTransform(1, 0, 0, 1, 0, 0);
+			uncoveredContext.globalAlpha = 1;
+			uncoveredContext.globalCompositeOperation = "copy";
+			uncoveredContext.drawImage(object, 0, 0, width, height, 0, 0, width, height);
+			uncoveredContext.globalCompositeOperation = "destination-out";
+			uncoveredContext.drawImage(context.canvas, x0, y0, width, height, 0, 0, width, height);
+		}
 
 		// compose the group onto the target. No clip here: an advanced blend mode under a
 		// clip takes a slow path on the accelerated canvas, and every composite except
@@ -304,6 +324,12 @@ class CanvasRenderer extends DisplayObjectRenderer
 				__compositeSubtract(object, level, x0, y0, width, height);
 			default:
 				__compositeLayer(object, displayObject, x0, y0, width, height, blendMode);
+		}
+
+		if (uncovered != null)
+		{
+			context.globalCompositeOperation = "lighter";
+			context.drawImage(uncovered, 0, 0, width, height, x0, y0, width, height);
 		}
 
 		context.restore();

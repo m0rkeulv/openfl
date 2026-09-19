@@ -232,6 +232,8 @@ class Shader
 	@:noCompletion private var __position:ShaderParameter<Float>;
 	@:noCompletion private var __textureCoord:ShaderParameter<Float>;
 	@:noCompletion private var __texture:ShaderInput<BitmapData>;
+	@:noCompletion private var __coverage:ShaderInput<BitmapData>;
+	@:noCompletion private var __hasCoverage:ShaderParameter<Bool>;
 	@:noCompletion private var __textureSize:ShaderParameter<Float>;
 
 	#if openfljs
@@ -607,6 +609,8 @@ class Shader
 				{
 					case "openfl_Texture":
 						__texture = input;
+					case "openfl_Coverage":
+						__coverage = input;
 					case "bitmap":
 						__bitmap = input;
 					default:
@@ -680,6 +684,10 @@ class Shader
 						else if (name == "openfl_DiscardTransparent")
 						{
 							__discardTransparent = parameter;
+						}
+						else if (name == "openfl_HasCoverage")
+						{
+							__hasCoverage = parameter;
 						}
 
 						Reflect.setField(__data, name, parameter);

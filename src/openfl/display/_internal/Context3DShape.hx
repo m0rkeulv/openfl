@@ -46,8 +46,12 @@ class Context3DShape
 
 				renderer.setShader(shader);
 				renderer.applyBitmapData(graphics.__bitmap, true);
-				// Flash's ALPHA only touches the pixels a shape covers, the empty texels of its texture must not cut the backdrop
-				renderer.applyDiscardTransparent(renderer.__blendMode == BlendMode.ALPHA);
+				// Flash's ALPHA only touches the pixels a shape covers and keeps coverage and fill alpha
+				// apart at its edges: the coverage render gives that, or else at least the empty
+				// texels of the texture must not cut the backdrop
+				var alphaMask = renderer.__blendMode == BlendMode.ALPHA;
+				renderer.applyCoverage(alphaMask ? graphics.__coverage : null);
+				renderer.applyDiscardTransparent(alphaMask && graphics.__coverage == null);
 
 				var matrix = Matrix.__pool.get();
 				matrix.scale(1 / graphics.__bitmapScaleX, 1 / graphics.__bitmapScaleY);
