@@ -1,6 +1,7 @@
 package openfl.display._internal;
 
 #if !flash
+import openfl.display.BlendMode;
 import openfl.display.DisplayObject;
 import openfl.display.OpenGLRenderer;
 #if gl_stats
@@ -41,10 +42,12 @@ class Context3DShape
 			if (graphics.__bitmap != null && graphics.__visible)
 			{
 				var context = renderer.__context3D;
+				var shader = renderer.__initDisplayShader(shape.__worldShader);
 
-				var shader = renderer.__initShapeShader(cast shape.__worldShader);
 				renderer.setShader(shader);
 				renderer.applyBitmapData(graphics.__bitmap, true);
+				// Flash's ALPHA only touches the pixels a shape covers, the empty texels of its texture must not cut the backdrop
+				renderer.applyDiscardTransparent(renderer.__blendMode == BlendMode.ALPHA);
 
 				var matrix = Matrix.__pool.get();
 				matrix.scale(1 / graphics.__bitmapScaleX, 1 / graphics.__bitmapScaleY);

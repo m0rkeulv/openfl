@@ -45,6 +45,7 @@ class DisplayObjectShader extends Shader
 		varying vec4 openfl_ColorOffsetv;
 		varying vec2 openfl_TextureCoordv;
 
+		uniform bool openfl_DiscardTransparent;
 		uniform bool openfl_HasColorTransform;
 		uniform sampler2D openfl_Texture;
 		uniform vec2 openfl_TextureSize;")
@@ -52,7 +53,15 @@ class DisplayObjectShader extends Shader
 
 		if (color.a == 0.0) {
 
-			gl_FragColor = vec4 (0.0, 0.0, 0.0, 0.0);
+			if (openfl_DiscardTransparent) {
+
+				discard;
+
+			} else {
+
+				gl_FragColor = vec4 (0.0, 0.0, 0.0, 0.0);
+
+			}
 
 		} else if (openfl_HasColorTransform) {
 

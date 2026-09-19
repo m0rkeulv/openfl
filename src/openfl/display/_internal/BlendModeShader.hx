@@ -4,11 +4,6 @@ package openfl.display._internal;
 import openfl.display.BitmapData;
 import openfl.filters.BitmapFilterShader;
 
-/**
-	Composes a group scratch buffer (the object, premultiplied) onto a copy of the backdrop with
-	the Flash blend formulas: the blend works on straight colour and is mixed in by the
-	object's alpha. Mode indexes as in OpenGLRenderer.__blendGroupMode.
-**/
 #if !openfl_debug
 @:fileXml('tags="haxe,release"')
 @:noDebug
@@ -45,10 +40,10 @@ class BlendModeShader extends BitmapFilterShader
 			else blend = hardLight(s, d); 					// OVERLAY
 
 			// separable blend over a possibly transparent backdrop (PDF compositing)
-			vec3 sourceOnly = source.rgb * (1.0 - backdropAlpha);
-			vec3 backdropOnly = backdrop.rgb * (1.0 - sourceAlpha);
-			vec3 weightedBlend = sourceAlpha * backdropAlpha * blended;
-			float coverage = sourceAlpha + backdropAlpha - sourceAlpha * backdropAlpha;
+			vec3 sourceOnly = src.rgb * (1.0 - dstAlpha);
+			vec3 backdropOnly = dst.rgb * (1.0 - srcAlpha);
+			vec3 weightedBlend = srcAlpha * dstAlpha * blend;
+			float coverage = srcAlpha + dstAlpha - srcAlpha * dstAlpha;
 
 			gl_FragColor = vec4(sourceOnly + backdropOnly + weightedBlend, coverage);
 		}")
@@ -62,12 +57,6 @@ class BlendModeShader extends BitmapFilterShader
 		#end
 	}
 
-	/**
-		The backdrop copy, how its rows map to the group's (scale and offset on the texture
-		y: the window framebuffer is copied bottom-up) and the mode. Like the filter shaders,
-		the uniforms are only touched under `#if !macro`: the fields come from ShaderMacro,
-		which does not run when the class is typed in a macro context.
-	**/
 	public function init(backdrop:BitmapData, mode:Int, flipScale:Float, flipOffset:Float):Void
 	{
 		#if !macro
