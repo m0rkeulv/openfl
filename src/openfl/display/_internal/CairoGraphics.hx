@@ -2328,6 +2328,7 @@ class CairoGraphics
 	/** Renders the fills and strokes of `graphics` opaque into `graphics.__coverage`, sized like `__bitmap`. **/
 	private static function __renderCoverage(graphics:Graphics, renderer:CairoRenderer):Void
 	{
+		#if lime_cairo
 		var bitmap = graphics.__bitmap;
 		if (graphics.__coverage == null || graphics.__coverage.width != bitmap.width || graphics.__coverage.height != bitmap.height)
 		{
@@ -2340,6 +2341,7 @@ class CairoGraphics
 		// image version grows, like __bitmap
 		graphics.__coverage.image.dirty = true;
 		graphics.__coverage.image.version++;
+		#end
 	}
 
 	public static function renderMask(graphics:Graphics, renderer:CairoRenderer):Void
