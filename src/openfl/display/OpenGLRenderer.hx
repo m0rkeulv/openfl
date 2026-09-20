@@ -1044,12 +1044,13 @@ class OpenGLRenderer extends DisplayObjectRenderer
 
 	/**
 		True when the current target is the opaque stage itself: not a LAYER group, a
-		transparent stage or a bitmap. Groups reset the cached blend mode, so a mode set
+		transparent stage, a bitmap, or the cache bitmap of a filtered or cacheAsBitmap object
+		(its renderer is given the stage too, but draws into a transparent bitmap). Groups reset the cached blend mode, so a mode set
 		here is not reused at another depth.
 	**/
 	@:noCompletion private inline function __backdropIsOpaque():Bool
 	{
-		return __layerDepth == 0 && __stage != null && !__stage.__transparent;
+		return __layerDepth == 0 && __stage != null && !__stage.__transparent && __stage.__renderer == this;
 	}
 
 	@:noCompletion private static function __blendGroupMode(blendMode:BlendMode):Int

@@ -665,12 +665,13 @@ class CanvasRenderer extends DisplayObjectRenderer
 
 	/**
 		True when the current target is the opaque stage itself: not a LAYER group, a
-		transparent stage or a bitmap. The composites can then work in place, since
+		transparent stage, a bitmap, or the cache bitmap of a filtered or cacheAsBitmap object
+		(its renderer is given the stage too, but draws into a transparent bitmap). The composites can then work in place, since
 		there is no backdrop alpha to preserve, which saves the copy and the way back.
 	**/
 	@:noCompletion private inline function __backdropIsOpaque():Bool
 	{
-		return __layerDepth == 0 && __stage != null && !__stage.__transparent;
+		return __layerDepth == 0 && __stage != null && !__stage.__transparent && __stage.__renderer == this;
 	}
 
 	/**

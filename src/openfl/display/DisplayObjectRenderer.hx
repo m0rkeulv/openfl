@@ -114,18 +114,22 @@ class DisplayObjectRenderer extends EventDispatcher
 
 	/**
 		Whether a blended object is a single piece the composite can read directly, a Bitmap's
-		bitmapData or a shape's rendered graphics, instead of rendering it into a group first:
-		a leaf without a mask, a scroll rectangle, a cache bitmap (filters), an opaque background
-		or a colour transform. The cache bitmap is brought up to date first, as the draw would.
+		bitmapData or a Shape's or empty Sprite's rendered graphics, instead of rendering it into
+		a group first: a leaf without a mask, a scroll rectangle, a cache bitmap (filters), an
+		opaque background or a colour transform. Other drawables with graphics, a TextField for
+		one, are drawn by their own rasteriser and keep the group. The cache bitmap is brought up
+		to date first, as the draw would.
 	**/
 	@:noCompletion private function __isBlendLeaf(displayObject:DisplayObject):Bool
 	{
+		var type = displayObject.__drawableType;
+		if (type != BITMAP && type != SHAPE && type != SPRITE) return false;
 		if (displayObject.__children != null && displayObject.__children.length > 0) return false;
 		if (displayObject.__mask != null || displayObject.__scrollRect != null || displayObject.opaqueBackground != null) return false;
 		if (!displayObject.__worldColorTransform.__isDefault(false)) return false;
 		__updateCacheBitmap(displayObject, false);
 		if (displayObject.__cacheBitmap != null) return false;
-		return displayObject.__drawableType == BITMAP || displayObject.__graphics != null;
+		return type == BITMAP || displayObject.__graphics != null;
 	}
 
 	@:noCompletion private function new()
