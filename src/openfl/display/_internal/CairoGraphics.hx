@@ -2309,6 +2309,10 @@ class CairoGraphics
 				coverage = true;
 				__renderCommands(graphics, renderer, new Cairo(graphics.__coverage.getSurface()));
 				coverage = false;
+				// the OpenGL renderer uploads the coverage as a texture and re-uploads it only when the
+				// image version grows, like __bitmap below
+				graphics.__coverage.image.dirty = true;
+				graphics.__coverage.image.version++;
 			}
 			else
 			{
