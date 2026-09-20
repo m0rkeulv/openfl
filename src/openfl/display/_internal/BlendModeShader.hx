@@ -84,8 +84,7 @@ class BlendModeShader extends BitmapFilterShader
 				// uDrawn, in backdrop coordinates). Over a backdrop a mask left transparent, SUBTRACT
 				// and INVERT leave a black or white silhouette at the object's alpha and ERASE and
 				// ALPHA leave nothing
-				vec2 uv = backdropCoord;
-				bool drawn = uv.x >= uDrawn.x && uv.x < uDrawn.z && uv.y >= uDrawn.y && uv.y < uDrawn.w;
+				bool drawn = backdropCoord.x >= uDrawn.x && backdropCoord.x < uDrawn.z && backdropCoord.y >= uDrawn.y && backdropCoord.y < uDrawn.w;
 
 				if (drawn) {
 					sourceOnly = (uMode == 7) ? vec3(sourceAlpha) : vec3(0.0);

@@ -291,7 +291,6 @@ class CairoRenderer extends DisplayObjectRenderer
 		__drawnBounds = parentDrawn;
 		__groupBlendMode = previousGroupBlendMode;
 
-		cairo.identityMatrix();
 		cairo.popGroupToSource();
 		__setBlendModeCairo(cairo, blendMode);
 		var alpha = __getAlpha(displayObject.__worldAlpha);
@@ -327,7 +326,6 @@ class CairoRenderer extends DisplayObjectRenderer
 		__worldAlpha = cacheWorldAlpha;
 		Rectangle.__pool.release(__drawnBounds);
 		__drawnBounds = parentDrawn;
-		cairo.identityMatrix();
 		cairo.popGroupToSource();
 		cairo.setOperator(CairoOperator.OVER);
 		var alpha = __getAlpha(displayObject.__worldAlpha);
@@ -381,18 +379,16 @@ class CairoRenderer extends DisplayObjectRenderer
 			// divided out: it applies once, to the whole object, below
 			__overrideBlendMode = NORMAL;
 			__blendMode = null;
+			// no group can open inside this one, so nothing reads the drawn bounds: null skips the tracking
 			var parentDrawn = __drawnBounds;
-			__drawnBounds = Rectangle.__pool.get();
-			__drawnBounds.setTo(0, 0, 0, 0);
+			__drawnBounds = null;
 			var cacheWorldAlpha = __worldAlpha;
 			__worldAlpha = 1 / displayObject.__worldAlpha;
 			__renderDrawableDirect(object);
 			__worldAlpha = cacheWorldAlpha;
-			Rectangle.__pool.release(__drawnBounds);
 			__drawnBounds = parentDrawn;
 			__overrideBlendMode = previousOverride;
 
-			cairo.identityMatrix();
 			objectPattern = cairo.popGroup();
 			if (alpha < 1)
 			{
@@ -421,7 +417,6 @@ class CairoRenderer extends DisplayObjectRenderer
 			if (drawnAll) cairo.rectangle(drawn.x, drawn.y, drawn.width, drawn.height);
 			cairo.fillRule = EVEN_ODD;
 			cairo.clip();
-			cairo.fillRule = WINDING;
 			cairo.source = objectPattern;
 			cairo.setOperator(CairoOperator.OVER);
 			cairo.paint();
@@ -547,7 +542,7 @@ class CairoRenderer extends DisplayObjectRenderer
 			cairo.setOperator(CairoOperator.SOURCE);
 			cairo.paint();
 			cairo.setOperator(CairoOperator.DEST_OUT);
-			__drawCoverage(cairo, displayObject, 0, 0);
+			__drawCoverage(cairo, displayObject);
 			cairo.identityMatrix();
 			cairo.source = objectPattern;
 			cairo.setOperator(CairoOperator.ADD);
@@ -572,12 +567,12 @@ class CairoRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		Paints what `displayObject` and its descendants cover into `coverage`, a context whose
-		origin is at (x, y) of the target, with its current operator: a shape's fills through its
+		Paints what `displayObject` and its descendants cover into `coverage`, a context in the
+		target's device space, with its current operator: a shape's fills through its
 		coverage render (every fill opaque, see CairoGraphics), or its whole surface without one,
 		and any other leaf its local bounds, each under the transform it is drawn with.
 	**/
-	@:noCompletion private function __drawCoverage(coverage:Cairo, displayObject:DisplayObject, x:Int, y:Int):Void
+	@:noCompletion private function __drawCoverage(coverage:Cairo, displayObject:DisplayObject):Void
 	{
 		if (!displayObject.__renderable) return;
 		var graphics = displayObject.__graphics;
@@ -587,7 +582,7 @@ class CairoRenderer extends DisplayObjectRenderer
 		{
 			matrix.scale(1 / graphics.__bitmapScaleX, 1 / graphics.__bitmapScaleY);
 			matrix.concat(graphics.__worldTransform);
-			__coverageMatrix(coverage, matrix, x, y);
+			__coverageMatrix(coverage, matrix);
 			if (graphics.__coverage != null)
 			{
 				coverage.setSourceSurface(graphics.__coverage.getSurface(), 0, 0);
@@ -603,14 +598,14 @@ class CairoRenderer extends DisplayObjectRenderer
 
 		if (displayObject.__children != null)
 		{
-			for (child in displayObject.__children) __drawCoverage(coverage, child, x, y);
+			for (child in displayObject.__children) __drawCoverage(coverage, child);
 		}
 		else if (graphics == null)
 		{
 			var bounds = Rectangle.__pool.get();
 			displayObject.__getBounds(bounds, Matrix.__identity);
 			matrix.copyFrom(displayObject.__renderTransform);
-			__coverageMatrix(coverage, matrix, x, y);
+			__coverageMatrix(coverage, matrix);
 			coverage.setSourceRGB(0, 0, 0);
 			coverage.rectangle(bounds.x, bounds.y, bounds.width, bounds.height);
 			coverage.fill();
@@ -621,7 +616,7 @@ class CairoRenderer extends DisplayObjectRenderer
 	}
 
 	/** Sets `coverage`'s matrix to `matrix` in the group's space, the way the object is drawn. **/
-	@:noCompletion private function __coverageMatrix(coverage:Cairo, matrix:Matrix, x:Int, y:Int):Void
+	@:noCompletion private function __coverageMatrix(coverage:Cairo, matrix:Matrix):Void
 	{
 		if (__worldTransform != null) matrix.concat(__worldTransform);
 		if (__roundPixels)
@@ -629,7 +624,6 @@ class CairoRenderer extends DisplayObjectRenderer
 			matrix.tx = Math.round(matrix.tx);
 			matrix.ty = Math.round(matrix.ty);
 		}
-		matrix.translate(-x, -y);
 		coverage.matrix = matrix.__toMatrix3();
 	}
 

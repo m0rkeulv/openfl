@@ -1202,9 +1202,10 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		var cacheOverrideBlendMode = __overrideBlendMode;
 		var cacheGroupBlendMode = __groupBlendMode;
 		var cacheWorldAlpha = __worldAlpha;
+		// a LAYER tracks what its children draw; nothing can read the bounds inside a shader group
 		var cacheDrawnBounds = __drawnBounds;
-		__drawnBounds = Rectangle.__pool.get();
-		__drawnBounds.setTo(0, 0, 0, 0);
+		__drawnBounds = layer ? Rectangle.__pool.get() : null;
+		if (layer) __drawnBounds.setTo(0, 0, 0, 0);
 
 		__suspendClipAndMask();
 		if (__groupClipRects[__groupDepth] == null) __groupClipRects[__groupDepth] = [];
@@ -1243,7 +1244,7 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		__renderDrawableDirect(displayObject);
 
 		__worldAlpha = cacheWorldAlpha;
-		Rectangle.__pool.release(__drawnBounds);
+		if (layer) Rectangle.__pool.release(__drawnBounds);
 		__drawnBounds = cacheDrawnBounds;
 		__overrideBlendMode = cacheOverrideBlendMode;
 		__groupBlendMode = cacheGroupBlendMode;

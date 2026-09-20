@@ -6,6 +6,7 @@ import openfl.display._internal.DrawCommandReader;
 import openfl.display.BitmapData;
 import openfl.display.CairoRenderer;
 import openfl.display.GradientType;
+import openfl.display.BlendMode;
 import openfl.display.Graphics;
 import openfl.display.InterpolationMethod;
 import openfl.display.SpreadMethod;
@@ -2298,7 +2299,7 @@ class CairoGraphics
 
 			// a shape under ALPHA also needs its coverage, every fill and stroke opaque, so the
 			// composite can keep the uncovered part of an edge pixel (see CairoRenderer)
-			if (graphics.__owner != null && graphics.__owner.__worldBlendMode == openfl.display.BlendMode.ALPHA)
+			if (graphics.__owner.__worldBlendMode == BlendMode.ALPHA)
 			{
 				var bitmap = graphics.__bitmap;
 				if (graphics.__coverage == null || graphics.__coverage.width != bitmap.width || graphics.__coverage.height != bitmap.height)
