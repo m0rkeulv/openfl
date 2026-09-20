@@ -73,6 +73,19 @@ class DisplayObjectRenderer extends EventDispatcher
 	@:noCompletion private function __markDrawn(displayObject:DisplayObject):Void
 	{
 		if (__drawnBounds == null) return;
+		// only what draws counts: an invisible object or one at alpha 0 draws nothing, and a
+		// container without graphics or filters of its own draws only through its children
+		if (!displayObject.__renderable || displayObject.__worldAlpha <= 0) return;
+		var children = displayObject.__children;
+		if (children != null
+			&& children.length > 0
+			&& (displayObject.__graphics == null || displayObject.__graphics.__commands.length == 0)
+			&& displayObject.__filters == null
+			&& displayObject.__cacheBitmap == null)
+		{
+			for (child in children) __markDrawn(child);
+			return;
+		}
 		var bounds = Rectangle.__pool.get();
 		displayObject.__getFilterBounds(bounds, displayObject.__renderTransform);
 		if (__worldTransform != null) bounds.__transform(bounds, __worldTransform);
