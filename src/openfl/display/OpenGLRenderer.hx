@@ -852,9 +852,10 @@ class OpenGLRenderer extends DisplayObjectRenderer
 
 			__upscaled = (__worldTransform.a != 1 || __worldTransform.d != 1);
 
-			// the root is rendered as it is: its own blend mode is for its parent to apply, and
-			// BitmapData.draw applies the blendMode it was given instead (see __renderDrawable)
-			__renderDrawableDirect(object);
+			// the root is rendered as it is, its own blend mode being its parent's to apply, unless
+			// BitmapData.draw gave a blend mode: then the root is composited with it, as one object
+			if (__overrideBlendMode != null && __overrideBlendMode != NORMAL) __renderDrawable(object);
+			else __renderDrawableDirect(object);
 
 			// TODO: Handle this in Context3D as a viewport?
 
@@ -952,7 +953,7 @@ class OpenGLRenderer extends DisplayObjectRenderer
 
 			// LAYER composes the subtree offscreen; the modes that need the backdrop as a
 			// shader input are composed the same way (see __renderGroup)
-			if (displayObject.__blendMode == LAYER && __blendGroupDepth == 0)
+			if (displayObject.__blendMode == LAYER && __blendGroupDepth == 0 && (__overrideBlendMode == null || __overrideBlendMode == NORMAL))
 			{
 				__renderGroup(displayObject, LAYER);
 				__markDrawn(displayObject);
@@ -1046,12 +1047,13 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	/**
 		True when the current target is the opaque stage itself: not a LAYER group, a
 		transparent stage, a bitmap, or the cache bitmap of a filtered or cacheAsBitmap object
-		(its renderer is given the stage too, but draws into a transparent bitmap). Groups reset the cached blend mode, so a mode set
+		(its renderer is given the stage too, but draws into a transparent bitmap). Without a
+		stage, the target is a BitmapData and __transparent says whether it is opaque. Groups reset the cached blend mode, so a mode set
 		here is not reused at another depth.
 	**/
 	@:noCompletion private inline function __backdropIsOpaque():Bool
 	{
-		return __layerDepth == 0 && __stage != null && !__stage.__transparent && __stage.__renderer == this;
+		return __layerDepth == 0 && (__stage != null ? (!__stage.__transparent && __stage.__renderer == this) : !__transparent);
 	}
 
 	@:noCompletion private static function __blendGroupMode(blendMode:BlendMode):Int
@@ -1233,14 +1235,11 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		// the object's alpha applies once, to the composite (see __renderGroup): divided out here.
 		// The coverage pass draws every leaf opaque, so it takes no alpha at all
 		__worldAlpha = coverageOnly ? 1 : 1 / displayObject.__worldAlpha;
-		if (layer)
-		{
-			if (blendMode != LAYER) __groupBlendMode = blendMode;
-		}
-		else
-		{
-			__overrideBlendMode = NORMAL;
-		}
+		// the mode this group is composited with: children that only inherit it render NORMAL in a
+		// LAYER-like group, every child renders NORMAL in a shader group, and shapes rendered inside
+		// either know whether their coverage is wanted (__wantsCoverage)
+		if (blendMode != LAYER) __groupBlendMode = blendMode;
+		if (!layer) __overrideBlendMode = NORMAL;
 
 		__blendMode = null;
 		__setBlendMode(NORMAL);
@@ -1373,7 +1372,7 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		else
 		{
 			// renders the graphics to their texture when dirty (the texture path draws nothing here)
-			Context3DGraphics.render(graphics, this);
+			Context3DGraphics.render(graphics, this, blendMode == ALPHA);
 			if (graphics.__bitmap != null && graphics.__visible)
 			{
 				texture = graphics.__bitmap;

@@ -1963,7 +1963,7 @@ class CairoGraphics
 	#if lime_cairo
 	private static function __renderCommands(graphics:Graphics, renderer:CairoRenderer, target:Cairo):Void
 	{
-		if (coverage && coveragePattern == null) coveragePattern = CairoPattern.createRGB(0, 0, 0);
+		if (CairoGraphics.coverage && coveragePattern == null) coveragePattern = CairoPattern.createRGB(0, 0, 0);
 		cairo = target;
 
 			renderer.__setBlendModeCairo(cairo, NORMAL);
@@ -2207,7 +2207,8 @@ class CairoGraphics
 	}
 	#end
 
-	public static function render(graphics:Graphics, renderer:CairoRenderer):Void
+	/** Renders the graphics to their surface when dirty; with `coverage`, their coverage too. **/
+	public static function render(graphics:Graphics, renderer:CairoRenderer, coverage:Bool = false):Void
 	{
 		#if lime_cairo
 		CairoGraphics.graphics = graphics;
@@ -2226,7 +2227,7 @@ class CairoGraphics
 		{
 			// a shape that came under ALPHA after its render (its blend mode changed, or an ancestor's)
 			// still needs its coverage: rendered here on its own, the fills being unchanged
-			if (!graphics.__managed && graphics.__coverage == null && graphics.__bitmap != null && graphics.__owner.__worldBlendMode == BlendMode.ALPHA)
+			if (coverage && !graphics.__managed && graphics.__coverage == null && graphics.__bitmap != null)
 			{
 				bounds = graphics.__bounds;
 				__renderCoverage(graphics, renderer);
@@ -2306,7 +2307,7 @@ class CairoGraphics
 
 			// a shape under ALPHA also needs its coverage, every fill and stroke opaque, so the
 			// composite can keep the uncovered part of an edge pixel (see CairoRenderer)
-			if (graphics.__owner.__worldBlendMode == BlendMode.ALPHA)
+			if (coverage)
 			{
 				__renderCoverage(graphics, renderer);
 			}
@@ -2334,9 +2335,9 @@ class CairoGraphics
 		{
 			graphics.__coverage = new BitmapData(bitmap.width, bitmap.height, true, 0);
 		}
-		coverage = true;
+		CairoGraphics.coverage = true;
 		__renderCommands(graphics, renderer, new Cairo(graphics.__coverage.getSurface()));
-		coverage = false;
+		CairoGraphics.coverage = false;
 		// the OpenGL renderer uploads the coverage as a texture and re-uploads it only when the
 		// image version grows, like __bitmap
 		graphics.__coverage.image.dirty = true;

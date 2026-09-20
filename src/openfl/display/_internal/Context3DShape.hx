@@ -37,7 +37,7 @@ class Context3DShape
 			renderer.__pushMaskObject(shape);
 			// renderer.filterManager.pushObject (shape);
 
-			Context3DGraphics.render(graphics, renderer);
+			Context3DGraphics.render(graphics, renderer, renderer.__wantsCoverage(shape));
 
 			if (graphics.__bitmap != null && graphics.__visible)
 			{

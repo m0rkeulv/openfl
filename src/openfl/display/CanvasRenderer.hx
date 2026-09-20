@@ -191,9 +191,10 @@ class CanvasRenderer extends DisplayObjectRenderer
 
 	@:noCompletion private override function __render(object:IBitmapDrawable):Void
 	{
-		// the root is rendered as it is: its own blend mode is for its parent to apply, and
-		// BitmapData.draw applies the blendMode it was given instead (see __renderDrawable)
-		__renderDrawableDirect(object);
+		// the root is rendered as it is, its own blend mode being its parent's to apply, unless
+		// BitmapData.draw gave a blend mode: then the root is composited with it, as one object
+		if (__overrideBlendMode != null && __overrideBlendMode != NORMAL) __renderDrawable(object);
+		else __renderDrawableDirect(object);
 	}
 
 	@:noCompletion private function __renderDrawable(object:IBitmapDrawable):Void
@@ -207,7 +208,7 @@ class CanvasRenderer extends DisplayObjectRenderer
 
 			// LAYER composes the subtree offscreen; the modes without a composite operation
 			// are composed the same way (see __renderGroup)
-			if (displayObject.__blendMode == LAYER && __blendGroupDepth == 0)
+			if (displayObject.__blendMode == LAYER && __blendGroupDepth == 0 && (__overrideBlendMode == null || __overrideBlendMode == NORMAL))
 			{
 				__renderGroup(displayObject, LAYER);
 				__markDrawn(displayObject);
@@ -666,12 +667,13 @@ class CanvasRenderer extends DisplayObjectRenderer
 	/**
 		True when the current target is the opaque stage itself: not a LAYER group, a
 		transparent stage, a bitmap, or the cache bitmap of a filtered or cacheAsBitmap object
-		(its renderer is given the stage too, but draws into a transparent bitmap). The composites can then work in place, since
+		(its renderer is given the stage too, but draws into a transparent bitmap). Without a
+		stage, the target is a BitmapData and __transparent says whether it is opaque. The composites can then work in place, since
 		there is no backdrop alpha to preserve, which saves the copy and the way back.
 	**/
 	@:noCompletion private inline function __backdropIsOpaque():Bool
 	{
-		return __layerDepth == 0 && __stage != null && !__stage.__transparent && __stage.__renderer == this;
+		return __layerDepth == 0 && (__stage != null ? (!__stage.__transparent && __stage.__renderer == this) : !__transparent);
 	}
 
 	/**

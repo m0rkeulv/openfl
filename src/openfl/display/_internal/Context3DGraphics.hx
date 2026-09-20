@@ -677,7 +677,8 @@ class Context3DGraphics
 		return true;
 	}
 
-	public static function render(graphics:Graphics, renderer:OpenGLRenderer):Void
+	/** Draws the graphics on the direct path, or renders them to their texture when dirty (with `coverage`, their coverage too). **/
+	public static function render(graphics:Graphics, renderer:OpenGLRenderer, coverage:Bool = false):Void
 	{
 		if (!graphics.__visible || graphics.__commands.length == 0) return;
 
@@ -715,7 +716,7 @@ class Context3DGraphics
 			#if (js && html5)
 			CanvasGraphics.render(graphics, cast renderer.__softwareRenderer);
 			#elseif lime_cairo
-			CairoGraphics.render(graphics, cast renderer.__softwareRenderer);
+			CairoGraphics.render(graphics, cast renderer.__softwareRenderer, coverage);
 			#end
 
 			renderer.__softwareRenderer.__worldTransform = cacheTransform;

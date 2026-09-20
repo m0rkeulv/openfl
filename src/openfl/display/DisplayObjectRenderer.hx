@@ -55,7 +55,8 @@ class DisplayObjectRenderer extends EventDispatcher
 	@:noCompletion private var __roundPixels:Bool;
 	@:noCompletion private var __stage:Stage;
 	@:noCompletion private var __tempColorTransform:ColorTransform;
-	@:noCompletion private var __transparent:Bool;
+	/** Whether the target has alpha: false for an opaque BitmapData (set by BitmapData.draw); the stage answers for itself. **/
+	@:noCompletion private var __transparent:Bool = true;
 	@SuppressWarnings("checkstyle:Dynamic") @:noCompletion private var __type:#if lime RenderContextType #else Dynamic #end;
 	@:noCompletion private var __worldAlpha:Float;
 	@:noCompletion private var __worldColorTransform:ColorTransform;
@@ -104,6 +105,16 @@ class DisplayObjectRenderer extends EventDispatcher
 		and a shape its fills, and leaves the rest of the object's box alone. A single
 		axis-aligned bitmap covers its whole box, so the plain destination-in already gives that.
 	**/
+	/**
+		Whether a shape's coverage (the opaque render of its fills that ALPHA masks with) is wanted:
+		the object is composited with ALPHA by its own mode, by the group it is rendered in, or by
+		the mode BitmapData.draw was given.
+	**/
+	@:noCompletion private function __wantsCoverage(displayObject:DisplayObject):Bool
+	{
+		return displayObject.__worldBlendMode == ALPHA || __groupBlendMode == ALPHA || __overrideBlendMode == ALPHA;
+	}
+
 	@:noCompletion private function __alphaNeedsCoverage(displayObject:DisplayObject):Bool
 	{
 		if (displayObject.__graphics != null) return true;

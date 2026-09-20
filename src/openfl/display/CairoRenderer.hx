@@ -185,9 +185,10 @@ class CairoRenderer extends DisplayObjectRenderer
 	{
 		if (cairo == null) return;
 
-		// the root is rendered as it is: its own blend mode is for its parent to apply, and
-		// BitmapData.draw applies the blendMode it was given instead (see __renderDrawable)
-		__renderDrawableDirect(object);
+		// the root is rendered as it is, its own blend mode being its parent's to apply, unless
+		// BitmapData.draw gave a blend mode: then the root is composited with it, as one object
+		if (__overrideBlendMode != null && __overrideBlendMode != NORMAL) __renderDrawable(object);
+		else __renderDrawableDirect(object);
 	}
 
 	@:noCompletion private function __renderDrawable(object:IBitmapDrawable):Void
@@ -200,7 +201,7 @@ class CairoRenderer extends DisplayObjectRenderer
 			var displayObject:DisplayObject = cast object;
 			// a LAYER container is rendered into its own group, so ERASE and ALPHA
 			// children only affect what is inside it, as in Flash
-			if (displayObject.__blendMode == LAYER && __blendGroupDepth == 0)
+			if (displayObject.__blendMode == LAYER && __blendGroupDepth == 0 && (__overrideBlendMode == null || __overrideBlendMode == NORMAL))
 			{
 				__renderLayerGroup(object);
 				__markDrawn(displayObject);
@@ -345,6 +346,9 @@ class CairoRenderer extends DisplayObjectRenderer
 		var displayObject:DisplayObject = cast object;
 		if (displayObject.__worldAlpha <= 0) return;
 		var previousOverride = __overrideBlendMode;
+		// the mode this group is composited with, for the shapes rendered inside it (__wantsCoverage)
+		var previousGroupBlendMode = __groupBlendMode;
+		__groupBlendMode = blendMode;
 		__blendGroupDepth++;
 
 		// the surface being drawn on right now: the window, the bitmap, or the
@@ -456,6 +460,7 @@ class CairoRenderer extends DisplayObjectRenderer
 
 		cairo.restore();
 		__blendMode = null; // the operator is set again by the next __setBlendMode
+		__groupBlendMode = previousGroupBlendMode;
 		__blendGroupDepth--;
 	}
 
@@ -492,7 +497,7 @@ class CairoRenderer extends DisplayObjectRenderer
 		else
 		{
 			#if lime_cairo
-			CairoGraphics.render(graphics, this);
+			CairoGraphics.render(graphics, this, __wantsCoverage(displayObject));
 			if (graphics.__cairo != null && graphics.__visible && graphics.__width >= 1 && graphics.__height >= 1)
 			{
 				surface = graphics.__cairo.target;
@@ -700,12 +705,13 @@ class CairoRenderer extends DisplayObjectRenderer
 	/**
 		True when the current target is the opaque stage surface itself: not a LAYER
 		group, a transparent stage, a bitmap, or the cache bitmap of a filtered or cacheAsBitmap
-		object (its renderer is given the stage too, but draws into a transparent bitmap). The composites can then work in place,
+		object (its renderer is given the stage too, but draws into a transparent bitmap). Without a
+		stage, the target is a BitmapData and __transparent says whether it is opaque. The composites can then work in place,
 		since there is no destination alpha to preserve.
 	**/
 	@:noCompletion private inline function __backdropIsOpaque():Bool
 	{
-		return __layerDepth == 0 && __stage != null && !__stage.__transparent && __stage.__renderer == this;
+		return __layerDepth == 0 && (__stage != null ? (!__stage.__transparent && __stage.__renderer == this) : !__transparent);
 	}
 	#end
 
