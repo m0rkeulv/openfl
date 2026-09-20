@@ -525,28 +525,22 @@ class CanvasRenderer extends DisplayObjectRenderer
 			// transparent pixels included, a shape its fills (its whole surface here, the canvas
 			// renderer has no coverage render), and the part of the object's box that no leaf
 			// covers keeps the backdrop. destination-in cuts wherever the source is transparent,
-			// so the group's alpha is set to 1 - coverage + alpha first
-			var coverage = __getGroupCanvas(level + 3, width, height);
-			var coverageContext = coverage.getContext2d();
-			coverageContext.setTransform(1, 0, 0, 1, 0, 0);
-			coverageContext.globalAlpha = 1;
-			coverageContext.globalCompositeOperation = "source-over";
-			coverageContext.clearRect(0, 0, width, height);
-			coverageContext.fillStyle = "#000000";
-			__drawCoverage(coverageContext, displayObject, x0, y0);
-
-			var objectContext = object.getContext2d();
-			var pixels = objectContext.getImageData(0, 0, width, height);
-			var data = pixels.data;
-			var coverageData = coverageContext.getImageData(0, 0, width, height).data;
-			var i = 3, n = width * height * 4;
-			while (i < n)
-			{
-				var keep = 255 - coverageData[i] + data[i];
-				data[i] = keep > 255 ? 255 : keep;
-				i += 4;
-			}
-			objectContext.putImageData(pixels, 0, 0);
+			// so the mask is 1 - coverage + alpha, built on the coverage canvas with composite
+			// operations alone: opaque, the coverage taken out, the object added (lighter clamps at 1)
+			var mask = __getGroupCanvas(level + 3, width, height);
+			var maskContext = mask.getContext2d();
+			maskContext.setTransform(1, 0, 0, 1, 0, 0);
+			maskContext.globalAlpha = 1;
+			maskContext.globalCompositeOperation = "source-over";
+			maskContext.clearRect(0, 0, width, height);
+			maskContext.fillStyle = "#000000";
+			maskContext.fillRect(0, 0, width, height);
+			maskContext.globalCompositeOperation = "destination-out";
+			__drawCoverage(maskContext, displayObject, x0, y0);
+			maskContext.setTransform(1, 0, 0, 1, 0, 0);
+			maskContext.globalCompositeOperation = "lighter";
+			maskContext.drawImage(object, 0, 0, width, height, 0, 0, width, height);
+			object = mask;
 		}
 
 		context.beginPath();
@@ -565,9 +559,9 @@ class CanvasRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		Fills what `displayObject` and its descendants cover into the coverage context of the
-		group at (x0, y0): a shape its graphics' bounds, any other leaf its local bounds, each
-		under the transform it is drawn with.
+		Fills what `displayObject` and its descendants cover into `coverage`, a context whose origin
+		is at (x0, y0) of the target, with its current composite operation: a shape its graphics'
+		bounds, any other leaf its local bounds, each under the transform it is drawn with.
 	**/
 	@:noCompletion private function __drawCoverage(coverage:js.html.CanvasRenderingContext2D, displayObject:DisplayObject, x0:Int, y0:Int):Void
 	{

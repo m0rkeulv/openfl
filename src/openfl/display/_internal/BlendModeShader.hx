@@ -8,6 +8,7 @@ import openfl.filters.BitmapFilterShader;
 @:fileXml('tags="haxe,release"')
 @:noDebug
 #end
+@:access(openfl.display.BitmapData)
 @SuppressWarnings("checkstyle:FieldDocComment")
 class BlendModeShader extends BitmapFilterShader
 {
@@ -15,7 +16,8 @@ class BlendModeShader extends BitmapFilterShader
 	@:glFragmentSource("varying vec2 openfl_TextureCoordv;
 		uniform sampler2D openfl_Texture;
 		uniform sampler2D uBackdrop;
-		uniform vec2 uBackdropFlip;
+		uniform vec4 uBackdropFrame;
+		uniform float uAlpha;
 		uniform int uMode;
 		uniform bool uDiscardTransparent;
 		uniform vec4 uDrawn;
@@ -27,8 +29,12 @@ class BlendModeShader extends BitmapFilterShader
 		}
 
 		void main(void) {
-			vec4 src = texture2D(openfl_Texture, openfl_TextureCoordv);
-			vec4 dst = texture2D(uBackdrop, vec2(openfl_TextureCoordv.x, openfl_TextureCoordv.y * uBackdropFlip.x + uBackdropFlip.y));
+			// the source is the object's own texture, at its alpha; the backdrop copy is read at
+			// this fragment's position in the framebuffer (see setBackdrop), so the source quad
+			// can be a group at the backdrop's rectangle or the object drawn with its own matrix
+			vec4 src = texture2D(openfl_Texture, openfl_TextureCoordv) * uAlpha;
+			vec2 backdropCoord = (gl_FragCoord.xy - uBackdropFrame.xy) * uBackdropFrame.zw;
+			vec4 dst = texture2D(uBackdrop, backdropCoord);
 
 			float srcAlpha = src.a;
 			float dstAlpha = dst.a;
@@ -75,9 +81,10 @@ class BlendModeShader extends BitmapFilterShader
 				}
 
 				// these four show the source as it is only where nothing was drawn before (outside
-				// uDrawn). Over a backdrop a mask left transparent, SUBTRACT and INVERT leave a
-				// black or white silhouette at the object's alpha and ERASE and ALPHA leave nothing
-				vec2 uv = openfl_TextureCoordv;
+				// uDrawn, in backdrop coordinates). Over a backdrop a mask left transparent, SUBTRACT
+				// and INVERT leave a black or white silhouette at the object's alpha and ERASE and
+				// ALPHA leave nothing
+				vec2 uv = backdropCoord;
 				bool drawn = uv.x >= uDrawn.x && uv.x < uDrawn.z && uv.y >= uDrawn.y && uv.y < uDrawn.w;
 
 				if (drawn) {
@@ -93,14 +100,33 @@ class BlendModeShader extends BitmapFilterShader
 		super();
 
 		#if !macro
-		uBackdropFlip.value = [1, 0];
+		uBackdropFrame.value = [0, 0, 1, 1];
+		uAlpha.value = [1];
 		uMode.value = [0];
 		uDiscardTransparent.value = [false];
 		uDrawn.value = [0, 0, 1, 1];
 		uHasCoverage.value = [false];
 		#end
 	}
-	/** The part of the group drawn into before, as texture coordinates (x0, y0, x1, y1). **/
+	/**
+		The backdrop copy and where it was taken from: (x, y) is the framebuffer position of its
+		first texel, the same as the copy's, so the fragment position maps onto it directly.
+	**/
+	public function setBackdrop(backdrop:BitmapData, x:Float, y:Float):Void
+	{
+		#if !macro
+		uBackdrop.input = backdrop;
+		uBackdrop.filter = NEAREST;
+		uBackdrop.mipFilter = MIPNONE;
+		uBackdrop.wrap = CLAMP;
+		uBackdropFrame.value[0] = x;
+		uBackdropFrame.value[1] = y;
+		uBackdropFrame.value[2] = 1 / backdrop.__textureWidth;
+		uBackdropFrame.value[3] = 1 / backdrop.__textureHeight;
+		#end
+	}
+
+	/** The part of the target drawn into before, as backdrop coordinates (x0, y0, x1, y1). **/
 	public function setDrawn(x0:Float, y0:Float, x1:Float, y1:Float):Void
 	{
 		#if !macro
@@ -111,22 +137,18 @@ class BlendModeShader extends BitmapFilterShader
 		#end
 	}
 
-	public function init(backdrop:BitmapData, mode:Int, flipScale:Float, flipOffset:Float, discardTransparent:Bool, coverage:BitmapData):Void
+	/** The mode, the source's alpha and, for ALPHA, its coverage (same texture coordinates as the source). **/
+	public function init(mode:Int, alpha:Float, discardTransparent:Bool, coverage:BitmapData):Void
 	{
 		#if !macro
+		uMode.value[0] = mode;
+		uAlpha.value[0] = alpha;
 		uDiscardTransparent.value[0] = discardTransparent;
 		uHasCoverage.value[0] = coverage != null;
 		uCoverage.input = coverage;
 		uCoverage.filter = NEAREST;
 		uCoverage.mipFilter = MIPNONE;
 		uCoverage.wrap = CLAMP;
-		uBackdrop.input = backdrop;
-		uBackdrop.filter = NEAREST;
-		uBackdrop.mipFilter = MIPNONE;
-		uBackdrop.wrap = CLAMP;
-		uMode.value[0] = mode;
-		uBackdropFlip.value[0] = flipScale;
-		uBackdropFlip.value[1] = flipOffset;
 		#end
 	}
 }

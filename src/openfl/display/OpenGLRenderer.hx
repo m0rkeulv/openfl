@@ -39,6 +39,8 @@ import lime.math.Matrix4;
 @:access(openfl.display._internal.ShaderBuffer)
 @:access(openfl.display3D.Context3D)
 @:access(openfl.display3D.textures.TextureBase)
+@:access(openfl.display._internal.Context3DGraphics)
+@:access(openfl.display.Bitmap)
 @:access(openfl.display.BitmapData)
 @:access(openfl.display.DisplayObject)
 @:access(openfl.display.Graphics)
@@ -961,7 +963,21 @@ class OpenGLRenderer extends DisplayObjectRenderer
 				var blendMode = __overrideBlendMode != null ? __overrideBlendMode : displayObject.__worldBlendMode;
 				if (blendMode == __groupBlendMode) blendMode = NORMAL;
 
-				if (__needsBlendGroup(blendMode) || __needsWholeObjectGroup(displayObject, blendMode))
+				if (__needsBlendGroup(blendMode))
+				{
+					// one piece composes straight from its texture, anything else as a group
+					if (__isBlendLeaf(displayObject) && displayObject.__worldShader == null && __leafTexturePath(displayObject))
+					{
+						__compositeLeaf(displayObject, blendMode);
+					}
+					else
+					{
+						__renderGroup(displayObject, blendMode);
+					}
+					__markDrawn(displayObject);
+					return;
+				}
+				if (__needsWholeObjectGroup(displayObject, blendMode))
 				{
 					__renderGroup(displayObject, blendMode);
 					__markDrawn(displayObject);
@@ -1121,7 +1137,15 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	{
 		displayObject.__getFilterBounds(bounds, displayObject.__renderTransform);
 		bounds.__transform(bounds, __worldTransform);
+		return __clampGroupBounds(bounds);
+	}
 
+	/**
+		Rounds a rectangle in target pixels outward to whole pixels and clamps it to the target
+		and the current clip rectangle. Returns false when nothing is left.
+	**/
+	@:noCompletion private function __clampGroupBounds(bounds:Rectangle):Bool
+	{
 		var x0 = Math.floor(bounds.x), y0 = Math.floor(bounds.y);
 		var x1 = Math.ceil(bounds.right), y1 = Math.ceil(bounds.bottom);
 
@@ -1273,32 +1297,149 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	@:noCompletion private function __compositeBlend(scratchBuffer:BitmapData, backdrop:BitmapData, x0:Int, y0:Int, width:Int, height:Int,
 			blendMode:BlendMode, discardTransparent:Bool, coverage:BitmapData):Void
 	{
-		var context = __context3D;
-		backdrop.__setUVRect(context, 0, 0, width, height);
+		var shader = __staticBlendShader; // __copyBackdrop gave it the backdrop
+		shader.init(__blendGroupMode(blendMode), 1, discardTransparent, coverage);
+		__setDrawn(shader, backdrop, x0, y0, width, height);
 
-		if (__staticBlendShader == null) __staticBlendShader = new BlendModeShader();
-		var shader = __staticBlendShader;
-		// the window framebuffer is copied bottom-up
-		var window = (context.__state.renderToTexture == null);
-		shader.init(backdrop, __blendGroupMode(blendMode), window ? -1 : 1, window ? height / backdrop.__textureHeight : 0, discardTransparent, coverage);
+		// the shader writes the finished pixel
+		__context3D.setBlendFactors(ONE, ZERO);
+		__drawGroupScratchBuffer(scratchBuffer, x0, y0, shader, 1);
+	}
 
-		// the part of the group that was drawn into before, as texture coordinates of the
-		// scratch buffer (see __markDrawn): outside it the shader draws the object as it is
+	/**
+		Tells the blend shader the part of the target drawn into before (see __markDrawn), as
+		backdrop coordinates: outside it the shader draws the object as it is.
+	**/
+	@:noCompletion private function __setDrawn(shader:BlendModeShader, backdrop:BitmapData, x0:Int, y0:Int, width:Int, height:Int):Void
+	{
 		var drawn = Rectangle.__pool.get();
 		if (__drawnWithin(x0, y0, width, height, drawn))
 		{
-			shader.setDrawn((drawn.x - x0) / scratchBuffer.__textureWidth, (drawn.y - y0) / scratchBuffer.__textureHeight,
-				(drawn.right - x0) / scratchBuffer.__textureWidth, (drawn.bottom - y0) / scratchBuffer.__textureHeight);
+			shader.setDrawn((drawn.x - x0) / backdrop.__textureWidth, (drawn.y - y0) / backdrop.__textureHeight, (drawn.right - x0) / backdrop.__textureWidth,
+				(drawn.bottom - y0) / backdrop.__textureHeight);
 		}
 		else
 		{
 			shader.setDrawn(0, 0, 0, 0);
 		}
 		Rectangle.__pool.release(drawn);
+	}
 
-		// the shader writes the finished pixel
-		context.setBlendFactors(ONE, ZERO);
-		__drawGroupScratchBuffer(scratchBuffer, x0, y0, shader, 1);
+	/**
+		Whether a shape leaf draws from a texture of its graphics (the direct triangle path
+		draws several pieces straight to the target and has no texture to read).
+	**/
+	@:noCompletion private function __leafTexturePath(displayObject:DisplayObject):Bool
+	{
+		var graphics = displayObject.__graphics;
+		if (graphics == null) return true; // a Bitmap
+		return (graphics.__bitmap != null && !graphics.__dirty) || !Context3DGraphics.isCompatible(graphics);
+	}
+
+	/**
+		A one-piece object under one of the __needsBlendGroup modes: the blend shader reads the
+		object's own texture, drawn with its own matrix, against a copy of the backdrop under its
+		bounds. No group, no scratch clear, and a shape's coverage is its coverage texture, so no
+		coverage pass either.
+	**/
+	@:noCompletion private function __compositeLeaf(displayObject:DisplayObject, blendMode:BlendMode):Void
+	{
+		if (!displayObject.__renderable || displayObject.__worldAlpha <= 0) return;
+
+		var texture:BitmapData = null;
+		var coverage:BitmapData = null;
+		var smooth = true;
+		var pixelSnapping:PixelSnapping = AUTO;
+		var matrix = Matrix.__pool.get();
+		var graphics = displayObject.__graphics;
+
+		if (graphics == null)
+		{
+			var bitmap:Bitmap = cast displayObject;
+			var bitmapData = bitmap.__bitmapData;
+			if (bitmapData != null && bitmapData.__isValid)
+			{
+				if (bitmapData.image != null) bitmap.__imageVersion = bitmapData.image.version;
+				texture = bitmapData;
+				matrix.copyFrom(bitmap.__renderTransform);
+				pixelSnapping = bitmap.pixelSnapping;
+				smooth = __allowSmoothing && (bitmap.smoothing || __upscaled);
+			}
+		}
+		else
+		{
+			// renders the graphics to their texture when dirty (the texture path draws nothing here)
+			Context3DGraphics.render(graphics, this);
+			if (graphics.__bitmap != null && graphics.__visible)
+			{
+				texture = graphics.__bitmap;
+				matrix.scale(1 / graphics.__bitmapScaleX, 1 / graphics.__bitmapScaleY);
+				matrix.concat(graphics.__worldTransform);
+				if (blendMode == ALPHA) coverage = graphics.__coverage;
+			}
+		}
+
+		if (texture != null)
+		{
+			// the backdrop copy covers the quad as drawn: the whole texture (a shape's has a padding
+			// pixel past its bounds) under the placement __getMatrix snaps
+			var placement = Matrix.__pool.get();
+			placement.copyFrom(matrix);
+			placement.concat(__worldTransform);
+			if (pixelSnapping == ALWAYS
+				|| (pixelSnapping == AUTO && placement.b == 0 && placement.c == 0 && (placement.a < 1.001 && placement.a > 0.999)
+					&& (placement.d < 1.001 && placement.d > 0.999)))
+			{
+				placement.tx = Math.round(placement.tx);
+				placement.ty = Math.round(placement.ty);
+			}
+			var bounds = Rectangle.__pool.get();
+			bounds.setTo(0, 0, texture.width, texture.height);
+			bounds.__transform(bounds, placement);
+			Matrix.__pool.release(placement);
+			var visible = __clampGroupBounds(bounds);
+			var x0 = Std.int(bounds.x), y0 = Std.int(bounds.y), width = Std.int(bounds.width), height = Std.int(bounds.height);
+			Rectangle.__pool.release(bounds);
+
+			if (visible)
+			{
+				var level = __groupDepth * 3;
+				__getGroupScratchBuffer(level, width, height);
+				var backdrop = __groupScratchBuffers[level + 1];
+				__copyBackdrop(backdrop, x0, y0, width, height);
+
+				var shader = __staticBlendShader;
+				shader.init(__blendGroupMode(blendMode), __getAlpha(displayObject.__worldAlpha), graphics != null && blendMode == ALPHA && coverage == null,
+					coverage);
+				__setDrawn(shader, backdrop, x0, y0, width, height);
+
+				var context = __context3D;
+				context.setBlendFactors(ONE, ZERO);
+				__blendMode = null;
+
+				var blendShader = __initShader(shader);
+				setShader(blendShader);
+				applyBitmapData(texture, smooth);
+				applyMatrix(__getMatrix(matrix, pixelSnapping));
+				applyAlpha(1);
+				applyColorTransform(null);
+				updateShader();
+
+				var vertexBuffer = texture.getVertexBuffer(context);
+				if (blendShader.__position != null) context.setVertexBufferAt(blendShader.__position.index, vertexBuffer, 0, FLOAT_3);
+				if (blendShader.__textureCoord != null) context.setVertexBufferAt(blendShader.__textureCoord.index, vertexBuffer, 3, FLOAT_2);
+				context.drawTriangles(texture.getIndexBuffer(context));
+
+				#if gl_stats
+				Context3DStats.incrementDrawCall(DrawCallContext.STAGE);
+				#end
+
+				__clearShader();
+			}
+		}
+
+		Matrix.__pool.release(matrix);
+		__renderEvent(displayObject);
 	}
 
 	@:noCompletion private function __copyBackdrop(backdrop:BitmapData, x:Int, y:Int, width:Int, height:Int):Void
@@ -1327,6 +1468,9 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		}
 
 		__gl.copyTexSubImage2D(__gl.TEXTURE_2D, 0, 0, 0, x, y, width, height);
+
+		if (__staticBlendShader == null) __staticBlendShader = new BlendModeShader();
+		__staticBlendShader.setBackdrop(backdrop, x, y);
 	}
 
 	@:noCompletion private function __drawGroupScratchBuffer(scratchBuffer:BitmapData, x:Int, y:Int, shader:Shader, alpha:Float,
@@ -1392,6 +1536,7 @@ class OpenGLRenderer extends DisplayObjectRenderer
 			{
 				var bitmapData = new BitmapData(width, height, true, 0);
 				bitmapData.readable = false; // texture only, once uploaded
+				bitmapData.getTexture(__context3D); // created now: the context check above relies on it
 				__groupScratchBuffers[level + i] = bitmapData;
 			}
 		}

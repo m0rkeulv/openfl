@@ -15,12 +15,11 @@ import openfl.geom.Rectangle;
 #if lime
 import lime.graphics.cairo.Cairo;
 import lime.graphics.cairo.CairoContent;
-import lime.graphics.cairo.CairoImageSurface;
+import lime.graphics.cairo.CairoFilter;
 import lime.graphics.cairo.CairoOperator;
 import lime.graphics.cairo.CairoPattern;
 import lime.graphics.cairo.CairoSurface;
 import lime.graphics.CairoRenderContext;
-import lime.graphics.Image;
 import lime.math.Matrix3;
 #end
 
@@ -34,6 +33,8 @@ import lime.math.Matrix3;
 @:fileXml('tags="haxe,release"')
 @:noDebug
 #end
+@:access(openfl.display.Bitmap)
+@:access(openfl.display.BitmapData)
 @:access(openfl.display.DisplayObject)
 @:access(openfl.display.Graphics)
 @:access(openfl.display.IBitmapDrawable)
@@ -368,33 +369,39 @@ class CairoRenderer extends DisplayObjectRenderer
 		cairo.clip();
 		Rectangle.__pool.release(bounds);
 
-		cairo.pushGroupWithContent(CairoContent.COLOR_ALPHA);
-
-		// the object and its children draw normally inside the group, with the object's alpha
-		// divided out: it applies once, to the whole object, below
-		__overrideBlendMode = NORMAL;
-		__blendMode = null;
-		var parentDrawn = __drawnBounds;
-		__drawnBounds = Rectangle.__pool.get();
-		__drawnBounds.setTo(0, 0, 0, 0);
-		var cacheWorldAlpha = __worldAlpha;
-		__worldAlpha = 1 / displayObject.__worldAlpha;
-		__renderDrawableDirect(object);
-		__worldAlpha = cacheWorldAlpha;
-		Rectangle.__pool.release(__drawnBounds);
-		__drawnBounds = parentDrawn;
-		__overrideBlendMode = previousOverride;
-
-		cairo.identityMatrix();
-		var objectPattern = cairo.popGroup();
+		// a one-piece object at full alpha is composited straight from its own surface
 		var alpha = __getAlpha(displayObject.__worldAlpha);
-		if (alpha < 1)
+		var objectPattern = alpha >= 1 ? __leafPattern(displayObject) : null;
+
+		if (objectPattern == null)
 		{
 			cairo.pushGroupWithContent(CairoContent.COLOR_ALPHA);
-			cairo.source = objectPattern;
-			cairo.setOperator(CairoOperator.OVER);
-			cairo.paintWithAlpha(alpha);
+
+			// the object and its children draw normally inside the group, with the object's alpha
+			// divided out: it applies once, to the whole object, below
+			__overrideBlendMode = NORMAL;
+			__blendMode = null;
+			var parentDrawn = __drawnBounds;
+			__drawnBounds = Rectangle.__pool.get();
+			__drawnBounds.setTo(0, 0, 0, 0);
+			var cacheWorldAlpha = __worldAlpha;
+			__worldAlpha = 1 / displayObject.__worldAlpha;
+			__renderDrawableDirect(object);
+			__worldAlpha = cacheWorldAlpha;
+			Rectangle.__pool.release(__drawnBounds);
+			__drawnBounds = parentDrawn;
+			__overrideBlendMode = previousOverride;
+
+			cairo.identityMatrix();
 			objectPattern = cairo.popGroup();
+			if (alpha < 1)
+			{
+				cairo.pushGroupWithContent(CairoContent.COLOR_ALPHA);
+				cairo.source = objectPattern;
+				cairo.setOperator(CairoOperator.OVER);
+				cairo.paintWithAlpha(alpha);
+				objectPattern = cairo.popGroup();
+			}
 		}
 
 		// where nothing has been drawn into the target yet Flash draws the object as it is,
@@ -424,7 +431,7 @@ class CairoRenderer extends DisplayObjectRenderer
 		switch (blendMode)
 		{
 			case ALPHA, ERASE:
-				__compositeAlphaErase(objectPattern, blendMode, displayObject, x0, y0, width, height);
+				__compositeAlphaErase(objectPattern, blendMode, displayObject);
 			case INVERT:
 				__compositeInvert(destination, objectPattern);
 			case SUBTRACT:
@@ -457,8 +464,75 @@ class CairoRenderer extends DisplayObjectRenderer
 		__blendGroupDepth--;
 	}
 
-	@:noCompletion private function __compositeAlphaErase(objectPattern:CairoPattern, blendMode:BlendMode, displayObject:DisplayObject, x:Int, y:Int,
-			width:Int, height:Int):Void
+	/**
+		A pattern of a one-piece object's own surface (a Bitmap's bitmapData or a shape's rendered
+		graphics) placed in device space with the matrix the object is drawn with, for the
+		composites to read directly; null when the object is not such a leaf or has nothing to draw.
+	**/
+	@:noCompletion private function __leafPattern(displayObject:DisplayObject):CairoPattern
+	{
+		if (!__isBlendLeaf(displayObject)) return null;
+
+		var surface:CairoSurface = null;
+		var transform = Matrix.__pool.get();
+		var pattern:CairoPattern = null;
+		var graphics = displayObject.__graphics;
+
+		if (graphics == null)
+		{
+			var bitmap:Bitmap = cast displayObject;
+			var bitmapData = bitmap.__bitmapData;
+			if (bitmapData != null && bitmapData.__isValid)
+			{
+				if (bitmapData.image != null) bitmap.__imageVersion = bitmapData.image.version;
+				surface = bitmapData.getSurface();
+				transform.copyFrom(bitmap.__renderTransform);
+				if (surface != null)
+				{
+					pattern = CairoPattern.createForSurface(surface);
+					pattern.filter = (__allowSmoothing && bitmap.smoothing) ? CairoFilter.GOOD : CairoFilter.NEAREST;
+				}
+			}
+		}
+		else
+		{
+			#if lime_cairo
+			CairoGraphics.render(graphics, this);
+			if (graphics.__cairo != null && graphics.__visible && graphics.__width >= 1 && graphics.__height >= 1)
+			{
+				surface = graphics.__cairo.target;
+				transform.scale(1 / graphics.__bitmapScaleX, 1 / graphics.__bitmapScaleY);
+				transform.concat(graphics.__worldTransform);
+				pattern = CairoPattern.createForSurface(surface);
+			}
+			#end
+		}
+
+		if (pattern != null)
+		{
+			// as applyMatrix places the surface, inverted: a pattern matrix maps device to pattern space
+			if (__worldTransform != null) transform.concat(__worldTransform);
+			if (__roundPixels)
+			{
+				transform.tx = Math.round(transform.tx);
+				transform.ty = Math.round(transform.ty);
+			}
+			transform.invert();
+			__matrix3.a = transform.a;
+			__matrix3.b = transform.b;
+			__matrix3.c = transform.c;
+			__matrix3.d = transform.d;
+			__matrix3.tx = transform.tx;
+			__matrix3.ty = transform.ty;
+			pattern.matrix = __matrix3;
+		}
+
+		Matrix.__pool.release(transform);
+		__renderEvent(displayObject);
+		return pattern;
+	}
+
+	@:noCompletion private function __compositeAlphaErase(objectPattern:CairoPattern, blendMode:BlendMode, displayObject:DisplayObject):Void
 	{
 		if (blendMode == ALPHA && __alphaNeedsCoverage(displayObject))
 		{
@@ -466,31 +540,19 @@ class CairoRenderer extends DisplayObjectRenderer
 			// transparent pixels included, a shape only its fills, and the part of the object's
 			// box that no leaf covers keeps the backdrop. At an anti-aliased edge coverage and
 			// fill alpha stay apart too. DEST_IN cuts wherever the source is transparent, so the
-			// group is copied to an image and its alpha set to 1 - coverage + alpha, the coverage
-			// drawn into the group's space by __drawCoverage
-			var image = new Image(null, 0, 0, width, height, 0);
-			var copy = new Cairo(CairoImageSurface.fromImage(image));
-			copy.translate(-x, -y);
-			copy.source = objectPattern;
-			copy.paint();
-			copy.target.flush();
-
-			var coverageImage = new Image(null, 0, 0, width, height, 0);
-			var coverage = new Cairo(CairoImageSurface.fromImage(coverageImage));
-			__drawCoverage(coverage, displayObject, x, y);
-			coverage.target.flush();
-
-			var data = image.data;
-			var coverageData = coverageImage.data;
-			var i = 3, n = width * height * 4;
-			while (i < n)
-			{
-				var keep = 255 - coverageData[i] + data[i];
-				data[i] = keep > 255 ? 255 : keep;
-				i += 4;
-			}
-
-			cairo.setSourceSurface(copy.target, x, y);
+			// mask is 1 - coverage + alpha, built in a group over the clip with operators alone:
+			// opaque, the coverage taken out (DEST_OUT), the object added (ADD, which clamps at 1)
+			cairo.pushGroupWithContent(CairoContent.COLOR_ALPHA);
+			cairo.setSourceRGB(0, 0, 0);
+			cairo.setOperator(CairoOperator.SOURCE);
+			cairo.paint();
+			cairo.setOperator(CairoOperator.DEST_OUT);
+			__drawCoverage(cairo, displayObject, 0, 0);
+			cairo.identityMatrix();
+			cairo.source = objectPattern;
+			cairo.setOperator(CairoOperator.ADD);
+			cairo.paint();
+			cairo.popGroupToSource();
 		}
 		else
 		{
@@ -510,10 +572,10 @@ class CairoRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		Paints what `displayObject` and its descendants cover into `coverage`, a context on an
-		image of the group at (x, y): a shape's fills through its coverage render (every fill
-		opaque, see CairoGraphics), or its whole surface without one, and any other leaf its
-		local bounds, each under the transform it is drawn with.
+		Paints what `displayObject` and its descendants cover into `coverage`, a context whose
+		origin is at (x, y) of the target, with its current operator: a shape's fills through its
+		coverage render (every fill opaque, see CairoGraphics), or its whole surface without one,
+		and any other leaf its local bounds, each under the transform it is drawn with.
 	**/
 	@:noCompletion private function __drawCoverage(coverage:Cairo, displayObject:DisplayObject, x:Int, y:Int):Void
 	{
