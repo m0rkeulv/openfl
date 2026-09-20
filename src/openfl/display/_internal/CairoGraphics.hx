@@ -2224,6 +2224,13 @@ class CairoGraphics
 
 		if (!graphics.__softwareDirty || graphics.__managed)
 		{
+			// a shape that came under ALPHA after its render (its blend mode changed, or an ancestor's)
+			// still needs its coverage: rendered here on its own, the fills being unchanged
+			if (!graphics.__managed && graphics.__coverage == null && graphics.__bitmap != null && graphics.__owner.__worldBlendMode == BlendMode.ALPHA)
+			{
+				bounds = graphics.__bounds;
+				__renderCoverage(graphics, renderer);
+			}
 			CairoGraphics.graphics = null;
 			return;
 		}
@@ -2301,18 +2308,7 @@ class CairoGraphics
 			// composite can keep the uncovered part of an edge pixel (see CairoRenderer)
 			if (graphics.__owner.__worldBlendMode == BlendMode.ALPHA)
 			{
-				var bitmap = graphics.__bitmap;
-				if (graphics.__coverage == null || graphics.__coverage.width != bitmap.width || graphics.__coverage.height != bitmap.height)
-				{
-					graphics.__coverage = new BitmapData(bitmap.width, bitmap.height, true, 0);
-				}
-				coverage = true;
-				__renderCommands(graphics, renderer, new Cairo(graphics.__coverage.getSurface()));
-				coverage = false;
-				// the OpenGL renderer uploads the coverage as a texture and re-uploads it only when the
-				// image version grows, like __bitmap below
-				graphics.__coverage.image.dirty = true;
-				graphics.__coverage.image.version++;
+				__renderCoverage(graphics, renderer);
 			}
 			else
 			{
@@ -2327,6 +2323,23 @@ class CairoGraphics
 		graphics.__dirty = false;
 		CairoGraphics.graphics = null;
 		#end
+	}
+
+	/** Renders the fills and strokes of `graphics` opaque into `graphics.__coverage`, sized like `__bitmap`. **/
+	private static function __renderCoverage(graphics:Graphics, renderer:CairoRenderer):Void
+	{
+		var bitmap = graphics.__bitmap;
+		if (graphics.__coverage == null || graphics.__coverage.width != bitmap.width || graphics.__coverage.height != bitmap.height)
+		{
+			graphics.__coverage = new BitmapData(bitmap.width, bitmap.height, true, 0);
+		}
+		coverage = true;
+		__renderCommands(graphics, renderer, new Cairo(graphics.__coverage.getSurface()));
+		coverage = false;
+		// the OpenGL renderer uploads the coverage as a texture and re-uploads it only when the
+		// image version grows, like __bitmap
+		graphics.__coverage.image.dirty = true;
+		graphics.__coverage.image.version++;
 	}
 
 	public static function renderMask(graphics:Graphics, renderer:CairoRenderer):Void
