@@ -19,6 +19,8 @@ class BlendModeShader extends BitmapFilterShader
 		uniform int uMode;
 		uniform bool uDiscardTransparent;
 		uniform vec4 uDrawn;
+		uniform sampler2D uCoverage;
+		uniform bool uHasCoverage;
 
 		vec3 hardLight(vec3 base, vec3 control) {
 			return mix(2.0 * base * control, 1.0 - 2.0 * (1.0 - base) * (1.0 - control), step(0.5, control));
@@ -64,7 +66,13 @@ class BlendModeShader extends BitmapFilterShader
 				if (uMode == 6) backdrop = max(vec3(0.0), dst.rgb - src.rgb * dstAlpha);					// SUBTRACT
 				else if (uMode == 7) backdrop = dst.rgb * (1.0 - 2.0 * srcAlpha) + srcAlpha * dstAlpha;		// INVERT
 				else if (uMode == 8) { backdrop = dst.rgb * (1.0 - srcAlpha); kept = 1.0 - srcAlpha; }		// ERASE
-				else if (uMode == 9){ backdrop = dst.rgb * srcAlpha; kept = srcAlpha; }									// ALPHA
+				else if (uMode == 9) {																		// ALPHA
+					// with a coverage of the object, the backdrop is kept by 1 - coverage + alpha: what
+					// the object did not cover stays, what it covered stays by its alpha
+					float keep = uHasCoverage ? min(1.0, 1.0 - texture2D(uCoverage, openfl_TextureCoordv).a + srcAlpha) : srcAlpha;
+					backdrop = dst.rgb * keep;
+					kept = keep;
+				}
 
 				// these four show the source as it is only where nothing was drawn before (outside
 				// uDrawn). Over a backdrop a mask left transparent, SUBTRACT and INVERT leave a
@@ -89,6 +97,7 @@ class BlendModeShader extends BitmapFilterShader
 		uMode.value = [0];
 		uDiscardTransparent.value = [false];
 		uDrawn.value = [0, 0, 1, 1];
+		uHasCoverage.value = [false];
 		#end
 	}
 	/** The part of the group drawn into before, as texture coordinates (x0, y0, x1, y1). **/
@@ -102,10 +111,15 @@ class BlendModeShader extends BitmapFilterShader
 		#end
 	}
 
-	public function init(backdrop:BitmapData, mode:Int, flipScale:Float, flipOffset:Float, discardTransparent:Bool):Void
+	public function init(backdrop:BitmapData, mode:Int, flipScale:Float, flipOffset:Float, discardTransparent:Bool, coverage:BitmapData):Void
 	{
 		#if !macro
 		uDiscardTransparent.value[0] = discardTransparent;
+		uHasCoverage.value[0] = coverage != null;
+		uCoverage.input = coverage;
+		uCoverage.filter = NEAREST;
+		uCoverage.mipFilter = MIPNONE;
+		uCoverage.wrap = CLAMP;
 		uBackdrop.input = backdrop;
 		uBackdrop.filter = NEAREST;
 		uBackdrop.mipFilter = MIPNONE;

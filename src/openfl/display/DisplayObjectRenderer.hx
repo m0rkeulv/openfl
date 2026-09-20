@@ -98,6 +98,20 @@ class DisplayObjectRenderer extends EventDispatcher
 		return true;
 	}
 
+	/**
+		Whether ALPHA on this object needs its coverage (see the renderers' __compositeAlphaErase):
+		Flash masks with the union of what the object's leaves cover, a Bitmap its footprint
+		and a shape its fills, and leaves the rest of the object's box alone. A single
+		axis-aligned bitmap covers its whole box, so the plain destination-in already gives that.
+	**/
+	@:noCompletion private function __alphaNeedsCoverage(displayObject:DisplayObject):Bool
+	{
+		if (displayObject.__graphics != null) return true;
+		if (displayObject.__children != null && displayObject.__children.length > 0) return true;
+		var transform = displayObject.__renderTransform;
+		return transform.b != 0 || transform.c != 0;
+	}
+
 	@:noCompletion private function new()
 	{
 		super();
