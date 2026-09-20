@@ -1453,19 +1453,10 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		x -= __groupOffsetX;
 		y -= __groupOffsetY;
 
+		// the renderer already works in the framebuffer's pixels (the stage scales its display
+		// matrix by the window scale); the window framebuffer is bottom-up
 		if (context.__state.renderToTexture == null)
 		{
-			// mirrors __flushGLScissor: the window framebuffer is bottom-up and may be scaled
-			#if !openfl_dpi_aware
-			if (context.__backBufferWantsBestResolution)
-			{
-				var scale = context.__stage.window.scale;
-				x = Std.int(x * scale);
-				y = Std.int(y * scale);
-				width = Std.int(width * scale);
-				height = Std.int(height * scale);
-			}
-			#end
 			y = Std.int(context.__stage.window.height * context.__stage.window.scale) - height - y;
 		}
 
@@ -1778,27 +1769,27 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	{
 		if (clipRect != null)
 		{
-			var x = Math.ffloor(clipRect.x);
-			var y = Math.ffloor(clipRect.y);
-			var width = (clipRect.width > 0 ? Math.fceil(clipRect.right) - x : 0);
-			var height = (clipRect.height > 0 ? Math.fceil(clipRect.bottom) - y : 0);
+			// inside a group the target is the group's scratch buffer, whose origin is the group's
+			// box: the offset comes off before the scale below, since the flush scales the result
+			var left = clipRect.x - __groupOffsetX, top = clipRect.y - __groupOffsetY;
+			var right = clipRect.right - __groupOffsetX, bottom = clipRect.bottom - __groupOffsetY;
+			var x = Math.ffloor(left);
+			var y = Math.ffloor(top);
+			var width = (clipRect.width > 0 ? Math.fceil(right) - x : 0);
+			var height = (clipRect.height > 0 ? Math.fceil(bottom) - y : 0);
 			#if !openfl_dpi_aware
 			if (__context3D.__backBufferWantsBestResolution)
 			{
 				var uv = 1.5 / __pixelRatio;
-				x = clipRect.x / __pixelRatio;
-				y = clipRect.y / __pixelRatio;
-				width = (clipRect.width > 0 ? (clipRect.right / __pixelRatio) - x + uv : 0);
-				height = (clipRect.height > 0 ? (clipRect.bottom / __pixelRatio) - y + uv : 0);
+				x = left / __pixelRatio;
+				y = top / __pixelRatio;
+				width = (clipRect.width > 0 ? (right / __pixelRatio) - x + uv : 0);
+				height = (clipRect.height > 0 ? (bottom / __pixelRatio) - y + uv : 0);
 			}
 			#end
 
 			if (width < 0) width = 0;
 			if (height < 0) height = 0;
-
-			// inside a blend group the target is the group's scratchBuffer buffer
-			x -= __groupOffsetX;
-			y -= __groupOffsetY;
 
 			// __scissorRectangle.setTo (x, __flipped ? __height - y - height : y, width, height);
 			__scissorRectangle.setTo(x, y, width, height);
