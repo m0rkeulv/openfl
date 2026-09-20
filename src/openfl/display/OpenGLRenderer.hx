@@ -203,7 +203,8 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	**/
 	public function applyAlpha(alpha:Float):Void
 	{
-		__alphaValue[0] = alpha * __worldAlpha;
+		// the coverage pass of an ALPHA group draws everything opaque (see __drawCoverage)
+		__alphaValue[0] = __coverageOnly ? 1 : alpha * __worldAlpha;
 
 		if (__currentShaderBuffer != null)
 		{
@@ -282,7 +283,7 @@ class OpenGLRenderer extends DisplayObjectRenderer
 			colorTransform = __invertSilhouette;
 		}
 
-		var enabled = (colorTransform != null && !colorTransform.__isDefault(true));
+		var enabled = (colorTransform != null && !colorTransform.__isDefault(true) && !__coverageOnly);
 		applyHasColorTransform(enabled);
 
 		if (enabled)
@@ -1229,8 +1230,9 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		__displayHeight = scratchBuffer.height;
 		__projection.createOrtho(x0, x0 + scratchBuffer.width, y0, y0 + scratchBuffer.height, -1000, 1000);
 
-		// the object's alpha applies once, to the composite (see __renderGroup): divided out here
-		__worldAlpha = 1 / displayObject.__worldAlpha;
+		// the object's alpha applies once, to the composite (see __renderGroup): divided out here.
+		// The coverage pass draws every leaf opaque, so it takes no alpha at all
+		__worldAlpha = coverageOnly ? 1 : 1 / displayObject.__worldAlpha;
 		if (layer)
 		{
 			if (blendMode != LAYER) __groupBlendMode = blendMode;
@@ -1549,11 +1551,17 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		var graphics = displayObject.__graphics;
 		var matrix = Matrix.__pool.get();
 
-		if (graphics != null && graphics.__bitmap != null)
+		if (graphics != null)
 		{
-			matrix.scale(1 / graphics.__bitmapScaleX, 1 / graphics.__bitmapScaleY);
-			matrix.concat(graphics.__worldTransform);
-			__drawCoverageQuad(graphics.__bitmap, graphics.__coverage != null ? graphics.__coverage : __staticWhite, matrix);
+			// the direct triangle path draws its fills straight into the pass, opaque (applyAlpha and
+			// applyColorTransform see __coverageOnly); otherwise the render leaves a texture to draw
+			Context3DGraphics.render(graphics, this);
+			if (graphics.__bitmap != null && graphics.__visible)
+			{
+				matrix.scale(1 / graphics.__bitmapScaleX, 1 / graphics.__bitmapScaleY);
+				matrix.concat(graphics.__worldTransform);
+				__drawCoverageQuad(graphics.__bitmap, graphics.__coverage != null ? graphics.__coverage : __staticWhite, matrix);
+			}
 		}
 
 		if (displayObject.__children != null)
