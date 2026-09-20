@@ -294,10 +294,11 @@ class CanvasRenderer extends DisplayObjectRenderer
 		var object = __beginGroupCanvas(level, width, height);
 		__renderIntoGroup(displayObject, object.getContext2d(), x0, y0, blendMode);
 
-		// the object's alpha applies once, to the whole object: __compositeLayer draws with it,
-		// the other composites get the group scaled by it here
+		// the object's alpha applies once, to the whole object: __compositeLayer (LAYER and the
+		// operator modes) draws with it, the four formula composites get the group scaled by it here
+		var formulaMode = blendMode == SUBTRACT || blendMode == INVERT || blendMode == ERASE || blendMode == ALPHA;
 		var alpha = __getAlpha(displayObject.__worldAlpha);
-		if (blendMode != LAYER && alpha < 1)
+		if (formulaMode && alpha < 1)
 		{
 			var objectContext = object.getContext2d();
 			objectContext.setTransform(1, 0, 0, 1, 0, 0);
@@ -315,7 +316,6 @@ class CanvasRenderer extends DisplayObjectRenderer
 		// silhouette of the object, drawn under the result
 		var drawn = Rectangle.__pool.get();
 		var drawnAll = __drawnWithin(x0, y0, width, height, drawn);
-		var formulaMode = blendMode == SUBTRACT || blendMode == INVERT || blendMode == ERASE || blendMode == ALPHA;
 		var uncovered:js.html.CanvasElement = null;
 		if (formulaMode && (!drawnAll || drawn.width < width || drawn.height < height))
 		{
