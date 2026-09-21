@@ -262,7 +262,11 @@ class DisplayObjectRenderer extends EventDispatcher
 
 	@:noCompletion private function __resize(width:Int, height:Int):Void {}
 
-	@:noCompletion private function __setBlendMode(value:BlendMode):Void {}
+	/**
+		Applies `value` to the target, unless the renderer already holds that mode. `force` applies it
+		anyway, for a target whose state another renderer may have changed (see __updateCacheBitmap).
+	**/
+	@:noCompletion private function __setBlendMode(value:BlendMode, force:Bool = false):Void {}
 
 	@:noCompletion private function __shouldCacheHardware(displayObject:DisplayObject, value:Null<Bool>):Null<Bool>
 	{
@@ -648,7 +652,9 @@ class DisplayObjectRenderer extends EventDispatcher
 				displayObject.__cacheBitmapRenderer.__stage = displayObject.stage;
 
 				displayObject.__cacheBitmapRenderer.__allowSmoothing = renderer.__allowSmoothing;
-				displayObject.__cacheBitmapRenderer.__setBlendMode(NORMAL);
+				// another renderer has drawn with this context since, so the mode is applied whatever
+				// this renderer believes it holds
+				displayObject.__cacheBitmapRenderer.__setBlendMode(NORMAL, true);
 				displayObject.__cacheBitmapRenderer.__worldAlpha = 1 / displayObject.__worldAlpha;
 
 				displayObject.__cacheBitmapRenderer.__worldTransform.copyFrom(displayObject.__renderTransform);
@@ -753,7 +759,7 @@ class DisplayObjectRenderer extends EventDispatcher
 							bitmap3 = displayObject.__cacheBitmapData3;
 						}
 
-						childRenderer.__setBlendMode(NORMAL);
+						childRenderer.__setBlendMode(NORMAL, true);
 						childRenderer.__worldAlpha = 1;
 						childRenderer.__worldTransform.identity();
 						childRenderer.__worldColorTransform.__identity();
@@ -790,8 +796,8 @@ class DisplayObjectRenderer extends EventDispatcher
 						displayObject.__cacheBitmap.__bitmapData = bitmap;
 					}
 
-					parentRenderer.__blendMode = NORMAL;
-					parentRenderer.__setBlendMode(cacheBlendMode);
+					// the child renderer left its own blend factors in the context
+					parentRenderer.__setBlendMode(cacheBlendMode, true);
 					parentRenderer.__copyShader(childRenderer);
 
 					if (cacheRTT != null)
