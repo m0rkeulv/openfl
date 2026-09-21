@@ -692,6 +692,7 @@ class CairoGraphics
 						{
 							data.destroy();
 							CairoGraphics.graphics = null;
+							hitTesting = false;
 							return true;
 						}
 
@@ -715,6 +716,7 @@ class CairoGraphics
 						{
 							data.destroy();
 							CairoGraphics.graphics = null;
+							hitTesting = false;
 							return true;
 						}
 
@@ -724,6 +726,7 @@ class CairoGraphics
 						{
 							data.destroy();
 							CairoGraphics.graphics = null;
+							hitTesting = false;
 							return true;
 						}
 
@@ -738,6 +741,7 @@ class CairoGraphics
 						{
 							data.destroy();
 							CairoGraphics.graphics = null;
+							hitTesting = false;
 							return true;
 						}
 
@@ -747,6 +751,7 @@ class CairoGraphics
 						{
 							data.destroy();
 							CairoGraphics.graphics = null;
+							hitTesting = false;
 							return true;
 						}
 
@@ -835,6 +840,7 @@ class CairoGraphics
 			data.destroy();
 
 			CairoGraphics.graphics = null;
+			hitTesting = false;
 			return hitTest;
 		}
 		#end

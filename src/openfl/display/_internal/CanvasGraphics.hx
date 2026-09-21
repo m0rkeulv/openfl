@@ -861,6 +861,7 @@ class CanvasGraphics
 							graphics.__canvas = cacheCanvas;
 							graphics.__context = cacheContext;
 							CanvasGraphics.graphics = null;
+							hitTesting = false;
 							return true;
 						}
 
@@ -886,6 +887,7 @@ class CanvasGraphics
 							graphics.__canvas = cacheCanvas;
 							graphics.__context = cacheContext;
 							CanvasGraphics.graphics = null;
+							hitTesting = false;
 							return true;
 						}
 
@@ -897,6 +899,7 @@ class CanvasGraphics
 							graphics.__canvas = cacheCanvas;
 							graphics.__context = cacheContext;
 							CanvasGraphics.graphics = null;
+							hitTesting = false;
 							return true;
 						}
 
@@ -912,6 +915,7 @@ class CanvasGraphics
 							graphics.__canvas = cacheCanvas;
 							graphics.__context = cacheContext;
 							CanvasGraphics.graphics = null;
+							hitTesting = false;
 							return true;
 						}
 
@@ -923,6 +927,7 @@ class CanvasGraphics
 							graphics.__canvas = cacheCanvas;
 							graphics.__context = cacheContext;
 							CanvasGraphics.graphics = null;
+							hitTesting = false;
 							return true;
 						}
 
@@ -1010,6 +1015,7 @@ class CanvasGraphics
 
 			graphics.__canvas = cacheCanvas;
 			graphics.__context = cacheContext;
+			hitTesting = false;
 			CanvasGraphics.graphics = null;
 			return hitTest;
 		}
@@ -2458,7 +2464,6 @@ class CanvasGraphics
 			// still needs its coverage: rendered here on its own, the fills being unchanged
 			if (coverage && !graphics.__managed && graphics.__coverage == null && graphics.__canvas != null)
 			{
-				hitTesting = false;
 				bounds = graphics.__bounds;
 				__renderCoverage(graphics, renderer);
 			}
