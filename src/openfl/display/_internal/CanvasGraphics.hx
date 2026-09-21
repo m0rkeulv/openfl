@@ -42,6 +42,10 @@ class CanvasGraphics
 	private static inline var KAPPA = 0.5522848;
 	private static var allowSmoothing:Bool;
 	private static var bitmapRepeat:Bool;
+	// __renderCommands renders coverage: every fill and stroke opaque black. A canvas style
+	// carries its own alpha (a colour string, a gradient's stops, a pattern's pixels), so the
+	// override goes on the fill and the stroke, after whichever style was set
+	private static var coverage:Bool;
 	private static var bounds:Rectangle;
 	private static var fillCommands:DrawCommandBuffer = new DrawCommandBuffer();
 	private static var bitmapFill:BitmapData;
@@ -125,6 +129,7 @@ class CanvasGraphics
 			}
 		}
 
+		if (coverage) context.strokeStyle = "#000000";
 		context.stroke();
 
 		if (strokeBefore)
@@ -1828,6 +1833,7 @@ class CanvasGraphics
 								}
 							}
 
+							if (coverage) context.fillStyle = "#000000";
 							if (!hitTesting) context.fill(windingRule);
 
 							if (!hitTesting && hasScale9Grid && fillScale9Bounds != null && bitmapFill != null)
@@ -2043,6 +2049,7 @@ class CanvasGraphics
 					Matrix.__pool.release(matrix);
 				}
 
+				if (coverage) context.strokeStyle = "#000000";
 				if (!hitTesting) context.stroke();
 			}
 
@@ -2084,12 +2091,14 @@ class CanvasGraphics
 					if (pendingMatrix != null)
 					{
 						context.transform(pendingMatrix.a, pendingMatrix.b, pendingMatrix.c, pendingMatrix.d, pendingMatrix.tx, pendingMatrix.ty);
+						if (coverage) context.fillStyle = "#000000";
 						if (!hitTesting) context.fill(windingRule);
 						context.transform(inversePendingMatrix.a, inversePendingMatrix.b, inversePendingMatrix.c, inversePendingMatrix.d,
 							inversePendingMatrix.tx, inversePendingMatrix.ty);
 					}
 					else
 					{
+						if (coverage) context.fillStyle = "#000000";
 						if (!hitTesting) context.fill(windingRule);
 					}
 
@@ -2113,70 +2122,19 @@ class CanvasGraphics
 		#end
 	}
 
-	public static function render(graphics:Graphics, renderer:CanvasRenderer):Void
+	/**
+		Plays the graphics' commands into `targetCanvas`: the normal render, or with `coverage`
+		set every fill and stroke as opaque black.
+	**/
+	#if (js && html5)
+	private static function __renderCommands(graphics:Graphics, renderer:CanvasRenderer, targetCanvas:CanvasElement,
+			targetContext:CanvasRenderingContext2D):Void
 	{
-		#if (js && html5)
-		CanvasGraphics.graphics = graphics;
-		CanvasGraphics.allowSmoothing = renderer.__allowSmoothing;
-		CanvasGraphics.worldAlpha = renderer.__getAlpha(graphics.__owner.__worldAlpha);
-
-		#if (openfl_disable_hdpi || openfl_disable_hdpi_graphics)
-		var pixelRatio = 1;
-		#else
-		var pixelRatio = renderer.__pixelRatio;
-		#end
-
-		graphics.__update(renderer.__worldTransform, pixelRatio);
-
-		if (!graphics.__softwareDirty || graphics.__managed)
-		{
-			CanvasGraphics.graphics = null;
-			return;
-		}
-
-		var scale9Grid:Rectangle = graphics.__owner.__scale9Grid;
-		#if (openfl_legacy_scale9grid && !canvas)
-		var hasScale9Grid:Bool = false;
-		#else
-		// no scale9Grid for masks
-		// no scale9Grid for rotation 0.02 degrees or higher (less than 0.02 is allowed in flash)
-		var hasScale9Grid = scale9Grid != null && !graphics.__owner.__isMask && Math.abs(graphics.__owner.__rotation) < 0.02;
-		#end
-		if (hasScale9Grid)
-		{
-			graphics.__bitmapScaleX = Math.abs(graphics.__owner.scaleX);
-			graphics.__bitmapScaleY = Math.abs(graphics.__owner.scaleY);
-		}
-		else
-		{
-			graphics.__bitmapScaleX = 1;
-			graphics.__bitmapScaleY = 1;
-		}
-
-		hitTesting = false;
-
-		bounds = graphics.__bounds;
-
-		var width = graphics.__width;
-		var height = graphics.__height;
-
-		if (!graphics.__visible || graphics.__commands.length == 0 || bounds == null || width < 1 || height < 1)
-		{
-			graphics.__canvas = null;
-			graphics.__context = null;
-			graphics.__bitmap = null;
-		}
-		else
-		{
-			if (graphics.__canvas == null)
-			{
-				graphics.__canvas = cast Browser.document.createElement("canvas");
-				graphics.__context = graphics.__canvas.getContext("2d");
-			}
-
-			context = graphics.__context;
+			context = targetContext;
 			var transform = graphics.__renderTransform;
-			var canvas = graphics.__canvas;
+			var canvas = targetCanvas;
+			var width = graphics.__width;
+			var height = graphics.__height;
 
 			var scale = renderer.__pixelRatio;
 			var scaledWidth = Std.int(width * scale);
@@ -2452,6 +2410,115 @@ class CanvasGraphics
 			}
 
 			data.destroy();
+	}
+
+	/** Renders the fills and strokes of `graphics` opaque into `graphics.__coverage`, sized like `__canvas`. **/
+	private static function __renderCoverage(graphics:Graphics, renderer:CanvasRenderer):Void
+	{
+		// the coverage BitmapData wraps the canvas it was made from, reused until the size changes
+		var canvas:CanvasElement = graphics.__coverage != null ? cast graphics.__coverage.image.src : null;
+		if (canvas == null) canvas = cast Browser.document.createElement("canvas");
+
+		CanvasGraphics.coverage = true;
+		__renderCommands(graphics, renderer, canvas, canvas.getContext("2d"));
+		CanvasGraphics.coverage = false;
+
+		if (graphics.__coverage == null || graphics.__coverage.width != canvas.width || graphics.__coverage.height != canvas.height)
+		{
+			if (graphics.__coverage != null && graphics.__coverage.__texture != null) graphics.__coverage.__texture.dispose();
+			graphics.__coverage = BitmapData.fromCanvas(canvas);
+		}
+		else
+		{
+			// the OpenGL renderer uploads the coverage as a texture and re-uploads it only when
+			// the image version grows, like __bitmap
+			graphics.__coverage.image.version++;
+		}
+	}
+	#end
+
+	public static function render(graphics:Graphics, renderer:CanvasRenderer, coverage:Bool = false):Void
+	{
+		#if (js && html5)
+		CanvasGraphics.graphics = graphics;
+		CanvasGraphics.allowSmoothing = renderer.__allowSmoothing;
+		CanvasGraphics.worldAlpha = renderer.__getAlpha(graphics.__owner.__worldAlpha);
+
+		#if (openfl_disable_hdpi || openfl_disable_hdpi_graphics)
+		var pixelRatio = 1;
+		#else
+		var pixelRatio = renderer.__pixelRatio;
+		#end
+
+		graphics.__update(renderer.__worldTransform, pixelRatio);
+
+		if (!graphics.__softwareDirty || graphics.__managed)
+		{
+			// a shape that came under ALPHA after its render (its blend mode changed, or an ancestor's)
+			// still needs its coverage: rendered here on its own, the fills being unchanged
+			if (coverage && !graphics.__managed && graphics.__coverage == null && graphics.__canvas != null)
+			{
+				hitTesting = false;
+				bounds = graphics.__bounds;
+				__renderCoverage(graphics, renderer);
+			}
+			CanvasGraphics.graphics = null;
+			return;
+		}
+
+		var scale9Grid:Rectangle = graphics.__owner.__scale9Grid;
+		#if (openfl_legacy_scale9grid && !canvas)
+		var hasScale9Grid:Bool = false;
+		#else
+		// no scale9Grid for masks
+		// no scale9Grid for rotation 0.02 degrees or higher (less than 0.02 is allowed in flash)
+		var hasScale9Grid = scale9Grid != null && !graphics.__owner.__isMask && Math.abs(graphics.__owner.__rotation) < 0.02;
+		#end
+		if (hasScale9Grid)
+		{
+			graphics.__bitmapScaleX = Math.abs(graphics.__owner.scaleX);
+			graphics.__bitmapScaleY = Math.abs(graphics.__owner.scaleY);
+		}
+		else
+		{
+			graphics.__bitmapScaleX = 1;
+			graphics.__bitmapScaleY = 1;
+		}
+
+		hitTesting = false;
+
+		bounds = graphics.__bounds;
+
+		var width = graphics.__width;
+		var height = graphics.__height;
+
+		if (!graphics.__visible || graphics.__commands.length == 0 || bounds == null || width < 1 || height < 1)
+		{
+			graphics.__canvas = null;
+			graphics.__context = null;
+			graphics.__bitmap = null;
+			graphics.__coverage = null;
+		}
+		else
+		{
+			if (graphics.__canvas == null)
+			{
+				graphics.__canvas = cast Browser.document.createElement("canvas");
+				graphics.__context = graphics.__canvas.getContext("2d");
+			}
+
+			__renderCommands(graphics, renderer, graphics.__canvas, graphics.__context);
+
+			// a shape under ALPHA also needs its coverage, every fill and stroke opaque, so the
+			// composite can keep the part of its box the fills leave uncovered (see CanvasRenderer)
+			if (coverage)
+			{
+				__renderCoverage(graphics, renderer);
+			}
+			else
+			{
+				graphics.__coverage = null;
+			}
 
 			if (graphics.__bitmap == null)
 			{

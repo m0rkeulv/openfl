@@ -714,7 +714,7 @@ class Context3DGraphics
 			}
 
 			#if (js && html5)
-			CanvasGraphics.render(graphics, cast renderer.__softwareRenderer);
+			CanvasGraphics.render(graphics, cast renderer.__softwareRenderer, coverage);
 			#elseif lime_cairo
 			CairoGraphics.render(graphics, cast renderer.__softwareRenderer, coverage);
 			#end

@@ -461,14 +461,11 @@ class CanvasRenderer extends DisplayObjectRenderer
 
 		// the object's alpha applies once, to the composite (see __renderGroup): divided out here
 		__worldAlpha = 1 / displayObject.__worldAlpha;
-		if (layer)
-		{
-			if (blendMode != LAYER) __groupBlendMode = blendMode;
-		}
-		else
-		{
-			__overrideBlendMode = NORMAL;
-		}
+		// the mode this group is composited with: children that only inherit it render NORMAL in a
+		// LAYER-like group, every child renders NORMAL in a formula group, and shapes rendered
+		// inside either know whether their coverage is wanted (__wantsCoverage)
+		if (blendMode != LAYER) __groupBlendMode = blendMode;
+		if (!layer) __overrideBlendMode = NORMAL;
 
 		__blendMode = null;
 		__setBlendMode(NORMAL);
@@ -504,31 +501,14 @@ class CanvasRenderer extends DisplayObjectRenderer
 	@:noCompletion private function __compositeAlphaErase(object:js.html.CanvasElement, level:Int, x0:Int, y0:Int, width:Int, height:Int,
 			blendMode:BlendMode, displayObject:DisplayObject):Void
 	{
-		var graphics = displayObject.__graphics;
-		var isShape = graphics != null && (displayObject.__children == null || displayObject.__children.length == 0);
-		if (blendMode == ALPHA && isShape)
-		{
-			// a shape alone: the canvas renderer has no coverage render of its fills, so the
-			// texels it left empty are made opaque instead, which keeps the backdrop under them
-			var objectContext = object.getContext2d();
-			var pixels = objectContext.getImageData(0, 0, width, height);
-			var data = pixels.data;
-			var i = 3, n = width * height * 4;
-			while (i < n)
-			{
-				if (data[i] == 0) data[i] = 255;
-				i += 4;
-			}
-			objectContext.putImageData(pixels, 0, 0);
-		}
-		else if (blendMode == ALPHA && __alphaNeedsCoverage(displayObject))
+		if (blendMode == ALPHA && __alphaNeedsCoverage(displayObject))
 		{
 			// Flash's ALPHA masks with what the object's leaves cover: a Bitmap its footprint,
-			// transparent pixels included, a shape its fills (its whole surface here, the canvas
-			// renderer has no coverage render), and the part of the object's box that no leaf
-			// covers keeps the backdrop. destination-in cuts wherever the source is transparent,
-			// so the mask is 1 - coverage + alpha, built on the coverage canvas with composite
-			// operations alone: opaque, the coverage taken out, the object added (lighter clamps at 1)
+			// transparent pixels included, a shape the fills and strokes of its graphics, and the
+			// part of the object's box that no leaf covers keeps the backdrop. destination-in cuts
+			// wherever the source is transparent, so the mask is 1 - coverage + alpha, built on the
+			// coverage canvas with composite operations alone: opaque, the coverage taken out, the
+			// object added (lighter clamps at 1)
 			var mask = __getGroupCanvas(level + 3, width, height);
 			var maskContext = mask.getContext2d();
 			maskContext.setTransform(1, 0, 0, 1, 0, 0);
@@ -562,8 +542,9 @@ class CanvasRenderer extends DisplayObjectRenderer
 
 	/**
 		Fills what `displayObject` and its descendants cover into `coverage`, a context whose origin
-		is at (x0, y0) of the target, with its current composite operation: a shape its graphics'
-		bounds, any other leaf its local bounds, each under the transform it is drawn with.
+		is at (x0, y0) of the target, with its current composite operation: a shape the fills and
+		strokes of its graphics (their bounds when they have no coverage render), any other leaf
+		its local bounds, each under the transform it is drawn with.
 	**/
 	@:noCompletion private function __drawCoverage(coverage:js.html.CanvasRenderingContext2D, displayObject:DisplayObject, x0:Int, y0:Int):Void
 	{
@@ -576,7 +557,7 @@ class CanvasRenderer extends DisplayObjectRenderer
 		{
 			bounds.copyFrom(graphics.__bounds);
 			matrix.copyFrom(displayObject.__renderTransform);
-			__coverageRect(coverage, matrix, bounds, x0, y0);
+			__coverageRect(coverage, matrix, bounds, x0, y0, graphics);
 		}
 
 		if (displayObject.__children != null)
@@ -594,7 +575,8 @@ class CanvasRenderer extends DisplayObjectRenderer
 		Rectangle.__pool.release(bounds);
 	}
 
-	@:noCompletion private function __coverageRect(coverage:js.html.CanvasRenderingContext2D, matrix:Matrix, bounds:Rectangle, x0:Int, y0:Int):Void
+	@:noCompletion private function __coverageRect(coverage:js.html.CanvasRenderingContext2D, matrix:Matrix, bounds:Rectangle, x0:Int, y0:Int,
+			graphics:Graphics = null):Void
 	{
 		if (__worldTransform != null) matrix.concat(__worldTransform);
 		if (__roundPixels)
@@ -604,7 +586,17 @@ class CanvasRenderer extends DisplayObjectRenderer
 		}
 		matrix.translate(-x0, -y0);
 		coverage.setTransform(matrix.a, matrix.b, matrix.c, matrix.d, matrix.tx, matrix.ty);
-		coverage.fillRect(bounds.x, bounds.y, bounds.width, bounds.height);
+		if (graphics != null && graphics.__coverage != null)
+		{
+			// the coverage canvas holds the fills at the render scale, its origin at the bounds origin
+			coverage.translate(bounds.x, bounds.y);
+			coverage.scale(1 / graphics.__renderTransform.a, 1 / graphics.__renderTransform.d);
+			coverage.drawImage(cast graphics.__coverage.image.src, 0, 0);
+		}
+		else
+		{
+			coverage.fillRect(bounds.x, bounds.y, bounds.width, bounds.height);
+		}
 	}
 
 	@:noCompletion private function __compositeInvert(object:js.html.CanvasElement, level:Int, x0:Int, y0:Int, width:Int, height:Int):Void
