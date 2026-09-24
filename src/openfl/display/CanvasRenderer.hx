@@ -245,12 +245,16 @@ class CanvasRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		Flash blends an object as a whole: a container of several pieces under one of the
-		operator modes would otherwise have each child blended on its own (a child over a
-		sibling adds twice). Such a container is rendered into a group first, children
-		that only inherit its mode drawing NORMAL, and the group is composited with the
-		mode. A shape is already one piece here: its graphics are rendered to a surface
-		before drawing.
+		Whether a container has to be rendered into a group before it is blended.
+
+		Flash blends an object as a whole. If a container were drawn child by child with one of the
+		modes this renderer blends in a single operation (ADD, MULTIPLY, SCREEN, DIFFERENCE, LIGHTEN,
+		DARKEN, HARDLIGHT or OVERLAY), each child would be blended separately, and where two children
+		overlap the backdrop would be blended twice. So a container with more than one piece, either
+		several children or a child plus graphics of its own, is rendered into a group first, with
+		children that only inherit its mode drawn as NORMAL, and the finished group is blended once. A
+		shape never needs this, because its graphics are already rendered to a single image before they
+		are drawn.
 	**/
 	@:noCompletion private function __needsContainerGroup(displayObject:DisplayObject, blendMode:BlendMode):Bool
 	{
@@ -268,12 +272,15 @@ class CanvasRenderer extends DisplayObjectRenderer
 
 	#if (js && html5)
 	/**
-		Renders `displayObject` into a group canvas covering its bounds and composes it onto
-		the current context: LAYER and the operator modes as one drawImage of the group with
-		the mode's composite operation, ERASE and ALPHA through
-		destination-out / destination-in (unbounded operations, so clipped to the bounds),
-		INVERT and SUBTRACT in place on the opaque stage or else on a copy of the backdrop
-		that goes back with source-atop, keeping the backdrop alpha.
+		Renders `displayObject` into a group the size of its bounds, then combines that group with the
+		target according to `blendMode`.
+
+		The group is a canvas. LAYER and the modes the canvas supports directly are a single drawImage
+		with the matching composite operation. ERASE and ALPHA use destination-out and destination-in,
+		clipped to the object's bounds because those operations would otherwise affect the whole target.
+		INVERT and SUBTRACT are built from several operations: directly on the target when it is an
+		opaque stage, and otherwise on a copy of the backdrop that is drawn back with source-atop, which
+		keeps the backdrop's own alpha.
 	**/
 	@:noCompletion private function __renderGroup(displayObject:DisplayObject, blendMode:BlendMode):Void
 	{
@@ -383,9 +390,9 @@ class CanvasRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		The group's rectangle in target pixels: the object's bounds including filters,
-		rounded outward to whole pixels and clamped to the target. Returns false when
-		nothing is left.
+		Works out the rectangle a group needs on the target: the object's bounds including filters,
+		rounded out to whole pixels and clamped to the target, which inside a group is the enclosing
+		group. Returns false if nothing of it is left.
 	**/
 	@:noCompletion private function __getGroupBounds(displayObject:DisplayObject, bounds:Rectangle):Bool
 	{
@@ -407,7 +414,8 @@ class CanvasRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		The level's group canvas with default state and the group's area cleared.
+		Returns the group canvas for this nesting level, with its drawing state reset and the area the
+		group will use cleared.
 	**/
 	@:noCompletion private function __beginGroupCanvas(level:Int, width:Int, height:Int):js.html.CanvasElement
 	{
@@ -423,13 +431,15 @@ class CanvasRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		Renders the object into the group with the renderer redirected to it: the
-		world transform moves the group origin to (x0, y0) so objects keep their render
-		transforms. Inside a LAYER, or a container group of an operator mode, the object's
-		alpha is divided out of the children (it applies once, on the composite) and
-		children that only inherit the object's mode render NORMAL; inside the other groups
-		the children's blend modes are forced to NORMAL. Every piece of renderer state is
-		put back afterwards.
+		Renders `displayObject` into a group canvas by pointing the renderer at that canvas for the
+		duration. The world transform is shifted so that (x0, y0) of the target lands at the group's
+		origin, which lets every object keep its usual render transform.
+
+		The object's alpha is taken out of its children, because it is applied once to the whole group
+		afterwards. In a LAYER group, and in the group of any other mode this renderer composites in a
+		single draw (see `__compositeLayer`), children that only inherit the object's mode are drawn as
+		NORMAL. In the groups of the remaining modes, every child is drawn as NORMAL. All renderer state
+		is restored afterwards.
 	**/
 	@:noCompletion private function __renderIntoGroup(displayObject:DisplayObject, groupContext:js.html.CanvasRenderingContext2D, x0:Int, y0:Int,
 			blendMode:BlendMode):Void
@@ -488,7 +498,9 @@ class CanvasRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		LAYER: the group goes on as one object with the layer's alpha.
+		Draws a finished group onto the target as one image, with the object's alpha applied once to the
+		whole of it. The composite operation of `blendMode` does the blending. This handles LAYER and
+		every mode the canvas supports directly.
 	**/
 	@:noCompletion private function __compositeLayer(object:js.html.CanvasElement, displayObject:DisplayObject, x0:Int, y0:Int, width:Int, height:Int,
 			blendMode:BlendMode):Void
@@ -541,10 +553,12 @@ class CanvasRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		Fills what `displayObject` and its descendants cover into `coverage`, a context whose origin
-		is at (x0, y0) of the target, with its current composite operation: a shape the fills and
-		strokes of its graphics (their bounds when they have no coverage render), any other leaf
-		its local bounds, each under the transform it is drawn with.
+		Paints the area covered by `displayObject` and all its descendants into `coverage`, a context
+		whose origin sits at (x0, y0) of the target, using the composite operation currently set on it.
+
+		For a shape, this is the area of its fills and strokes, taken from its coverage render, or the
+		whole area of its rendered graphics if it has none. For any other object without children, it is
+		the object's bounding box. Every piece is placed with the same transform it is drawn with.
 	**/
 	@:noCompletion private function __drawCoverage(coverage:js.html.CanvasRenderingContext2D, displayObject:DisplayObject, x0:Int, y0:Int):Void
 	{
@@ -657,11 +671,14 @@ class CanvasRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		True when the current target is the opaque stage itself: not a LAYER group, a
-		transparent stage, a bitmap, or the cache bitmap of a filtered or cacheAsBitmap object
-		(its renderer is given the stage too, but draws into a transparent bitmap). Without a
-		stage, the target is a BitmapData and __transparent says whether it is opaque. The composites can then work in place, since
-		there is no backdrop alpha to preserve, which saves the copy and the way back.
+		Whether the current target is fully opaque, so that a composite can work on it directly without
+		having to preserve its alpha.
+
+		That is the case when drawing straight onto an opaque stage, and when drawing into an opaque
+		BitmapData with `BitmapData.draw`. It is not the case inside any group this renderer has opened,
+		on a transparent stage, or while rendering the cache bitmap of an object with filters or
+		cacheAsBitmap, whose renderer is given the stage as well but actually draws into a transparent
+		bitmap.
 	**/
 	@:noCompletion private inline function __backdropIsOpaque():Bool
 	{
@@ -669,8 +686,8 @@ class CanvasRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		Copies the group's region of the current target into the level's backdrop
-		canvas and returns that canvas' context, ready for compositing.
+		Copies the part of the target under the group into this level's backdrop canvas, and returns
+		that canvas's context, ready for compositing.
 	**/
 	@:noCompletion private function __copyBackdrop(level:Int, x0:Int, y0:Int, width:Int, height:Int):js.html.CanvasRenderingContext2D
 	{

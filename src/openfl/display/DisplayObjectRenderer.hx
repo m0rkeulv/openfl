@@ -55,7 +55,11 @@ class DisplayObjectRenderer extends EventDispatcher
 	@:noCompletion private var __roundPixels:Bool;
 	@:noCompletion private var __stage:Stage;
 	@:noCompletion private var __tempColorTransform:ColorTransform;
-	/** Whether the target has alpha: false for an opaque BitmapData (set by BitmapData.draw); the stage answers for itself. **/
+	/**
+		Whether the surface being drawn into has an alpha channel. `BitmapData.draw` sets this to false
+		when it draws into an opaque bitmap. When the stage is rendered, the stage's own `transparent`
+		setting is used instead.
+	**/
 	@:noCompletion private var __transparent:Bool = true;
 	@SuppressWarnings("checkstyle:Dynamic") @:noCompletion private var __type:#if lime RenderContextType #else Dynamic #end;
 	@:noCompletion private var __worldAlpha:Float;
@@ -63,12 +67,18 @@ class DisplayObjectRenderer extends EventDispatcher
 	@:noCompletion private var __worldTransform:Matrix;
 
 	/**
-		Flash draws a SUBTRACT, INVERT, ERASE or ALPHA object as it is where the target has never
-		been drawn into, and runs the mode's formula everywhere else, also where an earlier
-		mask left the backdrop transparent (ALPHA and ERASE then show nothing, SUBTRACT black,
-		INVERT white). __drawnBounds is the union of what was drawn into the current target so
-		far: a LAYER group starts empty, the stage is null (opaque, everything counts as drawn)
-		and so is a BitmapData.draw target. Every rendered object widens it.
+		Records that `displayObject` has drawn into the current target, by growing `__drawnBounds` to
+		include it.
+
+		This matters for SUBTRACT, INVERT, ERASE and ALPHA. Where nothing has been drawn into the target
+		yet, Flash draws an object with one of these modes as if it were NORMAL. Everywhere else it
+		applies the mode, even where an earlier mask has made the backdrop transparent again, and there
+		ALPHA and ERASE show nothing, SUBTRACT shows black and INVERT shows white.
+
+		`__drawnBounds` starts out empty in each group that needs it, such as a LAYER group. It is null
+		when drawing onto the stage or into the bitmap of a `BitmapData.draw` call, because those count
+		as fully drawn. Only objects that actually draw widen it: invisible objects and objects at alpha
+		0 are skipped, and a container with nothing of its own to draw is recorded through its children.
 	**/
 	@:noCompletion private function __markDrawn(displayObject:DisplayObject):Void
 	{
@@ -94,9 +104,10 @@ class DisplayObjectRenderer extends EventDispatcher
 	}
 
 	/**
-		The part of the rectangle (x, y, width, height) that __drawnBounds covers, in whole
-		pixels, into `drawn`. Returns false when nothing was drawn there (the whole rectangle
-		is untouched); when everything counts as drawn, `drawn` is the rectangle itself.
+		Finds the part of the rectangle (x, y, width, height) that has already been drawn into, rounded
+		out to whole pixels, and stores it in `drawn`. Returns false if nothing inside the rectangle has
+		been drawn yet. When the whole target counts as drawn (see `__markDrawn`), `drawn` is simply the
+		full rectangle.
 	**/
 	@:noCompletion private function __drawnWithin(x:Int, y:Int, width:Int, height:Int, drawn:Rectangle):Bool
 	{
@@ -113,21 +124,26 @@ class DisplayObjectRenderer extends EventDispatcher
 	}
 
 	/**
-		Whether ALPHA on this object needs its coverage (see the renderers' __compositeAlphaErase):
-		Flash masks with the union of what the object's leaves cover, a Bitmap its footprint
-		and a shape its fills, and leaves the rest of the object's box alone. A single
-		axis-aligned bitmap covers its whole box, so the plain destination-in already gives that.
-	**/
-	/**
-		Whether a shape's coverage (the opaque render of its fills that ALPHA masks with) is wanted:
-		the object is composited with ALPHA by its own mode, by the group it is rendered in, or by
-		the mode BitmapData.draw was given.
+		Whether a shape should also render its coverage: a second copy of its fills, drawn fully opaque,
+		that ALPHA uses as a mask. That is the case whenever the shape ends up composited with ALPHA,
+		whether through its own blend mode, the group it is being rendered into, or the blend mode given
+		to `BitmapData.draw`.
 	**/
 	@:noCompletion private function __wantsCoverage(displayObject:DisplayObject):Bool
 	{
 		return displayObject.__worldBlendMode == ALPHA || __groupBlendMode == ALPHA || __overrideBlendMode == ALPHA;
 	}
 
+	/**
+		Whether an object under ALPHA needs a separate coverage mask, or whether its own pixels already
+		show which area it covers.
+
+		Flash's ALPHA only affects the area an object covers: the whole rectangle of a Bitmap,
+		transparent pixels included, but only the fills of a shape. The rest of the object's bounding
+		box keeps the backdrop. A single object without graphics, such as a Bitmap, that is not rotated
+		or skewed covers exactly its bounding box, so it needs no mask. Anything with graphics, anything
+		with children, and anything rotated or skewed does.
+	**/
 	@:noCompletion private function __alphaNeedsCoverage(displayObject:DisplayObject):Bool
 	{
 		if (displayObject.__graphics != null) return true;
@@ -137,12 +153,14 @@ class DisplayObjectRenderer extends EventDispatcher
 	}
 
 	/**
-		Whether a blended object is a single piece the composite can read directly, a Bitmap's
-		bitmapData or a Shape's or empty Sprite's rendered graphics, instead of rendering it into
-		a group first: a leaf without a mask, a scroll rectangle, a cache bitmap (filters), an
-		opaque background or a colour transform. Other drawables with graphics, a TextField for
-		one, are drawn by their own rasteriser and keep the group. The cache bitmap is brought up
-		to date first, as the draw would.
+		Whether a blended object can be composited straight from pixels it already has, instead of first
+		being rendered into a group of its own.
+
+		That is true for a Bitmap, using its bitmapData, and for a Shape or an empty Sprite, using its
+		rendered graphics, as long as it has no children, mask, scroll rectangle, opaque background,
+		color transform or cache bitmap. Other objects with graphics, such as a TextField, draw
+		themselves in their own way and always use a group. The cache bitmap is brought up to date
+		first, as a normal draw would do, so that filters are taken into account.
 	**/
 	@:noCompletion private function __isBlendLeaf(displayObject:DisplayObject):Bool
 	{
@@ -263,8 +281,10 @@ class DisplayObjectRenderer extends EventDispatcher
 	@:noCompletion private function __resize(width:Int, height:Int):Void {}
 
 	/**
-		Applies `value` to the target, unless the renderer already holds that mode. `force` applies it
-		anyway, for a target whose state another renderer may have changed (see __updateCacheBitmap).
+		Sets the blend mode on the render target. Nothing happens if the renderer already has that mode
+		set, unless `force` is true. Use `force` when another renderer may have changed the target's
+		state in the meantime, as happens when a cacheAsBitmap child renderer draws with the same
+		context (see `__updateCacheBitmap`).
 	**/
 	@:noCompletion private function __setBlendMode(value:BlendMode, force:Bool = false):Void {}
 

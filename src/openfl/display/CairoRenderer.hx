@@ -236,13 +236,16 @@ class CairoRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		Flash blends an object as a whole. If a container with several children were drawn
-		child by child under one of the operator modes, the mode would apply to each child
-		separately, and where a child overlaps a sibling it would be blended twice. So such a
-		container is first rendered into a group, with children that only inherit its mode
-		drawing as NORMAL, and the finished group is then composited with the mode once.
-		A shape needs none of this: its graphics are rendered to a surface before drawing,
-		so it is already a single piece.
+		Whether a container has to be rendered into a group before it is blended.
+
+		Flash blends an object as a whole. If a container were drawn child by child with one of the
+		modes this renderer blends in a single operation (ADD, MULTIPLY, SCREEN, DIFFERENCE, LIGHTEN,
+		DARKEN, HARDLIGHT or OVERLAY), each child would be blended separately, and where two children
+		overlap the backdrop would be blended twice. So a container with more than one piece, either
+		several children or a child plus graphics of its own, is rendered into a group first, with
+		children that only inherit its mode drawn as NORMAL, and the finished group is blended once. A
+		shape never needs this, because its graphics are already rendered to a single image before they
+		are drawn.
 	**/
 	@:noCompletion private function __needsContainerGroup(displayObject:DisplayObject, blendMode:BlendMode):Bool
 	{
@@ -308,7 +311,11 @@ class CairoRenderer extends DisplayObjectRenderer
 	@:noCompletion private var __blendGroupDepth:Int = 0;
 	@:noCompletion private var __layerDepth:Int = 0;
 
-	/** Renders a LAYER container into a group and composites it with OVER. **/
+	/**
+		Renders a LAYER container into its own group, then draws that group onto the target as one image
+		with the container's alpha. Children with ERASE or ALPHA inside the layer therefore only affect
+		the layer's own content, not what lies behind it.
+	**/
 	@:noCompletion private function __renderLayerGroup(object:IBitmapDrawable):Void
 	{
 		__layerDepth++;
@@ -338,8 +345,14 @@ class CairoRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		Renders `object` alone into a Cairo group and composites the group with
-		the destination, see the __composite functions for each mode.
+		Composites `object` with one of the four modes Cairo has no single operator for: SUBTRACT,
+		INVERT, ERASE and ALPHA.
+
+		The object is rendered on its own into a Cairo group, and the matching `__composite` function
+		then combines that group with what is already on the target. A single Bitmap or Shape at full
+		alpha skips the group and is read straight from its own surface (see `__leafPattern`). Where
+		nothing has been drawn into the target yet, the object is drawn as it is instead, as Flash does
+		(see `__markDrawn`).
 	**/
 	@:noCompletion private function __renderBlendGroup(object:IBitmapDrawable, blendMode:BlendMode):Void
 	{
@@ -465,9 +478,10 @@ class CairoRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		A pattern of a one-piece object's own surface (a Bitmap's bitmapData or a shape's rendered
-		graphics) placed in device space with the matrix the object is drawn with, for the
-		composites to read directly; null when the object is not such a leaf or has nothing to draw.
+		Returns a pattern of a single-piece object's own pixels, a Bitmap's bitmapData or a Shape's
+		rendered graphics, positioned exactly where the object is drawn. The composite functions can
+		read the object from it without rendering it into a group first. Returns null if the object is
+		not a single piece (see `__isBlendLeaf`) or has nothing to draw.
 	**/
 	@:noCompletion private function __leafPattern(displayObject:DisplayObject):CairoPattern
 	{
@@ -572,10 +586,12 @@ class CairoRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		Paints what `displayObject` and its descendants cover into `coverage`, a context in the
-		target's device space, with its current operator: a shape's fills through its
-		coverage render (every fill opaque, see CairoGraphics), or its whole surface without one,
-		and any other leaf its local bounds, each under the transform it is drawn with.
+		Paints the area covered by `displayObject` and all its descendants into `coverage`, using the
+		operator currently set on that context.
+
+		For a shape, this is the area of its fills and strokes, taken from its coverage render, or the
+		whole area of its rendered graphics if it has none. For any other object without children, it is
+		the object's bounding box. Every piece is placed with the same transform it is drawn with.
 	**/
 	@:noCompletion private function __drawCoverage(coverage:Cairo, displayObject:DisplayObject):Void
 	{
@@ -620,7 +636,11 @@ class CairoRenderer extends DisplayObjectRenderer
 		Matrix.__pool.release(matrix);
 	}
 
-	/** Sets `coverage`'s matrix to `matrix` in the group's space, the way the object is drawn. **/
+	/**
+		Sets the transform of `coverage` so that it draws exactly where the object is drawn: the
+		object's `matrix` combined with the renderer's world transform, snapped to whole pixels when
+		pixel rounding is on.
+	**/
 	@:noCompletion private function __coverageMatrix(coverage:Cairo, matrix:Matrix):Void
 	{
 		if (__worldTransform != null) matrix.concat(__worldTransform);
@@ -658,8 +678,10 @@ class CairoRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		The object over opaque black: the premultiplied object p = a * s inside it and 0
-		elsewhere, which is what __compositeSubtract works with.
+		Returns a copy of the object drawn over opaque black. In it every pixel holds the object's color
+		already multiplied by its alpha, black where the object is transparent, with full alpha
+		everywhere. `__compositeSubtract` needs its source in this form, because its two blend passes
+		would otherwise apply the object's alpha twice at partly transparent pixels.
 	**/
 	@:noCompletion private function __overBlack(objectPattern:CairoPattern):CairoPattern
 	{
@@ -703,11 +725,14 @@ class CairoRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		True when the current target is the opaque stage surface itself: not a LAYER
-		group, a transparent stage, a bitmap, or the cache bitmap of a filtered or cacheAsBitmap
-		object (its renderer is given the stage too, but draws into a transparent bitmap). Without a
-		stage, the target is a BitmapData and __transparent says whether it is opaque. The composites can then work in place,
-		since there is no destination alpha to preserve.
+		Whether the current target is fully opaque, so that a composite can work on it directly without
+		having to preserve its alpha.
+
+		That is the case when drawing straight onto an opaque stage, and when drawing into an opaque
+		BitmapData with `BitmapData.draw`. It is not the case inside any group this renderer has opened,
+		on a transparent stage, or while rendering the cache bitmap of an object with filters or
+		cacheAsBitmap, whose renderer is given the stage as well but actually draws into a transparent
+		bitmap.
 	**/
 	@:noCompletion private inline function __backdropIsOpaque():Bool
 	{

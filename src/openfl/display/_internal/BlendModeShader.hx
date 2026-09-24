@@ -108,8 +108,8 @@ class BlendModeShader extends BitmapFilterShader
 		#end
 	}
 	/**
-		The backdrop copy and where it was taken from: (x, y) is the framebuffer position of its
-		first texel, the same as the copy's, so the fragment position maps onto it directly.
+		Sets the copy of the backdrop the shader blends against. (x, y) is the framebuffer position the
+		copy was taken from, so that the fragment position maps straight onto it.
 	**/
 	public function setBackdrop(backdrop:BitmapData, x:Float, y:Float):Void
 	{
@@ -125,7 +125,10 @@ class BlendModeShader extends BitmapFilterShader
 		#end
 	}
 
-	/** The part of the target drawn into before, as backdrop coordinates (x0, y0, x1, y1). **/
+	/**
+		Sets the part of the target that has been drawn into before, from (x0, y0) to (x1, y1) in
+		backdrop coordinates. Outside it, the shader draws the object as it is.
+	**/
 	public function setDrawn(x0:Float, y0:Float, x1:Float, y1:Float):Void
 	{
 		#if !macro
@@ -136,7 +139,12 @@ class BlendModeShader extends BitmapFilterShader
 		#end
 	}
 
-	/** The mode, the source's alpha and, for ALPHA, its coverage (same texture coordinates as the source). **/
+	/**
+		Prepares the shader for one draw: the blend mode, the alpha of the source, whether to skip fully
+		transparent source texels, and for ALPHA the source's coverage, which is sampled with the same
+		texture coordinates as the source. `mode` is one of the ids from
+		`OpenGLRenderer.__blendGroupMode`.
+	**/
 	public function init(mode:Int, alpha:Float, discardTransparent:Bool, coverage:BitmapData):Void
 	{
 		#if !macro

@@ -1963,8 +1963,8 @@ class CairoGraphics
 	#end
 
 	/**
-		Plays the graphics' commands into `target`: the normal render, or with `coverage` set
-		every fill and stroke as opaque black.
+		Plays the graphics' drawing commands into `target`. This is the normal render or, while
+		`coverage` is set, the coverage render, in which every fill and stroke is drawn opaque black.
 	**/
 	#if lime_cairo
 	private static function __renderCommands(graphics:Graphics, renderer:CairoRenderer, target:Cairo):Void
@@ -2213,7 +2213,11 @@ class CairoGraphics
 	}
 	#end
 
-	/** Renders the graphics to their surface when dirty; with `coverage`, their coverage too. **/
+	/**
+		Renders the graphics to their surface if they have changed. With `coverage`, it also renders
+		their coverage, which ALPHA uses as a mask, including for graphics that were rendered before
+		without one.
+	**/
 	public static function render(graphics:Graphics, renderer:CairoRenderer, coverage:Bool = false):Void
 	{
 		#if lime_cairo
@@ -2332,7 +2336,10 @@ class CairoGraphics
 		#end
 	}
 
-	/** Renders the fills and strokes of `graphics` opaque into `graphics.__coverage`, sized like `__bitmap`. **/
+	/**
+		Renders the fills and strokes of `graphics` fully opaque into `graphics.__coverage`, a bitmap
+		the same size as `graphics.__bitmap`.
+	**/
 	private static function __renderCoverage(graphics:Graphics, renderer:CairoRenderer):Void
 	{
 		#if lime_cairo

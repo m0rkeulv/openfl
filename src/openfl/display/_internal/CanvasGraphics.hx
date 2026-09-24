@@ -2129,8 +2129,8 @@ class CanvasGraphics
 	}
 
 	/**
-		Plays the graphics' commands into `targetCanvas`: the normal render, or with `coverage`
-		set every fill and stroke as opaque black.
+		Plays the graphics' drawing commands into `targetCanvas`. This is the normal render or, while
+		`coverage` is set, the coverage render, in which every fill and stroke is drawn opaque black.
 	**/
 	#if (js && html5)
 	private static function __renderCommands(graphics:Graphics, renderer:CanvasRenderer, targetCanvas:CanvasElement,
@@ -2418,7 +2418,10 @@ class CanvasGraphics
 			data.destroy();
 	}
 
-	/** Renders the fills and strokes of `graphics` opaque into `graphics.__coverage`, sized like `__canvas`. **/
+	/**
+		Renders the fills and strokes of `graphics` fully opaque into `graphics.__coverage`, a bitmap
+		backed by a canvas the same size as `graphics.__canvas`.
+	**/
 	private static function __renderCoverage(graphics:Graphics, renderer:CanvasRenderer):Void
 	{
 		// the coverage BitmapData wraps the canvas it was made from, reused until the size changes

@@ -317,19 +317,10 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		Sets a flag to tell the display shader to leave out texels with alpha 0 instead of
-		writing them as transparent.
-
-		Flash alpha blendmode only apply to the pixels an object covers. A Bitmap covers its
-		whole rectangle so even its transparent pixels cut the backdrop. A shape's
-		texture is transparent wherever nothing was drawn, and those texels lie
-		outside the object, so they must leave the backdrop alone.
-	**/
-	/**
-		The coverage of the shape being drawn under ALPHA (Graphics.__coverage, every fill
-		opaque), or null. With it the display shader keeps the backdrop by
-		1 - coverage + alpha, as Flash does at an anti-aliased edge, instead of by the alpha alone.
-		Reset to null by applyBitmapData.
+		Sets the coverage of the shape being drawn under ALPHA, its fills rendered fully opaque
+		(`Graphics.__coverage`), or null for none. With a coverage, the display shader keeps
+		`1 - coverage + alpha` of the backdrop, which is what Flash does at an anti-aliased edge, rather
+		than using the shape's alpha alone. `applyBitmapData` resets it to null.
 	**/
 	public function applyCoverage(bitmapData:BitmapData):Void
 	{
@@ -342,6 +333,14 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		}
 	}
 
+	/**
+		Tells the display shader to skip texels with alpha 0 instead of drawing them as transparent.
+
+		Flash's ALPHA only affects the pixels an object covers. A Bitmap covers its whole rectangle, so
+		even its transparent pixels cut into the backdrop. A shape's texture is transparent wherever
+		nothing was drawn, and those texels lie outside the shape, so they must leave the backdrop
+		alone. `applyBitmapData` resets this to false.
+	**/
 	public function applyDiscardTransparent(enabled:Bool):Void
 	{
 		__discardTransparentValue[0] = enabled;
@@ -993,11 +992,14 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		Flash blends an object as a whole. A Bitmap or a cached texture is one quad, so the
-		blend factors give that directly; a container with several pieces, or graphics the
-		direct path draws as several fills or a batch of quads, would blend piece by piece
-		(a second fill adds onto the first instead of covering it). Those are composed like
-		a LAYER first and the composite is drawn with the mode.
+		Whether an object has to be rendered into a group before it is blended, so that it blends as one
+		piece the way Flash does.
+
+		A Bitmap or a cached texture is a single quad, so the blend factors already treat it as a whole.
+		A container with several pieces, or graphics that are drawn directly as several fills or a batch
+		of quads, would otherwise be blended piece by piece, and a second fill would blend onto the
+		first instead of covering it. Those are rendered like a LAYER first, and the result is then
+		drawn with the blend mode.
 	**/
 	@:noCompletion private function __needsWholeObjectGroup(displayObject:DisplayObject, blendMode:BlendMode):Bool
 	{
@@ -1029,10 +1031,16 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		The modes composed by BlendModeShader with a copy of the backdrop. The first five
-		have no blend factors. The others do, but the factors draw nothing where the
-		backdrop is transparent, whereas Flash draws the object as it is there, so off the
-		opaque stage they take the shader too.
+		Whether `blendMode` has to go through `BlendModeShader` with a copy of the backdrop, rather than
+		through the blend factors.
+
+		DIFFERENCE, DARKEN, LIGHTEN, HARDLIGHT and OVERLAY always do, because blend factors cannot
+		express them. MULTIPLY, SUBTRACT, INVERT, ERASE and ALPHA can be done with blend factors, but
+		only on an opaque target (see `__backdropIsOpaque`): where the backdrop is transparent the
+		factors draw nothing, while Flash draws the object as it is there.
+
+		Groups clear the cached blend mode when they open and close, so blend factors chosen from this
+		answer are never reused at a different depth, where the answer may differ.
 	**/
 	@:noCompletion private function __needsBlendGroup(blendMode:BlendMode):Bool
 	{
@@ -1045,11 +1053,14 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		True when the current target is the opaque stage itself: not a LAYER group, a
-		transparent stage, a bitmap, or the cache bitmap of a filtered or cacheAsBitmap object
-		(its renderer is given the stage too, but draws into a transparent bitmap). Without a
-		stage, the target is a BitmapData and __transparent says whether it is opaque. Groups reset the cached blend mode, so a mode set
-		here is not reused at another depth.
+		Whether the current target is fully opaque, so that a composite can work on it directly without
+		having to preserve its alpha.
+
+		That is the case when drawing straight onto an opaque stage, and when drawing into an opaque
+		BitmapData with `BitmapData.draw`. It is not the case inside any group this renderer has opened,
+		on a transparent stage, or while rendering the cache bitmap of an object with filters or
+		cacheAsBitmap, whose renderer is given the stage as well but actually draws into a transparent
+		bitmap.
 	**/
 	@:noCompletion private inline function __backdropIsOpaque():Bool
 	{
@@ -1074,11 +1085,14 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		Renders `displayObject` into a scratch buffer (a texture) covering its bounds and composes the
-		result onto the current target: LAYER and the fixed-function modes as one draw of the
-		group with the mode's blend factors, the other modes through BlendModeShader with a
-		copy of the backdrop, which gives the Flash result (blend on straight colour, mixed
-		in by the object's alpha).
+		Renders `displayObject` into a group the size of its bounds, then combines that group with the
+		target according to `blendMode`.
+
+		The group is a scratch texture. LAYER, and the modes that can be done with blend factors on this
+		target (see `__needsBlendGroup`), are a single draw of the texture with the mode's blend
+		factors. The other modes go through `BlendModeShader`, which reads the texture and a copy of the
+		backdrop and gives the Flash result: the mode applied to the unpremultiplied colors, mixed in by
+		the object's alpha.
 	**/
 	@:noCompletion private function __renderGroup(displayObject:DisplayObject, blendMode:BlendMode):Void
 	{
@@ -1133,9 +1147,9 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		The group's rectangle in target pixels: the object's bounds including filters,
-		rounded outward to whole pixels and limited to the target (or the enclosing
-		group) and the current clip. Returns false when nothing is left.
+		Works out the rectangle a group needs on the target: the object's bounds including filters,
+		rounded out to whole pixels and clamped to the target, which inside a group is the enclosing
+		group. It is also clamped to the current clip rectangle. Returns false if nothing of it is left.
 	**/
 	@:noCompletion private function __getGroupBounds(displayObject:DisplayObject, bounds:Rectangle):Bool
 	{
@@ -1145,8 +1159,8 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		Rounds a rectangle in target pixels outward to whole pixels and clamps it to the target
-		and the current clip rectangle. Returns false when nothing is left.
+		Rounds a rectangle in target pixels out to whole pixels and clamps it to the target and the
+		current clip rectangle. Returns false if nothing of it is left.
 	**/
 	@:noCompletion private function __clampGroupBounds(bounds:Rectangle):Bool
 	{
@@ -1172,15 +1186,19 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		Renders the object into the scratchBuffer buffer with the renderer redirected to it:
-		the projection moves the group origin to (x0, y0) so objects keep their render
-		transforms, and the scissor rectangles follow through __groupOffsetX/Y. Ancestor
-		masks and clips are suspended (they apply to the composite) and the group gets
-		its own clip stack and stencil reference. Inside a LAYER, or a whole-object group
-		of a fixed-function mode, the object's alpha is divided out of the children (it
-		applies once, on the composite) and children that only inherit the object's mode
-		render NORMAL; inside the shader groups the children's blend modes are forced to
-		NORMAL. Every piece of renderer and context state is put back afterwards.
+		Renders `displayObject` into `scratchBuffer` by pointing the renderer at that texture for the
+		duration. The projection is shifted so that (x0, y0) of the target lands at the group's origin,
+		which lets every object keep its usual render transform, and scissor rectangles are shifted the
+		same way through `__groupOffsetX` and `__groupOffsetY`. Masks and clips from the object's
+		ancestors are suspended while the group renders, since they apply to the finished group instead,
+		and the group gets its own clip stack and stencil reference. With `coverageOnly`, the group
+		receives the object's coverage instead of its pixels (see `__drawCoverage`).
+
+		The object's alpha is taken out of its children, because it is applied once to the whole group
+		afterwards. In a LAYER group, and in the group of any other mode this renderer composites in a
+		single draw (see `__compositeLayer`), children that only inherit the object's mode are drawn as
+		NORMAL. In the groups of the remaining modes, every child is drawn as NORMAL. All renderer state
+		is restored afterwards.
 	**/
 	@:noCompletion private function __renderIntoGroup(displayObject:DisplayObject, scratchBuffer:BitmapData, x0:Int, y0:Int, width:Int, height:Int,
 			blendMode:BlendMode, coverageOnly:Bool = false):Void
@@ -1283,7 +1301,10 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-	handles blendmodes LAYER, ADD, MULTIPLY, SCREEN, SUBTRACT, INVERT, ERASE, ALPHA
+		Draws a finished group onto the target as one image, with the object's alpha applied once to the
+		whole of it. The blend factors of `blendMode` do the blending. This handles LAYER, ADD and
+		SCREEN, and also MULTIPLY, SUBTRACT, INVERT, ERASE and ALPHA when the target is opaque
+		(see `__needsBlendGroup`).
 	**/
 	@:noCompletion private function __compositeLayer(scratchBuffer:BitmapData, displayObject:DisplayObject, x0:Int, y0:Int, blendMode:BlendMode,
 			discardTransparent:Bool, coverage:BitmapData):Void
@@ -1294,8 +1315,9 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		The modes of __needsBlendGroup: BlendModeShader reads the group and a copy of the
-		backdrop and writes the finished pixel.
+		Draws a finished group onto the target through `BlendModeShader`, for the modes listed in
+		`__needsBlendGroup`. The shader reads the group and a copy of the backdrop and writes the
+		finished pixel.
 	**/
 	@:noCompletion private function __compositeBlend(scratchBuffer:BitmapData, backdrop:BitmapData, x0:Int, y0:Int, width:Int, height:Int,
 			blendMode:BlendMode, discardTransparent:Bool, coverage:BitmapData):Void
@@ -1310,8 +1332,8 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		Tells the blend shader the part of the target drawn into before (see __markDrawn), as
-		backdrop coordinates: outside it the shader draws the object as it is.
+		Tells the blend shader which part of the target has been drawn into before (see `__markDrawn`),
+		in backdrop texture coordinates. Outside that part, the shader draws the object as it is.
 	**/
 	@:noCompletion private function __setDrawn(shader:BlendModeShader, backdrop:BitmapData, x0:Int, y0:Int, width:Int, height:Int):Void
 	{
@@ -1329,8 +1351,10 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		Whether a shape leaf draws from a texture of its graphics (the direct triangle path
-		draws several pieces straight to the target and has no texture to read).
+		Whether a single-piece object can be drawn from a texture of its own. A Bitmap always can. A
+		shape can when its graphics have been, or will be, rendered to a texture. It cannot when they
+		are drawn directly as triangles, since that path draws several pieces straight onto the target
+		and leaves no texture to read.
 	**/
 	@:noCompletion private function __leafTexturePath(displayObject:DisplayObject):Bool
 	{
@@ -1340,10 +1364,11 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		A one-piece object under one of the __needsBlendGroup modes: the blend shader reads the
-		object's own texture, drawn with its own matrix, against a copy of the backdrop under its
-		bounds. No group, no scratch clear, and a shape's coverage is its coverage texture, so no
-		coverage pass either.
+		Blends a single-piece object through `BlendModeShader`, for the modes listed in
+		`__needsBlendGroup`. The shader reads the object's own texture, drawn with the object's own
+		matrix, together with a copy of the backdrop under its bounds. There is no group to render or
+		clear, and a shape's coverage is its coverage texture, so no separate coverage pass is needed
+		either.
 	**/
 	@:noCompletion private function __compositeLeaf(displayObject:DisplayObject, blendMode:BlendMode):Void
 	{
@@ -1445,6 +1470,11 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		__renderEvent(displayObject);
 	}
 
+	/**
+		Copies the part of the target under the group into `backdrop`, and hands that texture to the
+		blend shader, which reads it as the backdrop. The window's framebuffer is stored bottom-up, so
+		there the copy is taken from the flipped position.
+	**/
 	@:noCompletion private function __copyBackdrop(backdrop:BitmapData, x:Int, y:Int, width:Int, height:Int):Void
 	{
 		var context = __context3D;
@@ -1539,10 +1569,13 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		The coverage pass of an ALPHA group (__coverageOnly): draws what `displayObject` and its
-		descendants cover into the current target, a shape's fills through its coverage render
-		(every fill opaque, see CairoGraphics) and any other leaf its local bounds, each with
-		the transform it is drawn with, all opaque.
+		Draws the area covered by `displayObject` and all its descendants into the current target, fully
+		opaque, for the coverage pass of an ALPHA group (see `__coverageOnly`). A shape drawn directly
+		as triangles has no coverage render, and draws its fills into the pass itself, opaque.
+
+		For a shape, this is the area of its fills and strokes, taken from its coverage render, or the
+		whole area of its rendered graphics if it has none. For any other object without children, it is
+		the object's bounding box. Every piece is placed with the same transform it is drawn with.
 	**/
 	@:noCompletion private function __drawCoverage(displayObject:DisplayObject):Void
 	{
@@ -1582,8 +1615,8 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		Multiplies the colour and alpha of the group being rendered (the current render target,
-		at (x, y) in target pixels) by `alpha`: one quad drawn with (ZERO, SRC_ALPHA) factors.
+		Multiplies the color and alpha of the group being rendered by `alpha`, over the rectangle at
+		(x, y) in target pixels. It draws one quad with the blend factors (ZERO, SOURCE_ALPHA).
 	**/
 	@:noCompletion private function __scaleScratchAlpha(x:Int, y:Int, width:Int, height:Int, alpha:Float):Void
 	{
@@ -1615,7 +1648,10 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		__clearShader();
 	}
 
-	/** Draws `geometry`'s quad sampling `texture`, opaque, with `matrix`. **/
+	/**
+		Draws a quad the size of `geometry`, placed with `matrix`, filled from `texture` and fully
+		opaque. The coverage pass uses it for a shape's coverage, or for a plain opaque quad.
+	**/
 	@:noCompletion private function __drawCoverageQuad(geometry:BitmapData, texture:BitmapData, matrix:Matrix):Void
 	{
 		var context = __context3D;

@@ -677,7 +677,12 @@ class Context3DGraphics
 		return true;
 	}
 
-	/** Draws the graphics on the direct path, or renders them to their texture when dirty (with `coverage`, their coverage too). **/
+	/**
+		Prepares graphics for drawing on the GPU. Graphics the direct path can handle are turned into
+		triangles. The rest, and any that already have an up-to-date texture, are rendered to a texture
+		by the software rasterizer. With `coverage`, the texture path also renders their coverage, which
+		ALPHA uses as a mask.
+	**/
 	public static function render(graphics:Graphics, renderer:OpenGLRenderer, coverage:Bool = false):Void
 	{
 		if (!graphics.__visible || graphics.__commands.length == 0) return;
