@@ -145,7 +145,7 @@ class BlendModeShader extends BitmapFilterShader
 		texture coordinates as the source. `mode` is one of the ids from
 		`OpenGLRenderer.__blendGroupMode`.
 	**/
-	public function init(mode:Int, alpha:Float, discardTransparent:Bool, coverage:BitmapData):Void
+	public function prepare(mode:Int, alpha:Float, discardTransparent:Bool, coverage:BitmapData):Void
 	{
 		#if !macro
 		uMode.value[0] = mode;

@@ -109,7 +109,7 @@ class DisplayObjectRenderer extends EventDispatcher
 		been drawn yet. When the whole target counts as drawn (see `__markDrawn`), `drawn` is simply the
 		full rectangle.
 	**/
-	@:noCompletion private function __drawnWithin(x:Int, y:Int, width:Int, height:Int, drawn:Rectangle):Bool
+	@:noCompletion private function __getDrawnArea(x:Int, y:Int, width:Int, height:Int, drawn:Rectangle):Bool
 	{
 		if (__drawnBounds == null)
 		{
@@ -129,7 +129,7 @@ class DisplayObjectRenderer extends EventDispatcher
 		whether through its own blend mode, the group it is being rendered into, or the blend mode given
 		to `BitmapData.draw`.
 	**/
-	@:noCompletion private function __wantsCoverage(displayObject:DisplayObject):Bool
+	@:noCompletion private function __isCompositedWithAlpha(displayObject:DisplayObject):Bool
 	{
 		return displayObject.__worldBlendMode == ALPHA || __groupBlendMode == ALPHA || __overrideBlendMode == ALPHA;
 	}
@@ -144,7 +144,7 @@ class DisplayObjectRenderer extends EventDispatcher
 		or skewed covers exactly its bounding box, so it needs no mask. Anything with graphics, anything
 		with children, and anything rotated or skewed does.
 	**/
-	@:noCompletion private function __alphaNeedsCoverage(displayObject:DisplayObject):Bool
+	@:noCompletion private function __alphaNeedsMask(displayObject:DisplayObject):Bool
 	{
 		if (displayObject.__graphics != null) return true;
 		if (displayObject.__children != null && displayObject.__children.length > 0) return true;

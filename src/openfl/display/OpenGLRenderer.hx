@@ -964,10 +964,10 @@ class OpenGLRenderer extends DisplayObjectRenderer
 				var blendMode = __overrideBlendMode != null ? __overrideBlendMode : displayObject.__worldBlendMode;
 				if (blendMode == __groupBlendMode) blendMode = NORMAL;
 
-				if (__needsBlendGroup(blendMode))
+				if (__needsBlendShader(blendMode))
 				{
 					// one piece composes straight from its texture, anything else as a group
-					if (__isBlendLeaf(displayObject) && displayObject.__worldShader == null && __leafTexturePath(displayObject))
+					if (__isBlendLeaf(displayObject) && displayObject.__worldShader == null && __leafHasTexture(displayObject))
 					{
 						__compositeLeaf(displayObject, blendMode);
 					}
@@ -1042,7 +1042,7 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		Groups clear the cached blend mode when they open and close, so blend factors chosen from this
 		answer are never reused at a different depth, where the answer may differ.
 	**/
-	@:noCompletion private function __needsBlendGroup(blendMode:BlendMode):Bool
+	@:noCompletion private function __needsBlendShader(blendMode:BlendMode):Bool
 	{
 		return switch (blendMode)
 		{
@@ -1089,7 +1089,7 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		target according to `blendMode`.
 
 		The group is a scratch texture. LAYER, and the modes that can be done with blend factors on this
-		target (see `__needsBlendGroup`), are a single draw of the texture with the mode's blend
+		target (see `__needsBlendShader`), are a single draw of the texture with the mode's blend
 		factors. The other modes go through `BlendModeShader`, which reads the texture and a copy of the
 		backdrop and gives the Flash result: the mode applied to the unpremultiplied colors, mixed in by
 		the object's alpha.
@@ -1107,7 +1107,7 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		var level = __groupDepth * 3;
 		var scratchBuffer = __getGroupScratchBuffer(level, width, height);
 		var backdrop = __groupScratchBuffers[level + 1];
-		var shaded = __needsBlendGroup(blendMode);
+		var shaded = __needsBlendShader(blendMode);
 		if (shaded) __copyBackdrop(backdrop, x0, y0, width, height);
 
 		__renderIntoGroup(displayObject, scratchBuffer, x0, y0, width, height, blendMode);
@@ -1128,7 +1128,7 @@ class OpenGLRenderer extends DisplayObjectRenderer
 			{
 				discardTransparent = true;
 			}
-			else if (__alphaNeedsCoverage(displayObject))
+			else if (__alphaNeedsMask(displayObject))
 			{
 				coverage = __groupScratchBuffers[level + 2];
 				__renderIntoGroup(displayObject, coverage, x0, y0, width, height, blendMode, true);
@@ -1138,11 +1138,11 @@ class OpenGLRenderer extends DisplayObjectRenderer
 
 		if (shaded)
 		{
-			__compositeBlend(scratchBuffer, backdrop, x0, y0, width, height, blendMode, discardTransparent, coverage);
+			__compositeWithShader(scratchBuffer, backdrop, x0, y0, width, height, blendMode, discardTransparent, coverage);
 		}
 		else
 		{
-			__compositeLayer(scratchBuffer, displayObject, x0, y0, blendMode, discardTransparent, coverage);
+			__compositeDirect(scratchBuffer, displayObject, x0, y0, blendMode, discardTransparent, coverage);
 		}
 	}
 
@@ -1196,7 +1196,7 @@ class OpenGLRenderer extends DisplayObjectRenderer
 
 		The object's alpha is taken out of its children, because it is applied once to the whole group
 		afterwards. In a LAYER group, and in the group of any other mode this renderer composites in a
-		single draw (see `__compositeLayer`), children that only inherit the object's mode are drawn as
+		single draw (see `__compositeDirect`), children that only inherit the object's mode are drawn as
 		NORMAL. In the groups of the remaining modes, every child is drawn as NORMAL. All renderer state
 		is restored afterwards.
 	**/
@@ -1206,7 +1206,7 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		var context = __context3D;
 		var cacheCoverageOnly = __coverageOnly;
 		__coverageOnly = coverageOnly;
-		var layer = !__needsBlendGroup(blendMode);
+		var layer = !__needsBlendShader(blendMode);
 
 		__groupDepth++;
 		if (layer) __layerDepth++; else __blendGroupDepth++;
@@ -1255,7 +1255,7 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		__worldAlpha = coverageOnly ? 1 : 1 / displayObject.__worldAlpha;
 		// the mode this group is composited with: children that only inherit it render NORMAL in a
 		// LAYER-like group, every child renders NORMAL in a shader group, and shapes rendered inside
-		// either know whether their coverage is wanted (__wantsCoverage)
+		// either know whether their coverage is wanted (__isCompositedWithAlpha)
 		if (blendMode != LAYER) __groupBlendMode = blendMode;
 		if (!layer) __overrideBlendMode = NORMAL;
 
@@ -1270,7 +1270,7 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		__groupBlendMode = cacheGroupBlendMode;
 		__blendMode = null;
 
-		// the object's alpha applies once, to the whole object: __compositeLayer draws with it,
+		// the object's alpha applies once, to the whole object: __compositeDirect draws with it,
 		// the shader groups get the group scaled by it here, while it is still the render target
 		if (!layer && !coverageOnly && displayObject.__worldAlpha < 1) __scaleScratchAlpha(x0, y0, width, height, displayObject.__worldAlpha);
 
@@ -1304,9 +1304,9 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		Draws a finished group onto the target as one image, with the object's alpha applied once to the
 		whole of it. The blend factors of `blendMode` do the blending. This handles LAYER, ADD and
 		SCREEN, and also MULTIPLY, SUBTRACT, INVERT, ERASE and ALPHA when the target is opaque
-		(see `__needsBlendGroup`).
+		(see `__needsBlendShader`).
 	**/
-	@:noCompletion private function __compositeLayer(scratchBuffer:BitmapData, displayObject:DisplayObject, x0:Int, y0:Int, blendMode:BlendMode,
+	@:noCompletion private function __compositeDirect(scratchBuffer:BitmapData, displayObject:DisplayObject, x0:Int, y0:Int, blendMode:BlendMode,
 			discardTransparent:Bool, coverage:BitmapData):Void
 	{
 		__setBlendMode(blendMode);
@@ -1316,14 +1316,14 @@ class OpenGLRenderer extends DisplayObjectRenderer
 
 	/**
 		Draws a finished group onto the target through `BlendModeShader`, for the modes listed in
-		`__needsBlendGroup`. The shader reads the group and a copy of the backdrop and writes the
+		`__needsBlendShader`. The shader reads the group and a copy of the backdrop and writes the
 		finished pixel.
 	**/
-	@:noCompletion private function __compositeBlend(scratchBuffer:BitmapData, backdrop:BitmapData, x0:Int, y0:Int, width:Int, height:Int,
+	@:noCompletion private function __compositeWithShader(scratchBuffer:BitmapData, backdrop:BitmapData, x0:Int, y0:Int, width:Int, height:Int,
 			blendMode:BlendMode, discardTransparent:Bool, coverage:BitmapData):Void
 	{
 		var shader = __staticBlendShader; // __copyBackdrop gave it the backdrop
-		shader.init(__blendGroupMode(blendMode), 1, discardTransparent, coverage);
+		shader.prepare(__blendGroupMode(blendMode), 1, discardTransparent, coverage);
 		__setDrawn(shader, backdrop, x0, y0, width, height);
 
 		// the shader writes the finished pixel
@@ -1338,7 +1338,7 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	@:noCompletion private function __setDrawn(shader:BlendModeShader, backdrop:BitmapData, x0:Int, y0:Int, width:Int, height:Int):Void
 	{
 		var drawn = Rectangle.__pool.get();
-		if (__drawnWithin(x0, y0, width, height, drawn))
+		if (__getDrawnArea(x0, y0, width, height, drawn))
 		{
 			shader.setDrawn((drawn.x - x0) / backdrop.__textureWidth, (drawn.y - y0) / backdrop.__textureHeight, (drawn.right - x0) / backdrop.__textureWidth,
 				(drawn.bottom - y0) / backdrop.__textureHeight);
@@ -1356,7 +1356,7 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		are drawn directly as triangles, since that path draws several pieces straight onto the target
 		and leaves no texture to read.
 	**/
-	@:noCompletion private function __leafTexturePath(displayObject:DisplayObject):Bool
+	@:noCompletion private function __leafHasTexture(displayObject:DisplayObject):Bool
 	{
 		var graphics = displayObject.__graphics;
 		if (graphics == null) return true; // a Bitmap
@@ -1365,7 +1365,7 @@ class OpenGLRenderer extends DisplayObjectRenderer
 
 	/**
 		Blends a single-piece object through `BlendModeShader`, for the modes listed in
-		`__needsBlendGroup`. The shader reads the object's own texture, drawn with the object's own
+		`__needsBlendShader`. The shader reads the object's own texture, drawn with the object's own
 		matrix, together with a copy of the backdrop under its bounds. There is no group to render or
 		clear, and a shape's coverage is its coverage texture, so no separate coverage pass is needed
 		either.
@@ -1437,7 +1437,7 @@ class OpenGLRenderer extends DisplayObjectRenderer
 				__copyBackdrop(backdrop, x0, y0, width, height);
 
 				var shader = __staticBlendShader;
-				shader.init(__blendGroupMode(blendMode), __getAlpha(displayObject.__worldAlpha), graphics != null && blendMode == ALPHA && coverage == null,
+				shader.prepare(__blendGroupMode(blendMode), __getAlpha(displayObject.__worldAlpha), graphics != null && blendMode == ALPHA && coverage == null,
 					coverage);
 				__setDrawn(shader, backdrop, x0, y0, width, height);
 

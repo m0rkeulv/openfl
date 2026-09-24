@@ -2214,11 +2214,11 @@ class CairoGraphics
 	#end
 
 	/**
-		Renders the graphics to their surface if they have changed. With `coverage`, it also renders
-		their coverage, which ALPHA uses as a mask, including for graphics that were rendered before
-		without one.
+		Renders the graphics to their surface if they have changed. When `withCoverage` is true, it also
+		renders their coverage, which ALPHA uses as a mask, including for graphics that were rendered
+		before without one.
 	**/
-	public static function render(graphics:Graphics, renderer:CairoRenderer, coverage:Bool = false):Void
+	public static function render(graphics:Graphics, renderer:CairoRenderer, withCoverage:Bool = false):Void
 	{
 		#if lime_cairo
 		CairoGraphics.graphics = graphics;
@@ -2237,7 +2237,7 @@ class CairoGraphics
 		{
 			// a shape that came under ALPHA after its render (its blend mode changed, or an ancestor's)
 			// still needs its coverage: rendered here on its own, the fills being unchanged
-			if (coverage && !graphics.__managed && graphics.__coverage == null && graphics.__bitmap != null)
+			if (withCoverage && !graphics.__managed && graphics.__coverage == null && graphics.__bitmap != null)
 			{
 				bounds = graphics.__bounds;
 				__renderCoverage(graphics, renderer);
@@ -2317,7 +2317,7 @@ class CairoGraphics
 
 			// a shape under ALPHA also needs its coverage, every fill and stroke opaque, so the
 			// composite can keep the uncovered part of an edge pixel (see CairoRenderer)
-			if (coverage)
+			if (withCoverage)
 			{
 				__renderCoverage(graphics, renderer);
 			}

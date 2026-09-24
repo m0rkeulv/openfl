@@ -215,11 +215,11 @@ class CairoRenderer extends DisplayObjectRenderer
 				if (blendMode == __groupBlendMode) blendMode = NORMAL;
 				if (blendMode == SUBTRACT || blendMode == INVERT || blendMode == ALPHA || blendMode == ERASE)
 				{
-					__renderBlendGroup(object, blendMode);
+					__renderFormulaGroup(object, blendMode);
 					__markDrawn(displayObject);
 					return;
 				}
-				if (__needsContainerGroup(displayObject, blendMode))
+				if (__needsWholeObjectGroup(displayObject, blendMode))
 				{
 					__renderOperatorGroup(object, blendMode);
 					__markDrawn(displayObject);
@@ -247,7 +247,7 @@ class CairoRenderer extends DisplayObjectRenderer
 		shape never needs this, because its graphics are already rendered to a single image before they
 		are drawn.
 	**/
-	@:noCompletion private function __needsContainerGroup(displayObject:DisplayObject, blendMode:BlendMode):Bool
+	@:noCompletion private function __needsWholeObjectGroup(displayObject:DisplayObject, blendMode:BlendMode):Bool
 	{
 		var operatorMode = switch (blendMode)
 		{
@@ -354,12 +354,12 @@ class CairoRenderer extends DisplayObjectRenderer
 		nothing has been drawn into the target yet, the object is drawn as it is instead, as Flash does
 		(see `__markDrawn`).
 	**/
-	@:noCompletion private function __renderBlendGroup(object:IBitmapDrawable, blendMode:BlendMode):Void
+	@:noCompletion private function __renderFormulaGroup(object:IBitmapDrawable, blendMode:BlendMode):Void
 	{
 		var displayObject:DisplayObject = cast object;
 		if (displayObject.__worldAlpha <= 0) return;
 		var previousOverride = __overrideBlendMode;
-		// the mode this group is composited with, for the shapes rendered inside it (__wantsCoverage)
+		// the mode this group is composited with, for the shapes rendered inside it (__isCompositedWithAlpha)
 		var previousGroupBlendMode = __groupBlendMode;
 		__groupBlendMode = blendMode;
 		__blendGroupDepth++;
@@ -424,7 +424,7 @@ class CairoRenderer extends DisplayObjectRenderer
 		// gives: nothing for ALPHA and ERASE, and for SUBTRACT and INVERT a black or white
 		// silhouette of the object, painted under the result
 		var drawn = Rectangle.__pool.get();
-		var drawnAll = __drawnWithin(x0, y0, width, height, drawn);
+		var drawnAll = __getDrawnArea(x0, y0, width, height, drawn);
 		var untouched = !drawnAll || drawn.width < width || drawn.height < height;
 		var uncovered:CairoPattern = null;
 		if (untouched)
@@ -447,7 +447,7 @@ class CairoRenderer extends DisplayObjectRenderer
 			case INVERT:
 				__compositeInvert(destination, objectPattern);
 			case SUBTRACT:
-				__compositeSubtract(destination, __overBlack(objectPattern));
+				__compositeSubtract(destination, __premultipliedPattern(objectPattern));
 			default:
 		}
 
@@ -511,7 +511,7 @@ class CairoRenderer extends DisplayObjectRenderer
 		else
 		{
 			#if lime_cairo
-			CairoGraphics.render(graphics, this, __wantsCoverage(displayObject));
+			CairoGraphics.render(graphics, this, __isCompositedWithAlpha(displayObject));
 			if (graphics.__cairo != null && graphics.__visible && graphics.__width >= 1 && graphics.__height >= 1)
 			{
 				surface = graphics.__cairo.target;
@@ -548,7 +548,7 @@ class CairoRenderer extends DisplayObjectRenderer
 
 	@:noCompletion private function __compositeAlphaErase(objectPattern:CairoPattern, blendMode:BlendMode, displayObject:DisplayObject):Void
 	{
-		if (blendMode == ALPHA && __alphaNeedsCoverage(displayObject))
+		if (blendMode == ALPHA && __alphaNeedsMask(displayObject))
 		{
 			// Flash's ALPHA masks with what the object's leaves cover: a Bitmap its footprint,
 			// transparent pixels included, a shape only its fills, and the part of the object's
@@ -603,7 +603,7 @@ class CairoRenderer extends DisplayObjectRenderer
 		{
 			matrix.scale(1 / graphics.__bitmapScaleX, 1 / graphics.__bitmapScaleY);
 			matrix.concat(graphics.__worldTransform);
-			__coverageMatrix(coverage, matrix);
+			__applyCoverageMatrix(coverage, matrix);
 			if (graphics.__coverage != null)
 			{
 				coverage.setSourceSurface(graphics.__coverage.getSurface(), 0, 0);
@@ -626,7 +626,7 @@ class CairoRenderer extends DisplayObjectRenderer
 			var bounds = Rectangle.__pool.get();
 			displayObject.__getBounds(bounds, Matrix.__identity);
 			matrix.copyFrom(displayObject.__renderTransform);
-			__coverageMatrix(coverage, matrix);
+			__applyCoverageMatrix(coverage, matrix);
 			coverage.setSourceRGB(0, 0, 0);
 			coverage.rectangle(bounds.x, bounds.y, bounds.width, bounds.height);
 			coverage.fill();
@@ -641,7 +641,7 @@ class CairoRenderer extends DisplayObjectRenderer
 		object's `matrix` combined with the renderer's world transform, snapped to whole pixels when
 		pixel rounding is on.
 	**/
-	@:noCompletion private function __coverageMatrix(coverage:Cairo, matrix:Matrix):Void
+	@:noCompletion private function __applyCoverageMatrix(coverage:Cairo, matrix:Matrix):Void
 	{
 		if (__worldTransform != null) matrix.concat(__worldTransform);
 		if (__roundPixels)
@@ -683,7 +683,7 @@ class CairoRenderer extends DisplayObjectRenderer
 		everywhere. `__compositeSubtract` needs its source in this form, because its two blend passes
 		would otherwise apply the object's alpha twice at partly transparent pixels.
 	**/
-	@:noCompletion private function __overBlack(objectPattern:CairoPattern):CairoPattern
+	@:noCompletion private function __premultipliedPattern(objectPattern:CairoPattern):CairoPattern
 	{
 		cairo.pushGroupWithContent(CairoContent.COLOR_ALPHA);
 		cairo.setSourceRGB(0, 0, 0);
@@ -807,7 +807,7 @@ class CairoRenderer extends DisplayObjectRenderer
 		switch (value)
 		{
 			// ALPHA, ERASE, INVERT and SUBTRACT are rendered into a Cairo group and
-			// composited with the destination in __renderBlendGroup. Cairo has no operator
+			// composited with the destination in __renderFormulaGroup. Cairo has no operator
 			// for the last two, and the first two need the object as one clipped piece.
 
 			case ADD:

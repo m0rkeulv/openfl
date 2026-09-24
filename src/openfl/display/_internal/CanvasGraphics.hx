@@ -2446,7 +2446,7 @@ class CanvasGraphics
 	}
 	#end
 
-	public static function render(graphics:Graphics, renderer:CanvasRenderer, coverage:Bool = false):Void
+	public static function render(graphics:Graphics, renderer:CanvasRenderer, withCoverage:Bool = false):Void
 	{
 		#if (js && html5)
 		CanvasGraphics.graphics = graphics;
@@ -2465,7 +2465,7 @@ class CanvasGraphics
 		{
 			// a shape that came under ALPHA after its render (its blend mode changed, or an ancestor's)
 			// still needs its coverage: rendered here on its own, the fills being unchanged
-			if (coverage && !graphics.__managed && graphics.__coverage == null && graphics.__canvas != null)
+			if (withCoverage && !graphics.__managed && graphics.__coverage == null && graphics.__canvas != null)
 			{
 				bounds = graphics.__bounds;
 				__renderCoverage(graphics, renderer);
@@ -2519,7 +2519,7 @@ class CanvasGraphics
 
 			// a shape under ALPHA also needs its coverage, every fill and stroke opaque, so the
 			// composite can keep the part of its box the fills leave uncovered (see CanvasRenderer)
-			if (coverage)
+			if (withCoverage)
 			{
 				__renderCoverage(graphics, renderer);
 			}

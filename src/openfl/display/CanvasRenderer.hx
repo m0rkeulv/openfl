@@ -227,7 +227,7 @@ class CanvasRenderer extends DisplayObjectRenderer
 						__markDrawn(displayObject);
 						return;
 					default:
-						if (__needsContainerGroup(displayObject, blendMode))
+						if (__needsWholeObjectGroup(displayObject, blendMode))
 						{
 							__renderGroup(displayObject, blendMode);
 							__markDrawn(displayObject);
@@ -256,7 +256,7 @@ class CanvasRenderer extends DisplayObjectRenderer
 		shape never needs this, because its graphics are already rendered to a single image before they
 		are drawn.
 	**/
-	@:noCompletion private function __needsContainerGroup(displayObject:DisplayObject, blendMode:BlendMode):Bool
+	@:noCompletion private function __needsWholeObjectGroup(displayObject:DisplayObject, blendMode:BlendMode):Bool
 	{
 		var operatorMode = switch (blendMode)
 		{
@@ -302,7 +302,7 @@ class CanvasRenderer extends DisplayObjectRenderer
 		var object = __beginGroupCanvas(level, width, height);
 		__renderIntoGroup(displayObject, object.getContext2d(), x0, y0, blendMode);
 
-		// the object's alpha applies once, to the whole object: __compositeLayer (LAYER and the
+		// the object's alpha applies once, to the whole object: __compositeDirect (LAYER and the
 		// operator modes) draws with it, the four formula composites get the group scaled by it here
 		var formulaMode = blendMode == SUBTRACT || blendMode == INVERT || blendMode == ERASE || blendMode == ALPHA;
 		var alpha = __getAlpha(displayObject.__worldAlpha);
@@ -323,7 +323,7 @@ class CanvasRenderer extends DisplayObjectRenderer
 		// gives: nothing for ALPHA and ERASE, and for SUBTRACT and INVERT a black or white
 		// silhouette of the object, drawn under the result
 		var drawn = Rectangle.__pool.get();
-		var drawnAll = __drawnWithin(x0, y0, width, height, drawn);
+		var drawnAll = __getDrawnArea(x0, y0, width, height, drawn);
 		var uncovered:js.html.CanvasElement = null;
 		if (formulaMode && (!drawnAll || drawn.width < width || drawn.height < height))
 		{
@@ -356,7 +356,7 @@ class CanvasRenderer extends DisplayObjectRenderer
 			case SUBTRACT:
 				__compositeSubtract(object, level, x0, y0, width, height);
 			default:
-				__compositeLayer(object, displayObject, x0, y0, width, height, blendMode);
+				__compositeDirect(object, displayObject, x0, y0, width, height, blendMode);
 		}
 
 		if (uncovered != null)
@@ -437,7 +437,7 @@ class CanvasRenderer extends DisplayObjectRenderer
 
 		The object's alpha is taken out of its children, because it is applied once to the whole group
 		afterwards. In a LAYER group, and in the group of any other mode this renderer composites in a
-		single draw (see `__compositeLayer`), children that only inherit the object's mode are drawn as
+		single draw (see `__compositeDirect`), children that only inherit the object's mode are drawn as
 		NORMAL. In the groups of the remaining modes, every child is drawn as NORMAL. All renderer state
 		is restored afterwards.
 	**/
@@ -473,7 +473,7 @@ class CanvasRenderer extends DisplayObjectRenderer
 		__worldAlpha = 1 / displayObject.__worldAlpha;
 		// the mode this group is composited with: children that only inherit it render NORMAL in a
 		// LAYER-like group, every child renders NORMAL in a formula group, and shapes rendered
-		// inside either know whether their coverage is wanted (__wantsCoverage)
+		// inside either know whether their coverage is wanted (__isCompositedWithAlpha)
 		if (blendMode != LAYER) __groupBlendMode = blendMode;
 		if (!layer) __overrideBlendMode = NORMAL;
 
@@ -502,7 +502,7 @@ class CanvasRenderer extends DisplayObjectRenderer
 		whole of it. The composite operation of `blendMode` does the blending. This handles LAYER and
 		every mode the canvas supports directly.
 	**/
-	@:noCompletion private function __compositeLayer(object:js.html.CanvasElement, displayObject:DisplayObject, x0:Int, y0:Int, width:Int, height:Int,
+	@:noCompletion private function __compositeDirect(object:js.html.CanvasElement, displayObject:DisplayObject, x0:Int, y0:Int, width:Int, height:Int,
 			blendMode:BlendMode):Void
 	{
 		__setBlendModeContext(context, blendMode); // LAYER: source-over
@@ -513,7 +513,7 @@ class CanvasRenderer extends DisplayObjectRenderer
 	@:noCompletion private function __compositeAlphaErase(object:js.html.CanvasElement, level:Int, x0:Int, y0:Int, width:Int, height:Int,
 			blendMode:BlendMode, displayObject:DisplayObject):Void
 	{
-		if (blendMode == ALPHA && __alphaNeedsCoverage(displayObject))
+		if (blendMode == ALPHA && __alphaNeedsMask(displayObject))
 		{
 			// Flash's ALPHA masks with what the object's leaves cover: a Bitmap its footprint,
 			// transparent pixels included, a shape the fills and strokes of its graphics, and the
