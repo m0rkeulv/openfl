@@ -49,8 +49,11 @@ class DisplayObjectRenderer extends EventDispatcher
 	@SuppressWarnings("checkstyle:Dynamic") @:noCompletion private var __context:#if lime RenderContext #else Dynamic #end;
 	@:noCompletion private var __overrideBlendMode:BlendMode;
 	@:noCompletion private var __groupBlendMode:BlendMode;
-	// what has been drawn into the current target so far, in target pixels (see __markDrawn)
-	@:noCompletion private var __drawnBounds:Rectangle;
+	// the LAYER whose group is being drawn into, when what its content has touched so far is being
+	// tracked (see __touch); null where everything counts as touched
+	@:noCompletion private var __touchedRoot:DisplayObject;
+	// whether the touched buffer of that group has been built and is being kept up to date
+	@:noCompletion private var __touchedActive:Bool;
 	@:noCompletion private var __pixelRatio:Float;
 	@:noCompletion private var __roundPixels:Bool;
 	@:noCompletion private var __stage:Stage;
@@ -67,61 +70,74 @@ class DisplayObjectRenderer extends EventDispatcher
 	@:noCompletion private var __worldTransform:Matrix;
 
 	/**
-		Records that `displayObject` has drawn into the current target, by growing `__drawnBounds` to
-		include it.
+		Records that `displayObject` has just been drawn into the current group, by adding what it
+		covers to the group's touched buffer.
 
-		This matters for SUBTRACT, INVERT, ERASE and ALPHA. Where nothing has been drawn into the target
-		yet, Flash draws an object with one of these modes as if it were NORMAL. Everywhere else it
-		applies the mode, even where an earlier mask has made the backdrop transparent again, and there
-		ALPHA and ERASE show nothing, SUBTRACT shows black and INVERT shows white.
+		This matters for SUBTRACT, INVERT, ERASE and ALPHA. Flash keeps, for every pixel of a group, how
+		much of it earlier objects have covered: the fills of shapes and text at their anti-aliasing, a
+		Bitmap over its whole rectangle, and ERASE and ALPHA objects included, even though they lower the
+		alpha. Where nothing has covered a pixel, an object with one of these modes is drawn as it is;
+		where something has, the mode applies, even if the backdrop has been made transparent again;
+		and at a partly covered edge pixel the two are mixed by the coverage. The backdrop's alpha
+		alone cannot tell these apart, so the coverage is kept in a buffer of its own.
 
-		`__drawnBounds` starts out empty in each group that needs it, such as a LAYER group. It is null
-		when drawing onto the stage or into the bitmap of a `BitmapData.draw` call, because those count
-		as fully drawn. Only objects that actually draw widen it: invisible objects and objects at alpha
-		0 are skipped, and a container with nothing of its own to draw is recorded through its children.
+		The buffer is built only when a group turns out to contain such an object (see
+		`__ensureTouched`), and is null where everything counts as touched: the stage, the bitmap of a
+		`BitmapData.draw` call, and inside a group of any mode but LAYER, where no further group opens.
+
+		A leaf adds its own coverage. A container adds nothing here, because its children were added
+		as they were drawn and its own graphics were added before them (see `__touchGraphics`). An
+		object drawn as a group of its own, such as a nested LAYER, adds its whole subtree instead
+		(`subtree`), since its children were drawn into that group's buffer, not this one.
 	**/
-	@:noCompletion private function __markDrawn(displayObject:DisplayObject):Void
+	@:noCompletion private function __touch(displayObject:DisplayObject, subtree:Bool = false):Void
 	{
-		if (__drawnBounds == null) return;
-		// only what draws counts: an invisible object or one at alpha 0 draws nothing, and a
-		// container without graphics or filters of its own draws only through its children
+		if (!__touchedActive) return;
 		if (!displayObject.__renderable || displayObject.__worldAlpha <= 0) return;
-		var children = displayObject.__children;
-		if (children != null
-			&& children.length > 0
-			&& (displayObject.__graphics == null || displayObject.__graphics.__commands.length == 0)
-			&& displayObject.__filters == null
-			&& displayObject.__cacheBitmap == null)
-		{
-			for (child in children) __markDrawn(child);
-			return;
-		}
-		var bounds = Rectangle.__pool.get();
-		displayObject.__getFilterBounds(bounds, displayObject.__renderTransform);
-		if (__worldTransform != null) bounds.__transform(bounds, __worldTransform);
-		__drawnBounds.__expand(bounds.x, bounds.y, bounds.width, bounds.height);
-		Rectangle.__pool.release(bounds);
+		if (subtree) __walkTouched(displayObject, null);
+		else if (displayObject.__children == null) __drawTouched(displayObject, false);
 	}
 
 	/**
-		Finds the part of the rectangle (x, y, width, height) that has already been drawn into, rounded
-		out to whole pixels, and stores it in `drawn`. Returns false if nothing inside the rectangle has
-		been drawn yet. When the whole target counts as drawn (see `__markDrawn`), `drawn` is simply the
-		full rectangle.
+		Records a container's own graphics as drawn, before its children are drawn (see `__touch`).
 	**/
-	@:noCompletion private function __getDrawnArea(x:Int, y:Int, width:Int, height:Int, drawn:Rectangle):Bool
+	@:noCompletion private function __touchGraphics(displayObject:DisplayObject):Void
 	{
-		if (__drawnBounds == null)
-		{
-			drawn.setTo(x, y, width, height);
-			return true;
-		}
-		var x0 = Math.max(x, Math.floor(__drawnBounds.x)), y0 = Math.max(y, Math.floor(__drawnBounds.y));
-		var x1 = Math.min(x + width, Math.ceil(__drawnBounds.right)), y1 = Math.min(y + height, Math.ceil(__drawnBounds.bottom));
-		if (__drawnBounds.width <= 0 || __drawnBounds.height <= 0 || x1 <= x0 || y1 <= y0) return false;
-		drawn.setTo(x0, y0, x1 - x0, y1 - y0);
-		return true;
+		if (!__touchedActive) return;
+		if (!displayObject.__renderable || displayObject.__worldAlpha <= 0) return;
+		if (displayObject.__graphics != null) __drawTouched(displayObject, true);
 	}
+
+	/**
+		Draws the coverage of everything under `displayObject` into the touched buffer, in drawing
+		order, and stops before `stopAt`. Returns true if `stopAt` was reached. With `stopAt` null,
+		the whole subtree is drawn.
+	**/
+	@:noCompletion private function __walkTouched(displayObject:DisplayObject, stopAt:DisplayObject):Bool
+	{
+		if (displayObject == stopAt) return true;
+		if (!displayObject.__renderable || displayObject.__worldAlpha <= 0) return false;
+		var children = displayObject.__children;
+		if (children == null)
+		{
+			__drawTouched(displayObject, false);
+			return false;
+		}
+		if (displayObject.__graphics != null) __drawTouched(displayObject, true);
+		for (child in children)
+		{
+			if (__walkTouched(child, stopAt)) return true;
+		}
+		return false;
+	}
+
+	/**
+		Draws what `displayObject` covers into the current group's touched buffer: the coverage of its
+		graphics, or, for an object without graphics, its bounding rectangle. With `graphicsOnly`, a
+		container's own graphics and nothing of its children. Each renderer draws into its own kind of
+		buffer.
+	**/
+	@:noCompletion private function __drawTouched(displayObject:DisplayObject, graphicsOnly:Bool):Void {}
 
 	/**
 		Whether a shape should also render its coverage: a second copy of its fills, drawn fully opaque,

@@ -5,6 +5,7 @@ import openfl.display._internal.CanvasBitmap;
 import openfl.display._internal.CanvasBitmapData;
 import openfl.display._internal.CanvasDisplayObject;
 import openfl.display._internal.CanvasDisplayObjectContainer;
+import openfl.display._internal.CanvasGraphics;
 import openfl.display._internal.CanvasSimpleButton;
 import openfl.display._internal.CanvasTextField;
 import openfl.display._internal.CanvasTilemap;
@@ -51,6 +52,10 @@ class CanvasRenderer extends DisplayObjectRenderer
 	#if (js && html5)
 	@:noCompletion private static var __groupCanvases:Array<js.html.CanvasElement> = [];
 	@:noCompletion private static var __groupDepth:Int = 0;
+	// the touched buffer of the LAYER group being drawn into (see __touch), once built: a canvas
+	// in the same coordinates as the group's, kept per layer depth
+	@:noCompletion private var __touched:js.html.CanvasElement;
+	@:noCompletion private static var __touchedCanvases:Array<js.html.CanvasElement> = [];
 	#end
 
 	@SuppressWarnings("checkstyle:Dynamic")
@@ -211,7 +216,7 @@ class CanvasRenderer extends DisplayObjectRenderer
 			if (displayObject.__blendMode == LAYER && __blendGroupDepth == 0 && (__overrideBlendMode == null || __overrideBlendMode == NORMAL))
 			{
 				__renderGroup(displayObject, LAYER);
-				__markDrawn(displayObject);
+				__touch(displayObject, true);
 				return;
 			}
 
@@ -224,13 +229,13 @@ class CanvasRenderer extends DisplayObjectRenderer
 				{
 					case SUBTRACT, INVERT, ERASE, ALPHA:
 						__renderGroup(displayObject, blendMode);
-						__markDrawn(displayObject);
+						__touch(displayObject, true);
 						return;
 					default:
 						if (__needsWholeObjectGroup(displayObject, blendMode))
 						{
 							__renderGroup(displayObject, blendMode);
-							__markDrawn(displayObject);
+							__touch(displayObject, true);
 							return;
 						}
 				}
@@ -240,7 +245,7 @@ class CanvasRenderer extends DisplayObjectRenderer
 
 		__renderDrawableDirect(object);
 		#if (js && html5)
-		if (object.__drawableType != BITMAP_DATA) __markDrawn(cast object);
+		if (object.__drawableType != BITMAP_DATA) __touch(cast object);
 		#end
 	}
 
@@ -316,28 +321,26 @@ class CanvasRenderer extends DisplayObjectRenderer
 			objectContext.fillRect(0, 0, width, height);
 		}
 
-		// where nothing has been drawn into the target yet Flash draws the object as it is,
-		// under every mode (see __markDrawn). None of the composites below does that, so the
-		// object is kept outside the drawn rectangle and added back after the composite.
-		// Inside it, over a backdrop a mask left transparent, the composites give what Flash
-		// gives: nothing for ALPHA and ERASE, and for SUBTRACT and INVERT a black or white
-		// silhouette of the object, drawn under the result
-		var drawn = Rectangle.__pool.get();
-		var drawnAll = __getDrawnArea(x0, y0, width, height, drawn);
+		// Flash applies these four modes to the part of every pixel that earlier objects have
+		// covered (see __touch), and draws the object as it is over the rest. Without a touched
+		// buffer, everything counts as covered. ALPHA and ERASE work with composite operations,
+		// and so do SUBTRACT and INVERT on an opaque target, whose formulas then have an opaque
+		// backdrop. On a transparent target SUBTRACT and INVERT are done pixel by pixel: their
+		// formulas take the covered part's color, which no operation can give
+		if (formulaMode) __ensureTouched(displayObject);
+		var pixels = (blendMode == SUBTRACT || blendMode == INVERT) && !__backdropIsOpaque();
 		var uncovered:js.html.CanvasElement = null;
-		if (formulaMode && (!drawnAll || drawn.width < width || drawn.height < height))
+		if (formulaMode && !pixels && __touchedActive)
 		{
+			// the object over what is not covered, added back after the composite
 			uncovered = __getGroupCanvas(level + 2, width, height);
 			var uncoveredContext = uncovered.getContext2d();
 			uncoveredContext.setTransform(1, 0, 0, 1, 0, 0);
 			uncoveredContext.globalAlpha = 1;
 			uncoveredContext.globalCompositeOperation = "copy";
 			uncoveredContext.drawImage(object, 0, 0, width, height, 0, 0, width, height);
-			if (drawnAll)
-			{
-				uncoveredContext.globalCompositeOperation = "destination-out";
-				uncoveredContext.fillRect(drawn.x - x0, drawn.y - y0, drawn.width, drawn.height);
-			}
+			uncoveredContext.globalCompositeOperation = "destination-out";
+			uncoveredContext.drawImage(__touched, x0, y0, width, height, 0, 0, width, height);
 		}
 
 		// compose the group onto the target. No clip here: an advanced blend mode under a
@@ -347,44 +350,30 @@ class CanvasRenderer extends DisplayObjectRenderer
 		context.setTransform(1, 0, 0, 1, 0, 0);
 		context.globalAlpha = 1;
 
-		switch (blendMode)
+		if (pixels)
 		{
-			case ALPHA, ERASE:
-				__compositeAlphaErase(object, level, x0, y0, width, height, blendMode, displayObject);
-			case INVERT:
-				__compositeInvert(object, level, x0, y0, width, height);
-			case SUBTRACT:
-				__compositeSubtract(object, level, x0, y0, width, height);
-			default:
-				__compositeDirect(object, displayObject, x0, y0, width, height, blendMode);
+			__compositeFormulaPixels(object, x0, y0, width, height, blendMode);
 		}
+		else
+		{
+			switch (blendMode)
+			{
+				case ALPHA, ERASE:
+					__compositeAlphaErase(object, level, x0, y0, width, height, blendMode, displayObject);
+				case INVERT:
+					__compositeInvert(object, level, x0, y0, width, height);
+				case SUBTRACT:
+					__compositeSubtract(object, level, x0, y0, width, height);
+				default:
+					__compositeDirect(object, displayObject, x0, y0, width, height, blendMode);
+			}
 
-		if (uncovered != null)
-		{
-			context.globalCompositeOperation = "lighter";
-			context.drawImage(uncovered, 0, 0, width, height, x0, y0, width, height);
+			if (uncovered != null)
+			{
+				context.globalCompositeOperation = "lighter";
+				context.drawImage(uncovered, 0, 0, width, height, x0, y0, width, height);
+			}
 		}
-
-		if (drawnAll && (blendMode == SUBTRACT || blendMode == INVERT) && !__backdropIsOpaque())
-		{
-			var silhouette = __getGroupCanvas(level + 2, width, height);
-			var silhouetteContext = silhouette.getContext2d();
-			silhouetteContext.setTransform(1, 0, 0, 1, 0, 0);
-			silhouetteContext.globalAlpha = 1;
-			silhouetteContext.globalCompositeOperation = "copy";
-			silhouetteContext.drawImage(object, 0, 0, width, height, 0, 0, width, height);
-			silhouetteContext.globalCompositeOperation = "source-in";
-			silhouetteContext.fillStyle = (blendMode == SUBTRACT) ? "#000000" : "#FFFFFF";
-			silhouetteContext.fillRect(0, 0, width, height);
-			context.save();
-			context.beginPath();
-			context.rect(drawn.x, drawn.y, drawn.width, drawn.height);
-			context.clip();
-			context.globalCompositeOperation = "destination-over";
-			context.drawImage(silhouette, 0, 0, width, height, x0, y0, width, height);
-			context.restore();
-		}
-		Rectangle.__pool.release(drawn);
 
 		context.restore();
 	}
@@ -457,10 +446,12 @@ class CanvasRenderer extends DisplayObjectRenderer
 		var cacheOverrideBlendMode = __overrideBlendMode;
 		var cacheGroupBlendMode = __groupBlendMode;
 		var cacheWorldAlpha = __worldAlpha;
-		// a LAYER tracks what its children draw; nothing can read the bounds inside a formula group
-		var cacheDrawnBounds = __drawnBounds;
-		__drawnBounds = layer ? Rectangle.__pool.get() : null;
-		if (layer) __drawnBounds.setTo(0, 0, 0, 0);
+		// a LAYER tracks what its children touch, from the moment a child needs it (see __touch);
+		// inside a formula group no further group opens, so nothing there reads the tracking
+		var cacheTouchedRoot = __touchedRoot, cacheTouched = __touched, cacheTouchedActive = __touchedActive;
+		__touchedRoot = layer ? displayObject : null;
+		__touched = null;
+		__touchedActive = false;
 
 		var worldTransform = Matrix.__pool.get();
 		worldTransform.copyFrom(__worldTransform);
@@ -486,8 +477,9 @@ class CanvasRenderer extends DisplayObjectRenderer
 		__worldTransform = cacheWorldTransform;
 		context = cacheContext;
 		__worldAlpha = cacheWorldAlpha;
-		if (layer) Rectangle.__pool.release(__drawnBounds);
-		__drawnBounds = cacheDrawnBounds;
+		__touchedRoot = cacheTouchedRoot;
+		__touched = cacheTouched;
+		__touchedActive = cacheTouchedActive;
 		__overrideBlendMode = cacheOverrideBlendMode;
 		__groupBlendMode = cacheGroupBlendMode;
 		__blendMode = null;
@@ -556,10 +548,10 @@ class CanvasRenderer extends DisplayObjectRenderer
 		Paints the area covered by `displayObject` and all its descendants into `coverage`, a context
 		whose origin sits at (x0, y0) of the target, using the composite operation currently set on it.
 
-		For a shape, this is the area of its fills and strokes, taken from its coverage render, or the
-		whole area of its rendered graphics if it has none. For a text field, it is the alpha of its
-		rendered text. For any other object without children, it is the object's bounding box. Every
-		piece is placed with the same transform it is drawn with.
+		For a shape, this is the area of its fills and strokes, taken from its coverage render, which
+		is made now if the shape has none yet. For a text field, it is the alpha of its rendered text.
+		For any other object without children, it is the object's bounding box. Every piece is placed
+		with the same transform it is drawn with.
 	**/
 	@:noCompletion private function __drawCoverage(coverage:js.html.CanvasRenderingContext2D, displayObject:DisplayObject, x0:Int, y0:Int):Void
 	{
@@ -568,23 +560,7 @@ class CanvasRenderer extends DisplayObjectRenderer
 		var bounds = Rectangle.__pool.get();
 		var matrix = Matrix.__pool.get();
 
-		if (graphics != null && graphics.__managed)
-		{
-			// a text field draws straight into its canvas, in colors that are always opaque, so the
-			// canvas's own alpha is its coverage: drawn where CanvasShape draws it
-			if (graphics.__canvas != null)
-			{
-				matrix.scale(1 / graphics.__bitmapScaleX, 1 / graphics.__bitmapScaleY);
-				matrix.concat(graphics.__worldTransform);
-				__coverageRect(coverage, matrix, bounds, x0, y0, graphics);
-			}
-		}
-		else if (graphics != null && graphics.__bounds != null)
-		{
-			bounds.copyFrom(graphics.__bounds);
-			matrix.copyFrom(displayObject.__renderTransform);
-			__coverageRect(coverage, matrix, bounds, x0, y0, graphics);
-		}
+		if (graphics != null) __drawGraphicsCoverage(coverage, displayObject, x0, y0);
 
 		if (displayObject.__children != null)
 		{
@@ -599,6 +575,163 @@ class CanvasRenderer extends DisplayObjectRenderer
 
 		Matrix.__pool.release(matrix);
 		Rectangle.__pool.release(bounds);
+	}
+
+	/**
+		Paints the area covered by the fills and strokes of the graphics of `displayObject` into
+		`coverage`, placed with the same transform they are drawn with (see `__drawCoverage`).
+	**/
+	@:noCompletion private function __drawGraphicsCoverage(coverage:js.html.CanvasRenderingContext2D, displayObject:DisplayObject, x0:Int, y0:Int):Void
+	{
+		var graphics = displayObject.__graphics;
+		var bounds = Rectangle.__pool.get();
+		var matrix = Matrix.__pool.get();
+
+		if (graphics.__managed)
+		{
+			// a text field draws straight into its canvas, in colors that are always opaque, so the
+			// canvas's own alpha is its coverage: drawn where CanvasShape draws it
+			if (graphics.__canvas != null)
+			{
+				matrix.scale(1 / graphics.__bitmapScaleX, 1 / graphics.__bitmapScaleY);
+				matrix.concat(graphics.__worldTransform);
+				__coverageRect(coverage, matrix, bounds, x0, y0, graphics);
+			}
+		}
+		else
+		{
+			CanvasGraphics.render(graphics, this, true);
+			if (graphics.__bounds != null)
+			{
+				bounds.copyFrom(graphics.__bounds);
+				matrix.copyFrom(displayObject.__renderTransform);
+				__coverageRect(coverage, matrix, bounds, x0, y0, graphics);
+			}
+		}
+
+		Matrix.__pool.release(matrix);
+		Rectangle.__pool.release(bounds);
+	}
+
+	/**
+		Builds the current group's touched buffer if the group tracks one and it has not been built yet
+		(see `__touch`): the coverage of everything drawn into the group before `displayObject`, which
+		is about to be composited with a mode that reads it. From then on, every object drawn into the
+		group adds itself as it is drawn. The buffer is a canvas the size of the group's, kept per
+		layer depth.
+	**/
+	@:noCompletion private function __ensureTouched(displayObject:DisplayObject):Void
+	{
+		if (__touchedRoot == null || __touchedActive) return;
+
+		var canvas = __touchedCanvases[__layerDepth];
+		if (canvas == null)
+		{
+			canvas = js.Browser.document.createCanvasElement();
+			__touchedCanvases[__layerDepth] = canvas;
+		}
+		var target:js.html.CanvasElement = context.canvas;
+		if (canvas.width < target.width) canvas.width = target.width;
+		if (canvas.height < target.height) canvas.height = target.height;
+		var touchedContext = canvas.getContext2d();
+		touchedContext.setTransform(1, 0, 0, 1, 0, 0);
+		touchedContext.globalAlpha = 1;
+		touchedContext.globalCompositeOperation = "source-over";
+		touchedContext.clearRect(0, 0, canvas.width, canvas.height);
+
+		__touched = canvas;
+		__touchedActive = true;
+		__walkTouched(__touchedRoot, displayObject);
+	}
+
+	@:noCompletion private override function __drawTouched(displayObject:DisplayObject, graphicsOnly:Bool):Void
+	{
+		var touchedContext = __touched.getContext2d();
+		touchedContext.globalAlpha = 1;
+		touchedContext.globalCompositeOperation = "source-over";
+		touchedContext.fillStyle = "#000000";
+		if (graphicsOnly) __drawGraphicsCoverage(touchedContext, displayObject, 0, 0);
+		else __drawCoverage(touchedContext, displayObject, 0, 0);
+	}
+
+	/**
+		Composites `object`, a group canvas, onto a transparent target with SUBTRACT or INVERT, pixel by
+		pixel, over the rectangle (x0, y0, width, height) of the target.
+
+		For every pixel, c is how much of it earlier objects have covered (the touched buffer, or all
+		of it without one), and the backdrop is c of the covered part's color. The mode's formula is
+		applied to that color, opaque where the object is opaque, and the result is mixed with the
+		object as it is by c. Where the covered part is transparent, SUBTRACT gives black and INVERT
+		white. The canvas gives and takes its pixels with straight alpha, so they are premultiplied
+		on the way in and divided out on the way out.
+	**/
+	@:noCompletion private function __compositeFormulaPixels(object:js.html.CanvasElement, x0:Int, y0:Int, width:Int, height:Int, blendMode:BlendMode):Void
+	{
+		var target = context.getImageData(x0, y0, width, height);
+		var source = object.getContext2d().getImageData(0, 0, width, height);
+		var touched = __touchedActive ? __touched.getContext2d().getImageData(x0, y0, width, height) : null;
+		var d = target.data, s = source.data;
+		var t = touched != null ? touched.data : null;
+		var invert = blendMode == INVERT;
+		var i = 0, n = width * height * 4;
+
+		while (i < n)
+		{
+			var sa = s[i + 3];
+			var c = t != null ? t[i + 3] : 255;
+			// where the object is transparent both formulas leave the backdrop as it is
+			if (sa == 0) {}
+			else if (c == 0)
+			{
+				d[i] = s[i];
+				d[i + 1] = s[i + 1];
+				d[i + 2] = s[i + 2];
+				d[i + 3] = sa;
+			}
+			else
+			{
+				var da = d[i + 3];
+				// premultiplied: the object, and the covered part's color, of which the backdrop is c
+				var sr = Std.int(s[i] * sa / 255), sg = Std.int(s[i + 1] * sa / 255), sb = Std.int(s[i + 2] * sa / 255);
+				var cr = Std.int(d[i] * da / c), cg = Std.int(d[i + 1] * da / c), cb = Std.int(d[i + 2] * da / c), ca = Std.int(da * 255 / c);
+				if (cr > 255) cr = 255;
+				if (cg > 255) cg = 255;
+				if (cb > 255) cb = 255;
+				if (ca > 255) ca = 255;
+				var fr, fg, fb;
+				if (invert)
+				{
+					fr = cr + Std.int(sa * (255 - 2 * cr) / 255);
+					fg = cg + Std.int(sa * (255 - 2 * cg) / 255);
+					fb = cb + Std.int(sa * (255 - 2 * cb) / 255);
+				}
+				else
+				{
+					fr = cr > sr ? cr - sr : 0;
+					fg = cg > sg ? cg - sg : 0;
+					fb = cb > sb ? cb - sb : 0;
+				}
+				var fa = sa + Std.int(ca * (255 - sa) / 255);
+				// mixed with the object as it is by c, then with the alpha divided out again
+				var oa = Std.int(((255 - c) * sa + c * fa + 127) / 255);
+				if (oa > 0)
+				{
+					d[i] = Std.int((((255 - c) * sr + c * fr + 127) / 255) * 255 / oa);
+					d[i + 1] = Std.int((((255 - c) * sg + c * fg + 127) / 255) * 255 / oa);
+					d[i + 2] = Std.int((((255 - c) * sb + c * fb + 127) / 255) * 255 / oa);
+				}
+				else
+				{
+					d[i] = 0;
+					d[i + 1] = 0;
+					d[i + 2] = 0;
+				}
+				d[i + 3] = oa;
+			}
+			i += 4;
+		}
+
+		context.putImageData(target, x0, y0);
 	}
 
 	@:noCompletion private function __coverageRect(coverage:js.html.CanvasRenderingContext2D, matrix:Matrix, bounds:Rectangle, x0:Int, y0:Int,

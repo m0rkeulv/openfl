@@ -20,9 +20,11 @@ class BlendModeShader extends BitmapFilterShader
 		uniform float uAlpha;
 		uniform int uMode;
 		uniform bool uDiscardTransparent;
-		uniform vec4 uDrawn;
 		uniform sampler2D uCoverage;
 		uniform bool uHasCoverage;
+		uniform sampler2D uTouched;
+		uniform vec2 uTouchedFrame;
+		uniform bool uHasTouched;
 
 		vec3 hardLight(vec3 base, vec3 control) {
 			return mix(2.0 * base * control, 1.0 - 2.0 * (1.0 - base) * (1.0 - control), step(0.5, control));
@@ -68,28 +70,29 @@ class BlendModeShader extends BitmapFilterShader
 				backdrop = dst.rgb * (1.0 - srcAlpha) + srcAlpha * dstAlpha * blend;
 
 			} else {
-				// Flash's own formulas, not a blend of colours
-				if (uMode == 6) backdrop = max(vec3(0.0), dst.rgb - src.rgb * dstAlpha);					// SUBTRACT
-				else if (uMode == 7) backdrop = dst.rgb * (1.0 - 2.0 * srcAlpha) + srcAlpha * dstAlpha;		// INVERT
-				else if (uMode == 8) { backdrop = dst.rgb * (1.0 - srcAlpha); kept = 1.0 - srcAlpha; }		// ERASE
-				else if (uMode == 9) {																		// ALPHA
+				// Flash's own formulas. They apply to the part of the pixel that earlier objects
+				// have covered (c, from the group's touched buffer, or all of it where there is
+				// none), on the color of that part: the backdrop is c of it. Over the rest the
+				// object shows as it is. Over a covered part that is transparent again, SUBTRACT
+				// and INVERT give a black or white silhouette and ERASE and ALPHA give nothing
+				float c = uHasTouched ? texture2D(uTouched, gl_FragCoord.xy * uTouchedFrame).a : 1.0;
+				vec4 d = c > 0.0 ? dst / c : vec4(0.0);
+				vec3 f;
+				float fa;
+
+				if (uMode == 6) { f = max(vec3(0.0), d.rgb - src.rgb); fa = srcAlpha + d.a * (1.0 - srcAlpha); }			// SUBTRACT
+				else if (uMode == 7) { f = d.rgb + srcAlpha * (1.0 - 2.0 * d.rgb); fa = srcAlpha + d.a * (1.0 - srcAlpha); }	// INVERT
+				else if (uMode == 8) { f = d.rgb * (1.0 - srcAlpha); fa = d.a * (1.0 - srcAlpha); }							// ERASE
+				else {																										// ALPHA
 					// with a coverage of the object, the backdrop is kept by 1 - coverage + alpha: what
 					// the object did not cover stays, what it covered stays by its alpha
 					float keep = uHasCoverage ? min(1.0, 1.0 - texture2D(uCoverage, openfl_TextureCoordv).a + srcAlpha) : srcAlpha;
-					backdrop = dst.rgb * keep;
-					kept = keep;
+					f = d.rgb * keep;
+					fa = d.a * keep;
 				}
 
-				// these four show the source as it is only where nothing was drawn before (outside
-				// uDrawn, in backdrop coordinates). Over a backdrop a mask left transparent, SUBTRACT
-				// and INVERT leave a black or white silhouette at the object's alpha and ERASE and
-				// ALPHA leave nothing
-				bool drawn = backdropCoord.x >= uDrawn.x && backdropCoord.x < uDrawn.z && backdropCoord.y >= uDrawn.y && backdropCoord.y < uDrawn.w;
-
-				if (drawn) {
-					sourceOnly = (uMode == 7) ? vec3(sourceAlpha) : vec3(0.0);
-					if (uMode >= 8) sourceAlpha = 0.0;
-				}
+				gl_FragColor = vec4((1.0 - c) * src.rgb + c * f, (1.0 - c) * srcAlpha + c * fa);
+				return;
 			}
 
 			gl_FragColor = vec4(sourceOnly + backdrop, sourceAlpha + dstAlpha * kept);
@@ -103,8 +106,9 @@ class BlendModeShader extends BitmapFilterShader
 		uAlpha.value = [1];
 		uMode.value = [0];
 		uDiscardTransparent.value = [false];
-		uDrawn.value = [0, 0, 1, 1];
 		uHasCoverage.value = [false];
+		uTouchedFrame.value = [1, 1];
+		uHasTouched.value = [false];
 		#end
 	}
 	/**
@@ -126,16 +130,23 @@ class BlendModeShader extends BitmapFilterShader
 	}
 
 	/**
-		Sets the part of the target that has been drawn into before, from (x0, y0) to (x1, y1) in
-		backdrop coordinates. Outside it, the shader draws the object as it is.
+		Sets the group's touched buffer: how much of every pixel of the current target earlier objects
+		have covered (see `DisplayObjectRenderer.__touch`), the same size as the target and read at
+		the fragment position. With null, everything counts as covered.
 	**/
-	public function setDrawn(x0:Float, y0:Float, x1:Float, y1:Float):Void
+	public function setTouched(touched:BitmapData):Void
 	{
 		#if !macro
-		uDrawn.value[0] = x0;
-		uDrawn.value[1] = y0;
-		uDrawn.value[2] = x1;
-		uDrawn.value[3] = y1;
+		uHasTouched.value[0] = touched != null;
+		uTouched.input = touched;
+		uTouched.filter = NEAREST;
+		uTouched.mipFilter = MIPNONE;
+		uTouched.wrap = CLAMP;
+		if (touched != null)
+		{
+			uTouchedFrame.value[0] = 1 / touched.__textureWidth;
+			uTouchedFrame.value[1] = 1 / touched.__textureHeight;
+		}
 		#end
 	}
 

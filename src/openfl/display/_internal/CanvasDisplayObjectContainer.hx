@@ -16,6 +16,8 @@ class CanvasDisplayObjectContainer
 
 		#if !neko
 		CanvasDisplayObject.renderDrawable(displayObjectContainer, renderer);
+		// its own graphics count as drawn before its children (see DisplayObjectRenderer.__touch)
+		renderer.__touchGraphics(displayObjectContainer);
 
 		if (displayObjectContainer.__cacheBitmap != null && !displayObjectContainer.__isCacheBitmapRender) return;
 
