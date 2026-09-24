@@ -557,8 +557,9 @@ class CanvasRenderer extends DisplayObjectRenderer
 		whose origin sits at (x0, y0) of the target, using the composite operation currently set on it.
 
 		For a shape, this is the area of its fills and strokes, taken from its coverage render, or the
-		whole area of its rendered graphics if it has none. For any other object without children, it is
-		the object's bounding box. Every piece is placed with the same transform it is drawn with.
+		whole area of its rendered graphics if it has none. For a text field, it is the alpha of its
+		rendered text. For any other object without children, it is the object's bounding box. Every
+		piece is placed with the same transform it is drawn with.
 	**/
 	@:noCompletion private function __drawCoverage(coverage:js.html.CanvasRenderingContext2D, displayObject:DisplayObject, x0:Int, y0:Int):Void
 	{
@@ -567,7 +568,18 @@ class CanvasRenderer extends DisplayObjectRenderer
 		var bounds = Rectangle.__pool.get();
 		var matrix = Matrix.__pool.get();
 
-		if (graphics != null && graphics.__bounds != null)
+		if (graphics != null && graphics.__managed)
+		{
+			// a text field draws straight into its canvas, in colors that are always opaque, so the
+			// canvas's own alpha is its coverage: drawn where CanvasShape draws it
+			if (graphics.__canvas != null)
+			{
+				matrix.scale(1 / graphics.__bitmapScaleX, 1 / graphics.__bitmapScaleY);
+				matrix.concat(graphics.__worldTransform);
+				__coverageRect(coverage, matrix, bounds, x0, y0, graphics);
+			}
+		}
+		else if (graphics != null && graphics.__bounds != null)
 		{
 			bounds.copyFrom(graphics.__bounds);
 			matrix.copyFrom(displayObject.__renderTransform);
@@ -600,7 +612,11 @@ class CanvasRenderer extends DisplayObjectRenderer
 		}
 		matrix.translate(-x0, -y0);
 		coverage.setTransform(matrix.a, matrix.b, matrix.c, matrix.d, matrix.tx, matrix.ty);
-		if (graphics != null && graphics.__coverage != null)
+		if (graphics != null && graphics.__managed)
+		{
+			coverage.drawImage(graphics.__canvas, 0, 0);
+		}
+		else if (graphics != null && graphics.__coverage != null)
 		{
 			// the coverage canvas holds the fills at the render scale, its origin at the bounds origin
 			coverage.translate(bounds.x, bounds.y);

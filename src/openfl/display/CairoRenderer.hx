@@ -590,8 +590,9 @@ class CairoRenderer extends DisplayObjectRenderer
 		operator currently set on that context.
 
 		For a shape, this is the area of its fills and strokes, taken from its coverage render, or the
-		whole area of its rendered graphics if it has none. For any other object without children, it is
-		the object's bounding box. Every piece is placed with the same transform it is drawn with.
+		whole area of its rendered graphics if it has none. For a text field, it is the alpha of its
+		rendered text. For any other object without children, it is the object's bounding box. Every
+		piece is placed with the same transform it is drawn with.
 	**/
 	@:noCompletion private function __drawCoverage(coverage:Cairo, displayObject:DisplayObject):Void
 	{
@@ -608,6 +609,13 @@ class CairoRenderer extends DisplayObjectRenderer
 			{
 				coverage.setSourceSurface(graphics.__coverage.getSurface(), 0, 0);
 				coverage.rectangle(0, 0, graphics.__coverage.width, graphics.__coverage.height);
+			}
+			else if (graphics.__managed)
+			{
+				// a text field draws straight into its bitmap, in colors that are always opaque, so
+				// the bitmap's own alpha is its coverage
+				coverage.setSourceSurface(graphics.__bitmap.getSurface(), 0, 0);
+				coverage.rectangle(0, 0, graphics.__bitmap.width, graphics.__bitmap.height);
 			}
 			else
 			{

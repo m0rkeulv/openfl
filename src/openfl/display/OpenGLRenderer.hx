@@ -1117,14 +1117,15 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		// Flash's ALPHA masks with what the object's leaves cover, a Bitmap its footprint and
 		// a shape its fills, and leaves the rest of the object's box alone: the coverage is
 		// rendered into a third scratch buffer and the shader keeps 1 - coverage + alpha. A
-		// shape without a coverage render (html5) falls back to leaving its empty texels alone
+		// shape without a coverage render (html5) falls back to leaving its empty texels alone. A
+		// text field has none either, but its bitmap is its coverage (see __drawCoverage)
 		var coverage:BitmapData = null;
 		var discardTransparent = false;
 		if (blendMode == ALPHA)
 		{
 			var graphics = displayObject.__graphics;
 			var isShape = graphics != null && (displayObject.__children == null || displayObject.__children.length == 0);
-			if (isShape && graphics.__coverage == null)
+			if (isShape && graphics.__coverage == null && !graphics.__managed)
 			{
 				discardTransparent = true;
 			}
@@ -1574,8 +1575,9 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		as triangles has no coverage render, and draws its fills into the pass itself, opaque.
 
 		For a shape, this is the area of its fills and strokes, taken from its coverage render, or the
-		whole area of its rendered graphics if it has none. For any other object without children, it is
-		the object's bounding box. Every piece is placed with the same transform it is drawn with.
+		whole area of its rendered graphics if it has none. For a text field, it is the alpha of its
+		rendered text. For any other object without children, it is the object's bounding box. Every
+		piece is placed with the same transform it is drawn with.
 	**/
 	@:noCompletion private function __drawCoverage(displayObject:DisplayObject):Void
 	{
@@ -1592,7 +1594,10 @@ class OpenGLRenderer extends DisplayObjectRenderer
 			{
 				matrix.scale(1 / graphics.__bitmapScaleX, 1 / graphics.__bitmapScaleY);
 				matrix.concat(graphics.__worldTransform);
-				__drawCoverageQuad(graphics.__bitmap, graphics.__coverage != null ? graphics.__coverage : __staticWhite, matrix);
+				// a text field draws straight into its bitmap, in colors that are always opaque, so
+				// the bitmap's own alpha is its coverage
+				var texture = graphics.__coverage != null ? graphics.__coverage : (graphics.__managed ? graphics.__bitmap : __staticWhite);
+				__drawCoverageQuad(graphics.__bitmap, texture, matrix);
 			}
 		}
 

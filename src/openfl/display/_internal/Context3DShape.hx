@@ -48,10 +48,12 @@ class Context3DShape
 				renderer.applyBitmapData(graphics.__bitmap, true);
 				// Flash's ALPHA only touches the pixels a shape covers and keeps coverage and fill alpha
 				// apart at its edges: the coverage render gives that, or else at least the empty
-				// texels of the texture must not cut the backdrop
+				// texels of the texture must not cut the backdrop. A text field draws straight into its
+				// bitmap, in colors that are always opaque, so the bitmap's own alpha is its coverage
 				var alphaMask = renderer.__blendMode == BlendMode.ALPHA;
-				renderer.applyCoverage(alphaMask ? graphics.__coverage : null);
-				renderer.applyDiscardTransparent(alphaMask && graphics.__coverage == null);
+				var coverage = graphics.__managed ? graphics.__bitmap : graphics.__coverage;
+				renderer.applyCoverage(alphaMask ? coverage : null);
+				renderer.applyDiscardTransparent(alphaMask && coverage == null);
 
 				var matrix = Matrix.__pool.get();
 				matrix.scale(1 / graphics.__bitmapScaleX, 1 / graphics.__bitmapScaleY);
