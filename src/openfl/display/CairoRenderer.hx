@@ -15,7 +15,10 @@ import openfl.geom.Rectangle;
 #if lime
 import lime.graphics.cairo.Cairo;
 import lime.graphics.cairo.CairoContent;
+import lime.graphics.cairo.CairoExtend;
 import lime.graphics.cairo.CairoFilter;
+import lime.graphics.cairo.CairoFormat;
+import lime.graphics.cairo.CairoImageSurface;
 import lime.graphics.cairo.CairoOperator;
 import lime.graphics.cairo.CairoPattern;
 import lime.graphics.cairo.CairoSurface;
@@ -65,9 +68,18 @@ class CairoRenderer extends DisplayObjectRenderer
 	@:noCompletion private var __touchedWidth:Int;
 	@:noCompletion private var __touchedHeight:Int;
 	@:noCompletion private static var __touchedBitmaps:Array<BitmapData> = [];
-	// the backdrop and the object of a composite done pixel by pixel (see __compositeFormulaPixels)
-	@:noCompletion private static var __pixelBackdrop:BitmapData;
-	@:noCompletion private static var __pixelObject:BitmapData;
+	// the scratch bitmaps of a composite done on format views (see __compositeFormulaOnViews): the
+	// result, the object, its covered and uncovered parts, a grey of the uncovered part's alpha, the
+	// result's alpha, and the mask that lets only alpha bytes through
+	@:noCompletion private static var __opResult:BitmapData;
+	@:noCompletion private static var __opObject:BitmapData;
+	@:noCompletion private static var __opCovered:BitmapData;
+	@:noCompletion private static var __opUncovered:BitmapData;
+	@:noCompletion private static var __opGrey:BitmapData;
+	@:noCompletion private static var __opAlpha:CairoImageSurface;
+	@:noCompletion private static var __opAlphaWidth:Int = 0;
+	@:noCompletion private static var __opAlphaHeight:Int = 0;
+	@:noCompletion private static var __opAlphaMask:CairoPattern;
 	#end
 
 	@SuppressWarnings("checkstyle:Dynamic")
@@ -462,12 +474,12 @@ class CairoRenderer extends DisplayObjectRenderer
 		// covered (see __touch), and draws the object as it is over the rest. Without a touched
 		// buffer, everything counts as covered. On an opaque target ALPHA and ERASE work with
 		// operators, and so do SUBTRACT and INVERT, whose formulas then have an opaque backdrop.
-		// On a transparent target SUBTRACT and INVERT are done pixel by pixel: their formulas take
-		// the covered part's color, which no operator can give
+		// On a transparent target SUBTRACT and INVERT work on views of the pixels in other formats:
+		// their formulas take the covered part's color, which no operator on ARGB pixels can give
 		__ensureTouched(displayObject);
 		if ((blendMode == SUBTRACT || blendMode == INVERT) && !__backdropIsOpaque())
 		{
-			__compositeFormulaPixels(destination, objectPattern, blendMode, x0, y0, width, height);
+			__compositeFormulaOnViews(destination, objectPattern, blendMode, x0, y0, width, height);
 		}
 		else
 		{
@@ -740,118 +752,169 @@ class CairoRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		Composites `objectPattern` onto a transparent target with SUBTRACT or INVERT, pixel by pixel,
-		over the rectangle (x0, y0, width, height) of the target.
+		Composites `objectPattern` onto a transparent target with SUBTRACT or INVERT, over the rectangle
+		(x0, y0, width, height) of the target, with operators on views of scratch bitmaps in other
+		formats.
 
-		For every pixel, c is how much of it earlier objects have covered (the touched buffer, or all
-		of it without one), and the backdrop is c of the covered part's color. The mode's formula is
-		applied to that color, opaque where the object is opaque, and the result is mixed with the
-		object as it is by c. Where the covered part is transparent, SUBTRACT gives black and INVERT
-		white. The target and the object are copied into two bitmaps, the result is written over the
-		first and painted back.
+		For every pixel, c is how much of it earlier objects have covered (the touched buffer, or all of
+		it without one) and the backdrop D is c of the covered part's color. Flash applies the mode's
+		formula to that color, opaque where the object S is opaque, mixes the result with the object
+		as it is by c, and gives the whole the alpha of S over D. That comes to a color of
+		max(0, D - cS) + (1 - c) S for SUBTRACT, and D (1 - 2s) + cs + (1 - c) S for INVERT, with an
+		alpha of s + Da (1 - s): color and alpha from different expressions, which no operator on an
+		ARGB surface can write at once.
+
+		An RGB24 view of the same bytes treats the premultiplied color as opaque color, so the color is
+		worked out there without alpha weighting: max(0, D - cS) is a LIGHTEN followed by a DIFFERENCE
+		with the covered part of the object, also read through an RGB24 view. An A8 surface holds the
+		alpha on its own, the object over the backdrop. And an A8 view of the result four times as
+		wide, in which every fourth pixel is an alpha byte, lets that alpha be written back through a
+		repeating mask without touching the color. The target is copied into the result bitmap first
+		and painted back at the end, because a Cairo group target cannot be read by another context,
+		nor viewed.
 	**/
-	@:noCompletion private function __compositeFormulaPixels(destination:CairoSurface, objectPattern:CairoPattern, blendMode:BlendMode, x0:Int, y0:Int,
+	@:noCompletion private function __compositeFormulaOnViews(destination:CairoSurface, objectPattern:CairoPattern, blendMode:BlendMode, x0:Int, y0:Int,
 			width:Int, height:Int):Void
 	{
-		// this renderer is compiled for html5 too, where the bytes behind a bitmap are not Bytes
 		#if !js
-		if (__pixelBackdrop == null || __pixelBackdrop.width < width || __pixelBackdrop.height < height)
+		if (__opResult == null || __opResult.width < width || __opResult.height < height)
 		{
-			var w = __pixelBackdrop != null && __pixelBackdrop.width > width ? __pixelBackdrop.width : width;
-			var h = __pixelBackdrop != null && __pixelBackdrop.height > height ? __pixelBackdrop.height : height;
-			if (__pixelBackdrop != null) __pixelBackdrop.dispose();
-			if (__pixelObject != null) __pixelObject.dispose();
-			__pixelBackdrop = new BitmapData(w, h, true, 0);
-			__pixelObject = new BitmapData(w, h, true, 0);
+			var w = __opResult != null && __opResult.width > width ? __opResult.width : width;
+			var h = __opResult != null && __opResult.height > height ? __opResult.height : height;
+			for (b in [__opResult, __opObject, __opCovered, __opUncovered, __opGrey]) if (b != null) b.dispose();
+			__opResult = new BitmapData(w, h, true, 0);
+			__opObject = new BitmapData(w, h, true, 0);
+			__opCovered = new BitmapData(w, h, true, 0);
+			__opUncovered = new BitmapData(w, h, true, 0);
+			__opGrey = new BitmapData(w, h, true, 0);
 		}
-		var backdrop = __pixelBackdrop, object = __pixelObject;
-		// a surface that has been drawn into and read from no longer shows writes made to the
-		// bitmap's data: each use gets a new surface over the same memory
-		backdrop.__surface = null;
-		object.__surface = null;
+		if (__opAlpha == null || __opAlphaWidth < width || __opAlphaHeight < height)
+		{
+			__opAlphaWidth = __opResult.width;
+			__opAlphaHeight = __opResult.height;
+			__opAlpha = new CairoImageSurface(CairoFormat.A8, __opAlphaWidth, __opAlphaHeight);
+		}
+		if (__opAlphaMask == null)
+		{
+			// one opaque pixel in four, at the alpha byte of a BGRA pixel, repeated
+			var maskSurface = new CairoImageSurface(CairoFormat.A8, 4, 1);
+			var maskContext = new Cairo(maskSurface);
+			maskContext.setSourceRGBA(0, 0, 0, 1);
+			maskContext.rectangle(3, 0, 1, 1);
+			maskContext.fill();
+			__opAlphaMask = CairoPattern.createForSurface(maskSurface);
+			__opAlphaMask.extend = CairoExtend.REPEAT;
+			__opAlphaMask.filter = CairoFilter.NEAREST;
+		}
+		var result = __opResult, object = __opObject, covered = __opCovered, uncovered = __opUncovered, grey = __opGrey;
+		for (b in [result, object, covered, uncovered, grey]) b.__surface = null;
+		var stride = result.image.buffer.stride;
+		var invert = blendMode == INVERT;
 
-		// the rectangle of the target and the object, at the bitmaps' origin. The target is read
-		// through a group pattern: its surface is a group target, which another context cannot read
+		// the target rectangle and the object, at the scratch bitmaps' origin; the target is read
+		// through a group pattern, since a group target cannot be read by another context, and every
+		// scratch gets a new surface over its memory, since a surface that has been drawn into and
+		// read from no longer shows writes made to the bytes
 		cairo.pushGroupWithContent(CairoContent.COLOR_ALPHA);
 		cairo.setSourceSurface(destination, 0, 0);
 		cairo.setOperator(CairoOperator.SOURCE);
 		cairo.paint();
 		var backdropPattern = cairo.popGroup();
-		var copy = new Cairo(backdrop.getSurface());
-		copy.translate(-x0, -y0);
-		copy.source = backdropPattern;
-		copy.setOperator(CairoOperator.SOURCE);
-		copy.paint();
-		copy = new Cairo(object.getSurface());
-		copy.translate(-x0, -y0);
-		copy.source = objectPattern;
-		copy.setOperator(CairoOperator.SOURCE);
-		copy.paint();
-		backdrop.getSurface().flush();
-		object.getSurface().flush();
-		if (__touchedActive) __touchedBitmap.getSurface().flush();
+		var ctx = new Cairo(result.getSurface());
+		ctx.translate(-x0, -y0);
+		ctx.source = backdropPattern;
+		ctx.setOperator(CairoOperator.SOURCE);
+		ctx.paint();
+		ctx = new Cairo(object.getSurface());
+		ctx.translate(-x0, -y0);
+		ctx.source = objectPattern;
+		ctx.setOperator(CairoOperator.SOURCE);
+		ctx.paint();
 
-		// the bytes behind the bitmaps: indexing a typed array goes through a call per byte
-		var d:haxe.io.Bytes = backdrop.image.data.buffer, s:haxe.io.Bytes = object.image.data.buffer;
-		var t:haxe.io.Bytes = __touchedActive ? __touchedBitmap.image.data.buffer : null;
-		var dStride = backdrop.image.buffer.stride, sStride = object.image.buffer.stride;
-		var tStride = __touchedActive ? __touchedBitmap.image.buffer.stride : 0;
-		var tx = x0 - __touchedX, ty = y0 - __touchedY;
-		var invert = blendMode == INVERT;
-
-		for (y in 0...height)
+		// the object split by the coverage: c S and (1 - c) S
+		var objectSurface = object.getSurface();
+		ctx = new Cairo(covered.getSurface());
+		ctx.setSourceSurface(objectSurface, 0, 0);
+		ctx.setOperator(CairoOperator.SOURCE);
+		ctx.paint();
+		if (__touchedActive)
 		{
-			var di = y * dStride, si = y * sStride, ti = (y + ty) * tStride + tx * 4;
-			for (x in 0...width)
-			{
-				// premultiplied BGRA
-				var sb = s.get(si), sg = s.get(si + 1), sr = s.get(si + 2), sa = s.get(si + 3);
-				var c = t != null ? t.get(ti + 3) : 255;
-				// where the object is transparent both formulas leave the backdrop as it is
-				if (sa == 0) {}
-				else if (c == 0)
-				{
-					d.set(di, sb);
-					d.set(di + 1, sg);
-					d.set(di + 2, sr);
-					d.set(di + 3, sa);
-				}
-				else
-				{
-					// the covered part's color: the backdrop is c of it
-					var cb = Std.int(d.get(di) * 255 / c), cg = Std.int(d.get(di + 1) * 255 / c), cr = Std.int(d.get(di + 2) * 255 / c), ca = Std.int(d.get(di + 3) * 255 / c);
-					if (cb > 255) cb = 255;
-					if (cg > 255) cg = 255;
-					if (cr > 255) cr = 255;
-					if (ca > 255) ca = 255;
-					var fb, fg, fr;
-					if (invert)
-					{
-						fb = cb + Std.int(sa * (255 - 2 * cb) / 255);
-						fg = cg + Std.int(sa * (255 - 2 * cg) / 255);
-						fr = cr + Std.int(sa * (255 - 2 * cr) / 255);
-					}
-					else
-					{
-						fb = cb > sb ? cb - sb : 0;
-						fg = cg > sg ? cg - sg : 0;
-						fr = cr > sr ? cr - sr : 0;
-					}
-					var fa = sa + Std.int(ca * (255 - sa) / 255);
-					// mixed with the object as it is by c
-					d.set(di, Std.int(((255 - c) * sb + c * fb + 127) / 255));
-					d.set(di + 1, Std.int(((255 - c) * sg + c * fg + 127) / 255));
-					d.set(di + 2, Std.int(((255 - c) * sr + c * fr + 127) / 255));
-					d.set(di + 3, Std.int(((255 - c) * sa + c * fa + 127) / 255));
-				}
-				di += 4;
-				si += 4;
-				ti += 4;
-			}
+			ctx.setSourceSurface(__touchedBitmap.getSurface(), __touchedX - x0, __touchedY - y0);
+			ctx.setOperator(CairoOperator.DEST_IN);
+			ctx.paint();
+			ctx = new Cairo(uncovered.getSurface());
+			ctx.setSourceSurface(objectSurface, 0, 0);
+			ctx.setOperator(CairoOperator.SOURCE);
+			ctx.paint();
+			ctx.setSourceSurface(__touchedBitmap.getSurface(), __touchedX - x0, __touchedY - y0);
+			ctx.setOperator(CairoOperator.DEST_OUT);
+			ctx.paint();
 		}
 
-		backdrop.__surface = null;
-		cairo.setSourceSurface(backdrop.getSurface(), x0, y0);
+		// the alpha, on its own: the object over the backdrop
+		ctx = new Cairo(__opAlpha);
+		ctx.setSourceSurface(result.getSurface(), 0, 0);
+		ctx.setOperator(CairoOperator.SOURCE);
+		ctx.paint();
+		ctx.setSourceSurface(objectSurface, 0, 0);
+		ctx.setOperator(CairoOperator.OVER);
+		ctx.paint();
+
+		// the color, on an RGB24 view of the result: its premultiplied bytes as opaque color, and the
+		// covered part's likewise, so max(0, D - cS) is a LIGHTEN followed by a DIFFERENCE
+		var rgb = new Cairo(CairoImageSurface.create(result.image.data.buffer, CairoFormat.RGB24, result.width, result.height, stride));
+		var coveredOpaque = CairoImageSurface.create(covered.image.data.buffer, CairoFormat.RGB24, covered.width, covered.height, stride);
+		if (invert)
+		{
+			// D (1 - 2s) + s, then the uncovered share of the white taken out again: D (1 - 2s) + c s
+			rgb.setSourceRGB(1, 1, 1);
+			rgb.setOperator(CairoOperator.DIFFERENCE);
+			rgb.save();
+			rgb.translate(-x0, -y0);
+			rgb.mask(objectPattern);
+			rgb.restore();
+			if (__touchedActive)
+			{
+				ctx = new Cairo(grey.getSurface());
+				ctx.setSourceRGB(1, 1, 1);
+				ctx.setOperator(CairoOperator.SOURCE);
+				ctx.paint();
+				ctx.setSourceSurface(uncovered.getSurface(), 0, 0);
+				ctx.setOperator(CairoOperator.DEST_IN);
+				ctx.paint();
+				rgb.setSourceSurface(CairoImageSurface.create(grey.image.data.buffer, CairoFormat.RGB24, grey.width, grey.height, stride), 0, 0);
+				rgb.setOperator(CairoOperator.DIFFERENCE);
+				rgb.paint();
+			}
+		}
+		else
+		{
+			rgb.setSourceSurface(coveredOpaque, 0, 0);
+			rgb.setOperator(CairoOperator.LIGHTEN);
+			rgb.paint();
+			rgb.setOperator(CairoOperator.DIFFERENCE);
+			rgb.paint();
+		}
+		if (__touchedActive)
+		{
+			// plus the object as it is over what is not covered
+			rgb.setSourceSurface(uncovered.getSurface(), 0, 0);
+			rgb.setOperator(CairoOperator.ADD);
+			rgb.paint();
+		}
+
+		// the alpha written into the result's alpha bytes: an A8 view four pixels wide per BGRA
+		// pixel, the alpha stretched to match, and only every fourth pixel let through
+		var bytes = new Cairo(CairoImageSurface.create(result.image.data.buffer, CairoFormat.A8, result.width * 4, result.height, stride));
+		var alphaPattern = CairoPattern.createForSurface(__opAlpha);
+		alphaPattern.filter = CairoFilter.NEAREST;
+		alphaPattern.matrix = new Matrix3(0.25, 0, 0, 1, 0, 0);
+		bytes.source = alphaPattern;
+		bytes.setOperator(CairoOperator.SOURCE);
+		bytes.mask(__opAlphaMask);
+
+		result.__surface = null;
+		cairo.setSourceSurface(result.getSurface(), x0, y0);
 		cairo.setOperator(CairoOperator.SOURCE);
 		cairo.rectangle(x0, y0, width, height);
 		cairo.fill();
