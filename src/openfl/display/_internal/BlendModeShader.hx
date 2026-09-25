@@ -150,7 +150,7 @@ class BlendModeShader extends BitmapFilterShader
 		Prepares the shader for one draw: the blend mode, the alpha of the source, whether to skip fully
 		transparent source texels, and for ALPHA the source's coverage, which is sampled with the same
 		texture coordinates as the source. `mode` is one of the ids from
-		`OpenGLRenderer.__blendGroupMode`.
+		`OpenGLRenderer.__shaderModeId`.
 	**/
 	public function prepare(mode:Int, alpha:Float, discardTransparent:Bool, coverage:BitmapData):Void
 	{

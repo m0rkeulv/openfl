@@ -219,19 +219,13 @@ class CanvasRenderer extends DisplayObjectRenderer
 				return;
 			}
 
-			var blendMode = __overrideBlendMode != null ? __overrideBlendMode : displayObject.__worldBlendMode;
-			if (blendMode == __groupBlendMode) blendMode = NORMAL;
+			var blendMode = __effectiveBlendMode(displayObject);
 
 			switch (blendMode)
 			{
-				case ERASE, ALPHA:
-					// a cutter is drawn only into a buffer of its own (see __drawsOntoStage); it
-					// counts as touching only where it is drawn as it is (see __cutterShowsAsIs)
-					if (__drawsOntoStage()) return;
-					__renderGroup(displayObject, blendMode);
-					__touch(displayObject, true);
-					return;
-				case SUBTRACT, INVERT:
+				case SUBTRACT, INVERT, ERASE, ALPHA:
+					// a cutter is not drawn straight on the stage (see __drawsOntoStage)
+					if ((blendMode == ERASE || blendMode == ALPHA) && __drawsOntoStage()) return;
 					__renderGroup(displayObject, blendMode);
 					__touch(displayObject, true);
 					return;
@@ -300,8 +294,8 @@ class CanvasRenderer extends DisplayObjectRenderer
 		Rectangle.__pool.release(bounds);
 		if (!visible) return;
 
-		// four canvases per nesting level: the object, a backdrop copy, the uncovered object, the ALPHA mask
-		var level = __groupDepth * 4;
+		// three canvases per nesting level: the object, the uncovered object, the ALPHA mask
+		var level = __groupDepth * 3;
 		var object = __beginGroupCanvas(level, width, height);
 		__renderIntoGroup(displayObject, object.getContext2d(), x0, y0, blendMode);
 
@@ -312,9 +306,7 @@ class CanvasRenderer extends DisplayObjectRenderer
 		if (formulaMode && alpha < 1)
 		{
 			var objectContext = object.getContext2d();
-			objectContext.setTransform(1, 0, 0, 1, 0, 0);
-			objectContext.globalAlpha = 1;
-			objectContext.globalCompositeOperation = "destination-in";
+			__resetContext(objectContext, "destination-in");
 			objectContext.fillStyle = "rgba(0, 0, 0, " + alpha + ")";
 			objectContext.fillRect(0, 0, width, height);
 		}
@@ -333,13 +325,11 @@ class CanvasRenderer extends DisplayObjectRenderer
 		if ((blendMode == ERASE || blendMode == ALPHA) && __cutterShowsAsIs())
 		{
 			__ensureTouched(displayObject);
-			if (__touchedActive)
+			if (__touchedBuilt)
 			{
-				uncovered = __getGroupCanvas(level + 2, width, height);
+				uncovered = __getGroupCanvas(level + 1, width, height);
 				var uncoveredContext = uncovered.getContext2d();
-				uncoveredContext.setTransform(1, 0, 0, 1, 0, 0);
-				uncoveredContext.globalAlpha = 1;
-				uncoveredContext.globalCompositeOperation = "copy";
+				__resetContext(uncoveredContext, "copy");
 				uncoveredContext.drawImage(object, 0, 0, width, height, 0, 0, width, height);
 				uncoveredContext.globalCompositeOperation = "destination-out";
 				uncoveredContext.drawImage(__touched, x0, y0, width, height, 0, 0, width, height);
@@ -350,8 +340,7 @@ class CanvasRenderer extends DisplayObjectRenderer
 		// clip takes a slow path on the accelerated canvas, and every composite except
 		// ALPHA / ERASE is bounded by what it draws
 		context.save();
-		context.setTransform(1, 0, 0, 1, 0, 0);
-		context.globalAlpha = 1;
+		__resetContext(context, "source-over");
 
 		if (pixels)
 		{
@@ -364,9 +353,9 @@ class CanvasRenderer extends DisplayObjectRenderer
 				case ALPHA, ERASE:
 					__compositeAlphaErase(object, level, x0, y0, width, height, blendMode, displayObject);
 				case INVERT:
-					__compositeInvert(object, level, x0, y0, width, height);
+					__compositeInvert(object, x0, y0, width, height);
 				case SUBTRACT:
-					__compositeSubtract(object, level, x0, y0, width, height);
+					__compositeSubtract(object, x0, y0, width, height);
 				default:
 					__compositeDirect(object, displayObject, x0, y0, width, height, blendMode);
 			}
@@ -413,10 +402,7 @@ class CanvasRenderer extends DisplayObjectRenderer
 	{
 		var canvas = __getGroupCanvas(level, width, height);
 		var canvasContext = canvas.getContext2d();
-
-		canvasContext.setTransform(1, 0, 0, 1, 0, 0);
-		canvasContext.globalCompositeOperation = "source-over";
-		canvasContext.globalAlpha = 1;
+		__resetContext(canvasContext, "source-over");
 		canvasContext.clearRect(0, 0, width, height);
 
 		return canvas;
@@ -436,7 +422,7 @@ class CanvasRenderer extends DisplayObjectRenderer
 	{
 		__groupDepth++;
 		__layerDepth++;
-		var parentLevel = __bufferLevel, parentDrawn = __bufferDrawn;
+		var parentLevel = __bufferLevel, parentDrawn = __bufferHasContent;
 		__openBuffer();
 
 		var cacheContext = context;
@@ -445,10 +431,10 @@ class CanvasRenderer extends DisplayObjectRenderer
 		var cacheGroupBlendMode = __groupBlendMode;
 		var cacheWorldAlpha = __worldAlpha;
 		// a group tracks what its children touch, from the moment a child needs it (see __touch)
-		var cacheTouchedRoot = __touchedRoot, cacheTouched = __touched, cacheTouchedActive = __touchedActive;
-		__touchedRoot = displayObject;
+		var cacheTouchedRoot = __touchedGroup, cacheTouched = __touched, cacheTouchedActive = __touchedBuilt;
+		__touchedGroup = displayObject;
 		__touched = null;
-		__touchedActive = false;
+		__touchedBuilt = false;
 
 		var worldTransform = Matrix.__pool.get();
 		worldTransform.copyFrom(__worldTransform);
@@ -475,9 +461,9 @@ class CanvasRenderer extends DisplayObjectRenderer
 		__worldTransform = cacheWorldTransform;
 		context = cacheContext;
 		__worldAlpha = cacheWorldAlpha;
-		__touchedRoot = cacheTouchedRoot;
+		__touchedGroup = cacheTouchedRoot;
 		__touched = cacheTouched;
-		__touchedActive = cacheTouchedActive;
+		__touchedBuilt = cacheTouchedActive;
 		__overrideBlendMode = cacheOverrideBlendMode;
 		__groupBlendMode = cacheGroupBlendMode;
 		__blendMode = null;
@@ -510,11 +496,9 @@ class CanvasRenderer extends DisplayObjectRenderer
 			// wherever the source is transparent, so the mask is 1 - coverage + alpha, built on the
 			// coverage canvas with composite operations alone: opaque, the coverage taken out, the
 			// object added (lighter clamps at 1)
-			var mask = __getGroupCanvas(level + 3, width, height);
+			var mask = __getGroupCanvas(level + 2, width, height);
 			var maskContext = mask.getContext2d();
-			maskContext.setTransform(1, 0, 0, 1, 0, 0);
-			maskContext.globalAlpha = 1;
-			maskContext.globalCompositeOperation = "source-over";
+			__resetContext(maskContext, "source-over");
 			maskContext.clearRect(0, 0, width, height);
 			maskContext.fillStyle = "#000000";
 			maskContext.fillRect(0, 0, width, height);
@@ -613,7 +597,7 @@ class CanvasRenderer extends DisplayObjectRenderer
 	**/
 	@:noCompletion private function __ensureTouched(displayObject:DisplayObject):Void
 	{
-		if (__touchedRoot == null || __touchedActive) return;
+		if (__touchedGroup == null || __touchedBuilt) return;
 
 		var canvas = __touchedCanvases[__layerDepth];
 		if (canvas == null)
@@ -625,14 +609,12 @@ class CanvasRenderer extends DisplayObjectRenderer
 		if (canvas.width < target.width) canvas.width = target.width;
 		if (canvas.height < target.height) canvas.height = target.height;
 		var touchedContext = canvas.getContext2d();
-		touchedContext.setTransform(1, 0, 0, 1, 0, 0);
-		touchedContext.globalAlpha = 1;
-		touchedContext.globalCompositeOperation = "source-over";
+		__resetContext(touchedContext, "source-over");
 		touchedContext.clearRect(0, 0, canvas.width, canvas.height);
 
 		__touched = canvas;
-		__touchedActive = true;
-		__walkTouched(__touchedRoot, displayObject);
+		__touchedBuilt = true;
+		__walkTouched(__touchedGroup, displayObject);
 	}
 
 	@:noCompletion private override function __drawTouched(displayObject:DisplayObject, graphicsOnly:Bool):Void
@@ -654,7 +636,7 @@ class CanvasRenderer extends DisplayObjectRenderer
 	{
 		var target = context.getImageData(x0, y0, width, height);
 		var source = object.getContext2d().getImageData(0, 0, width, height);
-		var touched = __touchedActive ? __touched.getContext2d().getImageData(x0, y0, width, height) : null;
+		var touched = __touchedBuilt ? __touched.getContext2d().getImageData(x0, y0, width, height) : null;
 		var d = target.data, s = source.data;
 		var t = touched != null ? touched.data : null;
 		var invert = blendMode == INVERT;
@@ -748,61 +730,34 @@ class CanvasRenderer extends DisplayObjectRenderer
 		}
 	}
 
-	@:noCompletion private function __compositeInvert(object:js.html.CanvasElement, level:Int, x0:Int, y0:Int, width:Int, height:Int):Void
+	/**
+		INVERT on an opaque target: the object filled white, then a DIFFERENCE with it.
+	**/
+	@:noCompletion private function __compositeInvert(object:js.html.CanvasElement, x0:Int, y0:Int, width:Int, height:Int):Void
 	{
 		// rendering the object left the last child's transform and alpha on the group context
 		var objectContext = object.getContext2d();
-		objectContext.setTransform(1, 0, 0, 1, 0, 0);
-		objectContext.globalAlpha = 1;
-		objectContext.globalCompositeOperation = "source-in";
+		__resetContext(objectContext, "source-in");
 		objectContext.fillStyle = "#FFFFFF";
 		objectContext.fillRect(0, 0, width, height);
 
-		if (__backdropIsOpaque())
-		{
-			// in place: nothing to preserve, no copy
-			context.globalCompositeOperation = "difference";
-			context.drawImage(object, 0, 0, width, height, x0, y0, width, height);
-			return;
-		}
-
-		var backdropContext = __copyBackdrop(level, x0, y0, width, height);
-		backdropContext.globalCompositeOperation = "difference";
-		backdropContext.drawImage(object, 0, 0, width, height, 0, 0, width, height);
-
-		context.globalCompositeOperation = "source-atop";
-		context.drawImage(backdropContext.canvas, 0, 0, width, height, x0, y0, width, height);
+		context.globalCompositeOperation = "difference";
+		context.drawImage(object, 0, 0, width, height, x0, y0, width, height);
 	}
 
-	@:noCompletion private function __compositeSubtract(object:js.html.CanvasElement, level:Int, x0:Int, y0:Int, width:Int, height:Int):Void
+	/**
+		SUBTRACT on an opaque target: inverted, the object added (lighter clamps at 1), inverted
+		back, which gives max(0, D - S).
+	**/
+	@:noCompletion private function __compositeSubtract(object:js.html.CanvasElement, x0:Int, y0:Int, width:Int, height:Int):Void
 	{
-		if (__backdropIsOpaque())
-		{
-			// in place: nothing to preserve, no copy
-			context.fillStyle = "#FFFFFF";
-			context.globalCompositeOperation = "difference";
-			context.fillRect(x0, y0, width, height);
-			context.globalCompositeOperation = "lighter";
-			context.drawImage(object, 0, 0, width, height, x0, y0, width, height);
-			context.globalCompositeOperation = "difference";
-			context.fillRect(x0, y0, width, height);
-			return;
-		}
-
-		var backdropContext = __copyBackdrop(level, x0, y0, width, height);
-		backdropContext.fillStyle = "#FFFFFF";
-
-		backdropContext.globalCompositeOperation = "difference";
-		backdropContext.fillRect(0, 0, width, height);
-
-		backdropContext.globalCompositeOperation = "lighter";
-		backdropContext.drawImage(object, 0, 0, width, height, 0, 0, width, height);
-
-		backdropContext.globalCompositeOperation = "difference";
-		backdropContext.fillRect(0, 0, width, height);
-
-		context.globalCompositeOperation = "source-atop";
-		context.drawImage(backdropContext.canvas, 0, 0, width, height, x0, y0, width, height);
+		context.fillStyle = "#FFFFFF";
+		context.globalCompositeOperation = "difference";
+		context.fillRect(x0, y0, width, height);
+		context.globalCompositeOperation = "lighter";
+		context.drawImage(object, 0, 0, width, height, x0, y0, width, height);
+		context.globalCompositeOperation = "difference";
+		context.fillRect(x0, y0, width, height);
 	}
 
 	/**
@@ -821,20 +776,13 @@ class CanvasRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		Copies the part of the target under the group into this level's backdrop canvas, and returns
-		that canvas's context, ready for compositing.
+		Puts `context` in a known state for compositing: identity transform, full alpha, `operation`.
 	**/
-	@:noCompletion private function __copyBackdrop(level:Int, x0:Int, y0:Int, width:Int, height:Int):js.html.CanvasRenderingContext2D
+	@:noCompletion private static function __resetContext(context:js.html.CanvasRenderingContext2D, operation:String):Void
 	{
-		var backdropCanvas = __getGroupCanvas(level + 1, width, height);
-		var backdropContext = backdropCanvas.getContext2d();
-		backdropContext.setTransform(1, 0, 0, 1, 0, 0);
-		backdropContext.globalAlpha = 1;
-		// clearRect + source-over rather than the "copy" operation, which clears the whole canvas
-		backdropContext.globalCompositeOperation = "source-over";
-		backdropContext.clearRect(0, 0, width, height);
-		backdropContext.drawImage(context.canvas, x0, y0, width, height, 0, 0, width, height);
-		return backdropContext;
+		context.setTransform(1, 0, 0, 1, 0, 0);
+		context.globalAlpha = 1;
+		context.globalCompositeOperation = operation;
 	}
 
 	@:noCompletion private static function __getGroupCanvas(level:Int, width:Int, height:Int):js.html.CanvasElement

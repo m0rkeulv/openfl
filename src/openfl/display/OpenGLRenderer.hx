@@ -14,6 +14,7 @@ import openfl.display._internal.Context3DVideo;
 import openfl.display._internal.ShaderBuffer;
 import openfl.utils.ObjectPool;
 import openfl.display3D.Context3DClearMask;
+import openfl.display3D.textures.TextureBase;
 import openfl.display3D.Context3D;
 import openfl.display._internal.BlendModeShader;
 import openfl.geom.ColorTransform;
@@ -122,7 +123,6 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	// the current group's touched buffer (see __touch), once built
 	@:noCompletion private var __touched:BitmapData;
 	@:noCompletion private static var __staticBlendShader:BlendModeShader;
-	// a 1x1 opaque texture: the coverage pass draws every leaf's footprint with it (see __drawCoverage)
 	@:noCompletion private static var __staticWhite:BitmapData;
 	// __renderDrawableDirect draws coverage instead of objects (see __drawCoverage)
 	@:noCompletion private var __coverageOnly:Bool;
@@ -961,11 +961,8 @@ class OpenGLRenderer extends DisplayObjectRenderer
 				return;
 			}
 
-			var blendMode = __overrideBlendMode != null ? __overrideBlendMode : displayObject.__worldBlendMode;
-			if (blendMode == __groupBlendMode) blendMode = NORMAL;
-
-			// a cutter is drawn only into a buffer of its own (see __drawsOntoStage); it counts as
-			// touching only where it is drawn as it is (see __cutterShowsAsIs, __touch)
+			var blendMode = __effectiveBlendMode(displayObject);
+			// a cutter is not drawn straight on the stage (see __drawsOntoStage)
 			if ((blendMode == ERASE || blendMode == ALPHA) && __drawsOntoStage()) return;
 
 			if (__needsBlendShader(blendMode))
@@ -1065,7 +1062,7 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		return __layerDepth == 0 && (__stage != null ? (!__stage.__transparent && __stage.__renderer == this) : !__transparent);
 	}
 
-	@:noCompletion private static function __blendGroupMode(blendMode:BlendMode):Int
+	@:noCompletion private static function __shaderModeId(blendMode:BlendMode):Int
 	{
 		return switch (blendMode)
 		{
@@ -1204,11 +1201,11 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		var context = __context3D;
 		var cacheCoverageOnly = __coverageOnly;
 		__coverageOnly = coverageOnly;
-		var layer = !__needsBlendShader(blendMode);
+		var shaded = __needsBlendShader(blendMode);
 
 		__groupDepth++;
 		__layerDepth++;
-		var parentLevel = __bufferLevel, parentDrawn = __bufferDrawn;
+		var parentLevel = __bufferLevel, parentDrawn = __bufferHasContent;
 		__openBuffer();
 
 		var cacheRTT = context.__state.renderToTexture;
@@ -1225,10 +1222,10 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		var cacheGroupBlendMode = __groupBlendMode;
 		var cacheWorldAlpha = __worldAlpha;
 		// a group tracks what its children touch, from the moment a child needs it (see __touch)
-		var cacheTouchedRoot = __touchedRoot, cacheTouched = __touched, cacheTouchedActive = __touchedActive;
-		__touchedRoot = displayObject;
+		var cacheTouchedRoot = __touchedGroup, cacheTouched = __touched, cacheTouchedActive = __touchedBuilt;
+		__touchedGroup = displayObject;
 		__touched = null;
-		__touchedActive = false;
+		__touchedBuilt = false;
 
 		__suspendClipAndMask();
 		if (__groupClipRects[__groupDepth] == null) __groupClipRects[__groupDepth] = [];
@@ -1266,25 +1263,18 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		__renderDrawableDirect(displayObject);
 
 		__worldAlpha = cacheWorldAlpha;
-		__touchedRoot = cacheTouchedRoot;
+		__touchedGroup = cacheTouchedRoot;
 		__touched = cacheTouched;
-		__touchedActive = cacheTouchedActive;
+		__touchedBuilt = cacheTouchedActive;
 		__overrideBlendMode = cacheOverrideBlendMode;
 		__groupBlendMode = cacheGroupBlendMode;
 		__blendMode = null;
 
 		// the object's alpha applies once, to the whole object: __compositeDirect draws with it,
 		// the shader groups get the group scaled by it here, while it is still the render target
-		if (!layer && !coverageOnly && displayObject.__worldAlpha < 1) __scaleScratchAlpha(x0, y0, width, height, displayObject.__worldAlpha);
+		if (shaded && !coverageOnly && displayObject.__worldAlpha < 1) __scaleScratchAlpha(x0, y0, width, height, displayObject.__worldAlpha);
 
-		if (cacheRTT != null)
-		{
-			context.setRenderToTexture(cacheRTT, cacheRTTDepthStencil, cacheRTTAntiAlias, cacheRTTSurfaceSelector);
-		}
-		else
-		{
-			context.setRenderToBackBuffer();
-		}
+		__restoreRenderTarget(cacheRTT, cacheRTTDepthStencil, cacheRTTAntiAlias, cacheRTTSurfaceSelector);
 
 		__flipped = cacheFlipped;
 		__groupOffsetX = cacheOffsetX;
@@ -1326,9 +1316,7 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	@:noCompletion private function __compositeWithShader(scratchBuffer:BitmapData, backdrop:BitmapData, displayObject:DisplayObject, x0:Int, y0:Int,
 			blendMode:BlendMode, discardTransparent:Bool, coverage:BitmapData):Void
 	{
-		var shader = __staticBlendShader; // __copyBackdrop gave it the backdrop
-		shader.prepare(__blendGroupMode(blendMode), 1, discardTransparent, coverage);
-		__setShaderTouched(shader, displayObject, blendMode);
+		var shader = __prepareBlendShader(displayObject, blendMode, 1, discardTransparent, coverage);
 
 		// the shader writes the finished pixel
 		__context3D.setBlendFactors(ONE, ZERO);
@@ -1336,14 +1324,29 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		Gives the blend shader the touched buffer for SUBTRACT, INVERT, and cutters where
-		`__cutterShowsAsIs` holds; otherwise none, and every pixel counts as covered.
+		Prepares the blend shader for one composite (see `BlendModeShader.prepare`; `__copyBackdrop` gave
+		it the backdrop), with the touched buffer where the mode reads it: SUBTRACT, INVERT, and cutters
+		where `__cutterShowsAsIs` holds. Otherwise every pixel counts as covered.
 	**/
-	@:noCompletion private function __setShaderTouched(shader:BlendModeShader, displayObject:DisplayObject, blendMode:BlendMode):Void
+	@:noCompletion private function __prepareBlendShader(displayObject:DisplayObject, blendMode:BlendMode, alpha:Float, discardTransparent:Bool,
+			coverage:BitmapData):BlendModeShader
 	{
+		var shader = __staticBlendShader;
+		shader.prepare(__shaderModeId(blendMode), alpha, discardTransparent, coverage);
 		var reads = blendMode == SUBTRACT || blendMode == INVERT || __cutterShowsAsIs();
 		if (reads) __ensureTouched(displayObject);
-		shader.setTouched(reads && __touchedActive ? __touched : null);
+		shader.setTouched(reads && __touchedBuilt ? __touched : null);
+		return shader;
+	}
+
+	/**
+		Puts the render target back after a group or the touched buffer: `texture`, or the back buffer
+		with null.
+	**/
+	@:noCompletion private function __restoreRenderTarget(texture:TextureBase, depthStencil:Bool, antiAlias:Int, surfaceSelector:Int):Void
+	{
+		if (texture != null) __context3D.setRenderToTexture(texture, depthStencil, antiAlias, surfaceSelector);
+		else __context3D.setRenderToBackBuffer();
 	}
 
 	/**
@@ -1352,7 +1355,7 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	**/
 	@:noCompletion private function __ensureTouched(displayObject:DisplayObject):Void
 	{
-		if (__touchedRoot == null || __touchedActive) return;
+		if (__touchedGroup == null || __touchedBuilt) return;
 
 		var level = (__groupDepth - 1) * 4 + 3;
 		var touched = __groupScratchBuffers[level];
@@ -1366,8 +1369,8 @@ class OpenGLRenderer extends DisplayObjectRenderer
 			__groupScratchBuffers[level] = touched;
 		}
 		__touched = touched;
-		__touchedActive = true;
-		__drawIntoTouched(true, function() __walkTouched(__touchedRoot, displayObject));
+		__touchedBuilt = true;
+		__drawIntoTouched(true, function() __walkTouched(__touchedGroup, displayObject));
 	}
 
 	@:noCompletion private override function __drawTouched(displayObject:DisplayObject, graphicsOnly:Bool):Void
@@ -1396,7 +1399,6 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		__suspendClipAndMask();
 		context.setRenderToTexture(__touched.getTexture(context), true);
 		if (clear) context.__clear(false, 0, 0, 0, 0, 0, 0, Context3DClearMask.ALL);
-		if (__staticWhite == null) __staticWhite = new BitmapData(1, 1, false, 0xFFFFFF);
 		__coverageOnly = true;
 		__blendMode = null;
 		__setBlendMode(NORMAL);
@@ -1405,14 +1407,7 @@ class OpenGLRenderer extends DisplayObjectRenderer
 
 		__coverageOnly = cacheCoverageOnly;
 		__blendMode = null;
-		if (cacheRTT != null)
-		{
-			context.setRenderToTexture(cacheRTT, cacheRTTDepthStencil, cacheRTTAntiAlias, cacheRTTSurfaceSelector);
-		}
-		else
-		{
-			context.setRenderToBackBuffer();
-		}
+		__restoreRenderTarget(cacheRTT, cacheRTTDepthStencil, cacheRTTAntiAlias, cacheRTTSurfaceSelector);
 		__resumeClipAndMask(this);
 		__clearShader();
 	}
@@ -1503,10 +1498,8 @@ class OpenGLRenderer extends DisplayObjectRenderer
 				var backdrop = __groupScratchBuffers[level + 1];
 				__copyBackdrop(backdrop, x0, y0, width, height);
 
-				var shader = __staticBlendShader;
-				shader.prepare(__blendGroupMode(blendMode), __getAlpha(displayObject.__worldAlpha), graphics != null && blendMode == ALPHA && coverage == null,
-					coverage);
-				__setShaderTouched(shader, displayObject, blendMode);
+				var shader = __prepareBlendShader(displayObject, blendMode, __getAlpha(displayObject.__worldAlpha),
+					graphics != null && blendMode == ALPHA && coverage == null, coverage);
 
 				var context = __context3D;
 				context.setBlendFactors(ONE, ZERO);
@@ -1664,7 +1657,7 @@ class OpenGLRenderer extends DisplayObjectRenderer
 			matrix.scale(bounds.width, bounds.height);
 			matrix.translate(bounds.x, bounds.y);
 			matrix.concat(displayObject.__renderTransform);
-			__drawCoverageQuad(__staticWhite, __staticWhite, matrix);
+			__drawCoverageQuad(__white(), __white(), matrix);
 			Rectangle.__pool.release(bounds);
 		}
 
@@ -1681,10 +1674,10 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		context.setBlendFactors(ZERO, SOURCE_ALPHA);
 		__blendMode = null;
 
-		if (__staticWhite == null) __staticWhite = new BitmapData(1, 1, false, 0xFFFFFF);
+		var white = __white();
 		var shader = __initDisplayShader(null);
 		setShader(shader);
-		applyBitmapData(__staticWhite, false);
+		applyBitmapData(white, false);
 		var matrix = Matrix.__pool.get();
 		matrix.scale(width, height);
 		matrix.translate(x, y);
@@ -1698,10 +1691,10 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		applyAlpha(alpha);
 		applyColorTransform(null);
 		updateShader();
-		var vertexBuffer = __staticWhite.getVertexBuffer(context);
+		var vertexBuffer = white.getVertexBuffer(context);
 		if (shader.__position != null) context.setVertexBufferAt(shader.__position.index, vertexBuffer, 0, FLOAT_3);
 		if (shader.__textureCoord != null) context.setVertexBufferAt(shader.__textureCoord.index, vertexBuffer, 3, FLOAT_2);
-		context.drawTriangles(__staticWhite.getIndexBuffer(context));
+		context.drawTriangles(white.getIndexBuffer(context));
 		__clearShader();
 	}
 
@@ -1725,7 +1718,7 @@ class OpenGLRenderer extends DisplayObjectRenderer
 			matrix.concat(graphics.__worldTransform);
 			// a text field draws straight into its bitmap, in colors that are always opaque, so
 			// the bitmap's own alpha is its coverage
-			var texture = graphics.__coverage != null ? graphics.__coverage : (graphics.__managed ? graphics.__bitmap : __staticWhite);
+			var texture = graphics.__coverage != null ? graphics.__coverage : (graphics.__managed ? graphics.__bitmap : __white());
 			__drawCoverageQuad(graphics.__bitmap, texture, matrix);
 			Matrix.__pool.release(matrix);
 		}
@@ -1734,6 +1727,15 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	/**
 		Draws an opaque quad the size of `geometry`, placed with `matrix` and filled from `texture`.
 	**/
+	/**
+		A 1x1 opaque texture: the coverage pass draws every leaf's footprint with it (see `__drawCoverage`).
+	**/
+	@:noCompletion private static function __white():BitmapData
+	{
+		if (__staticWhite == null) __staticWhite = new BitmapData(1, 1, false, 0xFFFFFF);
+		return __staticWhite;
+	}
+
 	@:noCompletion private function __drawCoverageQuad(geometry:BitmapData, texture:BitmapData, matrix:Matrix):Void
 	{
 		var context = __context3D;
@@ -1757,7 +1759,6 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	{
 		if (__coverageOnly && object.__drawableType != BITMAP_DATA)
 		{
-			if (__staticWhite == null) __staticWhite = new BitmapData(1, 1, false, 0xFFFFFF);
 			__drawCoverage(cast object);
 			return;
 		}

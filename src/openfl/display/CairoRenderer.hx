@@ -58,23 +58,20 @@ class CairoRenderer extends DisplayObjectRenderer
 	@:noCompletion private var __matrix:Matrix;
 	@SuppressWarnings("checkstyle:Dynamic") @:noCompletion private var __matrix3:#if lime Matrix3 #else Dynamic #end;
 	#if lime
-	// the current group's touched buffer (see __touch), once built: a bitmap per layer depth,
-	// placed at (__touchedX, __touchedY) of the target
+	// the current group's touched buffer (see __touch), once built: a bitmap per layer depth, in the
+	// group bitmap's coordinates
 	@:noCompletion private var __touched:Cairo;
 	@:noCompletion private var __touchedBitmap:BitmapData;
-	@:noCompletion private var __touchedX:Int;
-	@:noCompletion private var __touchedY:Int;
 	@:noCompletion private var __touchedWidth:Int;
 	@:noCompletion private var __touchedHeight:Int;
 	@:noCompletion private static var __touchedBitmaps:Array<BitmapData> = [];
 	// the bitmap being drawn into when it is ours (a group's, a cache bitmap, a BitmapData.draw
-	// bitmap); null on the window. Group bitmaps are kept per layer depth
-	@:noCompletion private var __layerBitmap:BitmapData;
-	@:noCompletion private static var __layerBitmaps:Array<BitmapData> = [];
-	// the mask of __writeAlphaBytes, and the scratch copy __compositeFormulaOnViews uses on the
-	// window
+	// bitmap), null on the window; and the group bitmaps, one per layer depth
+	@:noCompletion private var __targetBitmap:BitmapData;
+	@:noCompletion private static var __groupBitmaps:Array<BitmapData> = [];
+	// the mask of __writeAlphaBytes, and the copy of the window __compositeFormulaOnViews works on
 	@:noCompletion private static var __alphaBytesMask:CairoPattern;
-	@:noCompletion private static var __copiedTarget:BitmapData;
+	@:noCompletion private static var __windowCopy:BitmapData;
 	// the alpha of the current SUBTRACT/INVERT run, its rectangle, and one plane per layer depth
 	// (see __compositeFormulaOnViews)
 	@:noCompletion private var __alphaPlane:Cairo;
@@ -225,14 +222,14 @@ class CairoRenderer extends DisplayObjectRenderer
 	#if lime
 	/**
 		Whether `object` is a SUBTRACT or INVERT object on a transparent target, which continues the
-		current run (see `__compositeFormulaOnViews`).
+		current run of them (see `__compositeFormulaOnViews`).
 	**/
-	@:noCompletion private function __continuesAlphaRun(object:IBitmapDrawable):Bool
+	@:noCompletion private function __continuesFormulaRun(object:IBitmapDrawable):Bool
 	{
 		if (object.__drawableType == BITMAP_DATA || __backdropIsOpaque()) return false;
 		var displayObject:DisplayObject = cast object;
 		if (displayObject.__blendMode == LAYER && (__overrideBlendMode == null || __overrideBlendMode == NORMAL)) return false;
-		var blendMode = __overrideBlendMode != null ? __overrideBlendMode : displayObject.__worldBlendMode;
+		var blendMode = __effectiveBlendMode(displayObject);
 		return blendMode == SUBTRACT || blendMode == INVERT;
 	}
 	#end
@@ -244,41 +241,29 @@ class CairoRenderer extends DisplayObjectRenderer
 		#if lime
 		// a run of SUBTRACT/INVERT objects keeps the target's alpha in a plane of its own; anything
 		// else drawn into the target needs the alpha bytes back first (see __mergeAlphaPlane)
-		if (__alphaPlane != null && !__continuesAlphaRun(object)) __mergeAlphaPlane();
+		if (__alphaPlane != null && !__continuesFormulaRun(object)) __mergeAlphaPlane();
 
 		if (object.__drawableType != BITMAP_DATA)
 		{
 			var displayObject:DisplayObject = cast object;
-			// a LAYER container is rendered into its own group, so ERASE and ALPHA
-			// children only affect what is inside it, as in Flash
 			if (displayObject.__blendMode == LAYER && (__overrideBlendMode == null || __overrideBlendMode == NORMAL))
 			{
-				__renderLayerGroup(object);
+				__renderGroup(object);
 				__touch(displayObject, true);
 				return;
 			}
-			// SUBTRACT and INVERT have no Cairo operator, ERASE and ALPHA need a
-			// clip: the object is rendered into a group and composited afterwards
-			var blendMode = __overrideBlendMode != null ? __overrideBlendMode : displayObject.__worldBlendMode;
-			if (blendMode == __groupBlendMode) blendMode = NORMAL;
-			if (blendMode == ERASE || blendMode == ALPHA)
+			var blendMode = __effectiveBlendMode(displayObject);
+			if (blendMode == SUBTRACT || blendMode == INVERT || blendMode == ERASE || blendMode == ALPHA)
 			{
-				// a cutter is drawn only into a buffer of its own (see __drawsOntoStage); it counts
-				// as touching only where it is drawn as it is (see __cutterShowsAsIs, __touch)
-				if (__drawsOntoStage()) return;
-				__renderFormulaGroup(object, blendMode);
-				__touch(displayObject, true);
-				return;
-			}
-			if (blendMode == SUBTRACT || blendMode == INVERT)
-			{
+				// a cutter is not drawn straight on the stage (see __drawsOntoStage)
+				if ((blendMode == ERASE || blendMode == ALPHA) && __drawsOntoStage()) return;
 				__renderFormulaGroup(object, blendMode);
 				__touch(displayObject, true);
 				return;
 			}
 			if (__needsWholeObjectGroup(displayObject, blendMode))
 			{
-				__renderLayerGroup(object, blendMode);
+				__renderGroup(object, blendMode);
 				__touch(displayObject, true);
 				return;
 			}
@@ -319,38 +304,69 @@ class CairoRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		Renders a container into a bitmap of its own (see `__renderIntoLayer`) and draws it onto the
+		Renders a container into a bitmap of its own (see `__renderIntoGroup`) and draws it onto the
 		target as one image with the container's alpha: with OVER for a LAYER, or with the operator of
 		`blendMode` for a container blended as a whole (see `__needsWholeObjectGroup`).
 	**/
-	@:noCompletion private function __renderLayerGroup(object:IBitmapDrawable, blendMode:BlendMode = LAYER):Void
+	@:noCompletion private function __renderGroup(object:IBitmapDrawable, blendMode:BlendMode = LAYER):Void
 	{
 		var displayObject:DisplayObject = cast object;
 		var bounds = Rectangle.__pool.get();
-		displayObject.__getFilterBounds(bounds, displayObject.__renderTransform);
-		if (__worldTransform != null) bounds.__transform(bounds, __worldTransform);
-		// whole pixels, and no further than the target
-		var x0 = Std.int(Math.max(0, Math.floor(bounds.x))), y0 = Std.int(Math.max(0, Math.floor(bounds.y)));
-		var target:CairoImageSurface = __layerBitmap != null ? __layerBitmap.getSurface() : cast cairo.target;
-		var x1 = Std.int(Math.min(target.width, Math.ceil(bounds.right))), y1 = Std.int(Math.min(target.height, Math.ceil(bounds.bottom)));
+		var visible = __getGroupBounds(displayObject, bounds);
+		var x0 = Std.int(bounds.x), y0 = Std.int(bounds.y), width = Std.int(bounds.width), height = Std.int(bounds.height);
 		Rectangle.__pool.release(bounds);
-		var width = x1 - x0, height = y1 - y0;
-		if (width < 1 || height < 1) return;
+		if (!visible) return;
 
-		var layer = __renderIntoLayer(object, x0, y0, width, height, blendMode);
+		var group = __renderIntoGroup(object, x0, y0, width, height, blendMode);
 
-		// the layer onto the target, as one image, with the mode's operator (OVER for LAYER)
 		cairo.save();
 		cairo.identityMatrix();
 		cairo.rectangle(x0, y0, width, height);
 		cairo.clip();
-		cairo.setSourceSurface(layer.getSurface(), x0, y0);
+		cairo.setSourceSurface(group.getSurface(), x0, y0);
 		__setBlendModeCairo(cairo, blendMode);
 		var alpha = __getAlpha(displayObject.__worldAlpha);
 		if (alpha >= 1) cairo.paint();
 		else cairo.paintWithAlpha(alpha);
 		cairo.restore();
 		__blendMode = null; // the operator is set again by the next __setBlendMode
+	}
+
+	/**
+		The rectangle a group needs on the target: the object's bounds including filters, rounded out
+		to whole pixels and clamped to the target. Returns false if nothing of it is left.
+	**/
+	@:noCompletion private function __getGroupBounds(displayObject:DisplayObject, bounds:Rectangle):Bool
+	{
+		displayObject.__getFilterBounds(bounds, displayObject.__renderTransform);
+		if (__worldTransform != null) bounds.__transform(bounds, __worldTransform);
+		var target:CairoImageSurface = __targetBitmap != null ? __targetBitmap.getSurface() : cast cairo.target;
+		var x0 = Math.max(0, Math.floor(bounds.x)), y0 = Math.max(0, Math.floor(bounds.y));
+		var x1 = Math.min(target.width, Math.ceil(bounds.right)), y1 = Math.min(target.height, Math.ceil(bounds.bottom));
+		bounds.setTo(x0, y0, x1 - x0, y1 - y0);
+		return bounds.width > 0 && bounds.height > 0;
+	}
+
+	/**
+		`bitmap` if it is at least `width` x `height`, otherwise a new transparent bitmap at least that
+		large in both dimensions, `bitmap` disposed.
+	**/
+	@:noCompletion private static function __scratchBitmap(bitmap:BitmapData, width:Int, height:Int):BitmapData
+	{
+		if (bitmap != null && bitmap.width >= width && bitmap.height >= height) return bitmap;
+		var w = bitmap != null && bitmap.width > width ? bitmap.width : width;
+		var h = bitmap != null && bitmap.height > height ? bitmap.height : height;
+		if (bitmap != null) bitmap.dispose();
+		return new BitmapData(w, h, true, 0);
+	}
+
+	/**
+		A surface over `bitmap`'s bytes in another `format`, `widthScale` of its pixels per BGRA pixel
+		(see `__compositeFormulaOnViews`).
+	**/
+	@:noCompletion private static function __view(bitmap:BitmapData, format:CairoFormat, widthScale:Int = 1):CairoImageSurface
+	{
+		return CairoImageSurface.create(bitmap.image.data.buffer, format, bitmap.width * widthScale, bitmap.height, bitmap.image.buffer.stride);
 	}
 
 	/**
@@ -365,50 +381,40 @@ class CairoRenderer extends DisplayObjectRenderer
 		The bitmap is cleared through a view of its bytes and its surface is made afterwards: Cairo
 		treats a surface it has cleared as empty, whatever is later written into the bytes.
 	**/
-	@:noCompletion private function __renderIntoLayer(object:IBitmapDrawable, x0:Int, y0:Int, width:Int, height:Int, blendMode:BlendMode):BitmapData
+	@:noCompletion private function __renderIntoGroup(object:IBitmapDrawable, x0:Int, y0:Int, width:Int, height:Int, blendMode:BlendMode):BitmapData
 	{
 		var displayObject:DisplayObject = cast object;
 		var previousGroupBlendMode = __groupBlendMode, previousOverride = __overrideBlendMode;
 		if (blendMode != LAYER) __groupBlendMode = blendMode;
 		__overrideBlendMode = null;
-		var layer = __layerBitmaps[__layerDepth];
-		if (layer == null || layer.width < width || layer.height < height)
-		{
-			var w = layer != null && layer.width > width ? layer.width : width;
-			var h = layer != null && layer.height > height ? layer.height : height;
-			if (layer != null) layer.dispose();
-			layer = new BitmapData(w, h, true, 0);
-			__layerBitmaps[__layerDepth] = layer;
-		}
-		var clear = new Cairo(CairoImageSurface.create(layer.image.data.buffer, CairoFormat.ARGB32, layer.width, layer.height, layer.image.buffer.stride));
+		var group = __groupBitmaps[__layerDepth] = __scratchBitmap(__groupBitmaps[__layerDepth], width, height);
+		var clear = new Cairo(__view(group, CairoFormat.ARGB32));
 		clear.setOperator(CairoOperator.CLEAR);
 		clear.rectangle(0, 0, width, height);
 		clear.fill();
-		layer.__surface = null;
+		group.__surface = null;
 
-		var parentContext = cairo, parentTransform = __worldTransform, parentLayer = __layerBitmap;
+		var parentContext = cairo, parentTransform = __worldTransform, parentTarget = __targetBitmap;
 		var transform = Matrix.__pool.get();
 		if (parentTransform != null) transform.copyFrom(parentTransform);
 		transform.translate(-x0, -y0);
-		cairo = new Cairo(layer.getSurface());
+		cairo = new Cairo(group.getSurface());
 		__worldTransform = transform;
-		__layerBitmap = layer;
+		__targetBitmap = group;
 		var parentAlphaPlane = __alphaPlane, parentAlphaPlaneRect = __alphaPlaneRect;
 		__alphaPlane = null;
 		__layerDepth++;
-		var parentLevel = __bufferLevel, parentDrawn = __bufferDrawn;
+		var parentLevel = __bufferLevel, parentDrawn = __bufferHasContent;
 		__openBuffer();
 		__blendMode = null;
 		// the group tracks what its children touch, from the moment a child needs it (see __touch)
-		var parentTouchedRoot = __touchedRoot, parentTouched = __touched, parentTouchedBitmap = __touchedBitmap;
-		var parentTouchedActive = __touchedActive;
-		var parentTouchedX = __touchedX, parentTouchedY = __touchedY, parentTouchedWidth = __touchedWidth, parentTouchedHeight = __touchedHeight;
-		__touchedRoot = displayObject;
+		var parentTouchedRoot = __touchedGroup, parentTouched = __touched, parentTouchedBitmap = __touchedBitmap;
+		var parentTouchedActive = __touchedBuilt;
+		var parentTouchedWidth = __touchedWidth, parentTouchedHeight = __touchedHeight;
+		__touchedGroup = displayObject;
 		__touched = null;
 		__touchedBitmap = null;
-		__touchedActive = false;
-		__touchedX = 0;
-		__touchedY = 0;
+		__touchedBuilt = false;
 		__touchedWidth = width;
 		__touchedHeight = height;
 		// the object's alpha applies once, to the composite: divided out of the children here
@@ -417,31 +423,29 @@ class CairoRenderer extends DisplayObjectRenderer
 		__renderDrawableDirect(object);
 		if (__alphaPlane != null) __mergeAlphaPlane();
 		__worldAlpha = cacheWorldAlpha;
-		__touchedRoot = parentTouchedRoot;
+		__touchedGroup = parentTouchedRoot;
 		__touched = parentTouched;
 		__touchedBitmap = parentTouchedBitmap;
-		__touchedActive = parentTouchedActive;
-		__touchedX = parentTouchedX;
-		__touchedY = parentTouchedY;
+		__touchedBuilt = parentTouchedActive;
 		__touchedWidth = parentTouchedWidth;
 		__touchedHeight = parentTouchedHeight;
 		__closeBuffer(parentLevel, parentDrawn);
 		__layerDepth--;
 		__alphaPlane = parentAlphaPlane;
 		__alphaPlaneRect = parentAlphaPlaneRect;
-		__layerBitmap = parentLayer;
+		__targetBitmap = parentTarget;
 		__worldTransform = parentTransform;
 		Matrix.__pool.release(transform);
 		cairo = parentContext;
 		__groupBlendMode = previousGroupBlendMode;
 		__overrideBlendMode = previousOverride;
-		return layer;
+		return group;
 	}
 
 	/**
 		Composites `object` with SUBTRACT, INVERT, ERASE or ALPHA, which have no single Cairo operator.
 		The object is read from its own surface when it is one piece at full alpha
-		(see `__leafPattern`), otherwise from a group bitmap (see `__renderIntoLayer`). On a transparent
+		(see `__leafPattern`), otherwise from a group bitmap (see `__renderIntoGroup`). On a transparent
 		target SUBTRACT and INVERT go through `__compositeFormulaOnViews`; everything else uses plain
 		operators.
 	**/
@@ -450,18 +454,13 @@ class CairoRenderer extends DisplayObjectRenderer
 		var displayObject:DisplayObject = cast object;
 		if (displayObject.__worldAlpha <= 0) return;
 
-		// the object's bounds in whole pixels, no further than the target: the clip, the groups
-		// and the copies work at that size instead of the whole surface, and DEST_IN (ALPHA),
-		// which is unbounded, cannot reach outside it
+		// the clip and the groups work at the object's size, and DEST_IN (ALPHA), which is unbounded,
+		// cannot reach outside it
 		var bounds = Rectangle.__pool.get();
-		displayObject.__getFilterBounds(bounds, displayObject.__renderTransform);
-		if (__worldTransform != null) bounds.__transform(bounds, __worldTransform);
-		var x0 = Std.int(Math.max(0, Math.floor(bounds.x))), y0 = Std.int(Math.max(0, Math.floor(bounds.y)));
-		var target:CairoImageSurface = __layerBitmap != null ? __layerBitmap.getSurface() : cast cairo.target;
-		var x1 = Std.int(Math.min(target.width, Math.ceil(bounds.right))), y1 = Std.int(Math.min(target.height, Math.ceil(bounds.bottom)));
+		var visible = __getGroupBounds(displayObject, bounds);
+		var x0 = Std.int(bounds.x), y0 = Std.int(bounds.y), width = Std.int(bounds.width), height = Std.int(bounds.height);
 		Rectangle.__pool.release(bounds);
-		var width = x1 - x0, height = y1 - y0;
-		if (width < 1 || height < 1) return;
+		if (!visible) return;
 
 		// the mode this group is composited with, for the shapes rendered inside it (__isCompositedWithAlpha)
 		var previousGroupBlendMode = __groupBlendMode;
@@ -473,41 +472,30 @@ class CairoRenderer extends DisplayObjectRenderer
 		cairo.clip();
 
 		// a one-piece object at full alpha is composited straight from its own surface, anything
-		// else from a bitmap of ours it is rendered into (see __renderIntoLayer)
+		// else from a bitmap of ours it is rendered into (see __renderIntoGroup)
 		var alpha = __getAlpha(displayObject.__worldAlpha);
 		var objectPattern = alpha >= 1 ? __leafPattern(displayObject) : null;
 
 		if (objectPattern == null)
 		{
-			var layer = __renderIntoLayer(object, x0, y0, width, height, blendMode);
+			var group = __renderIntoGroup(object, x0, y0, width, height, blendMode);
 			if (alpha < 1)
 			{
 				// the object's alpha applies once, to the whole object
-				var scale = new Cairo(layer.getSurface());
+				var scale = new Cairo(group.getSurface());
 				scale.setSourceRGBA(0, 0, 0, alpha);
 				scale.setOperator(CairoOperator.DEST_IN);
 				scale.rectangle(0, 0, width, height);
 				scale.fill();
 			}
-			objectPattern = CairoPattern.createForSurface(layer.getSurface());
+			objectPattern = CairoPattern.createForSurface(group.getSurface());
 			// a pattern matrix maps device to pattern space: the bitmap's (0, 0) is the target's (x0, y0)
-			__matrix3.a = 1;
-			__matrix3.b = 0;
-			__matrix3.c = 0;
-			__matrix3.d = 1;
-			__matrix3.tx = -x0;
-			__matrix3.ty = -y0;
+			__matrix3.setTo(1, 0, 0, 1, -x0, -y0);
 			objectPattern.matrix = __matrix3;
 		}
 
-		// Flash applies SUBTRACT and INVERT to the part of every pixel that earlier objects have
-		// covered (see __touch), and draws the object as it is over the rest; ERASE and ALPHA cut
-		// wherever they are drawn in the first buffer and follow the same model deeper down (see
-		// __cutterShowsAsIs). On an opaque target, always a bitmap being drawn into, every mode
-		// works with operators: SUBTRACT and INVERT then have an opaque backdrop for their formulas
-		// and nothing touched to tell apart. On a transparent target, always a bitmap of ours,
-		// SUBTRACT and INVERT work on views of its bytes in other formats: their formulas take the
-		// covered part's color, which no operator on ARGB pixels can give
+		// SUBTRACT and INVERT need views of the target's bytes where it is transparent; everything
+		// else works with operators
 		if ((blendMode == SUBTRACT || blendMode == INVERT) && !__backdropIsOpaque())
 		{
 			__ensureTouched(displayObject);
@@ -515,23 +503,12 @@ class CairoRenderer extends DisplayObjectRenderer
 		}
 		else
 		{
-			// a cutter following the touched model: the object over what is not covered, added
-			// back after the cut
+			// a cutter following the touched model shows itself over what is not covered
 			var uncovered:CairoPattern = null;
 			if ((blendMode == ALPHA || blendMode == ERASE) && __cutterShowsAsIs())
 			{
 				__ensureTouched(displayObject);
-				if (__touchedActive)
-				{
-					cairo.pushGroupWithContent(CairoContent.COLOR_ALPHA);
-					cairo.source = objectPattern;
-					cairo.setOperator(CairoOperator.OVER);
-					cairo.paint();
-					cairo.setSourceSurface(__touchedBitmap.getSurface(), __touchedX, __touchedY);
-					cairo.setOperator(CairoOperator.DEST_OUT);
-					cairo.paint();
-					uncovered = cairo.popGroup();
-				}
+				if (__touchedBuilt) uncovered = __uncoveredPattern(objectPattern);
 			}
 
 			switch (blendMode)
@@ -554,8 +531,24 @@ class CairoRenderer extends DisplayObjectRenderer
 		}
 
 		cairo.restore();
-		__blendMode = null; // the operator is set again by the next __setBlendMode
+		__blendMode = null;
 		__groupBlendMode = previousGroupBlendMode;
+	}
+
+	/**
+		The object over the pixels the touched buffer does not cover, (1 - c) S: what a SUBTRACT or
+		INVERT object, or a cutter following the touched model, shows as it is.
+	**/
+	@:noCompletion private function __uncoveredPattern(objectPattern:CairoPattern):CairoPattern
+	{
+		cairo.pushGroupWithContent(CairoContent.COLOR_ALPHA);
+		cairo.source = objectPattern;
+		cairo.setOperator(CairoOperator.OVER);
+		cairo.paint();
+		cairo.setSourceSurface(__touchedBitmap.getSurface(), 0, 0);
+		cairo.setOperator(CairoOperator.DEST_OUT);
+		cairo.paint();
+		return cairo.popGroup();
 	}
 
 	/**
@@ -642,7 +635,7 @@ class CairoRenderer extends DisplayObjectRenderer
 			cairo.setOperator(CairoOperator.SOURCE);
 			cairo.paint();
 			cairo.setOperator(CairoOperator.DEST_OUT);
-			__drawCoverage(cairo, displayObject, 0, 0);
+			__drawCoverage(cairo, displayObject);
 			cairo.identityMatrix();
 			cairo.source = objectPattern;
 			cairo.setOperator(CairoOperator.ADD);
@@ -667,20 +660,20 @@ class CairoRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		Paints the area covered by `displayObject` and its descendants into `coverage`, whose origin is
-		(x0, y0) of the target, with its current operator: graphics through `__drawGraphicsCoverage`,
+		Paints the area covered by `displayObject` and its descendants into `coverage`, a context in the
+		target's coordinates, with its current operator: graphics through `__drawGraphicsCoverage`,
 		other leaves as their bounding box.
 	**/
-	@:noCompletion private function __drawCoverage(coverage:Cairo, displayObject:DisplayObject, x0:Int, y0:Int):Void
+	@:noCompletion private function __drawCoverage(coverage:Cairo, displayObject:DisplayObject):Void
 	{
 		if (!displayObject.__renderable) return;
 		var graphics = displayObject.__graphics;
 
-		if (graphics != null) __drawGraphicsCoverage(coverage, displayObject, x0, y0);
+		if (graphics != null) __drawGraphicsCoverage(coverage, displayObject);
 
 		if (displayObject.__children != null)
 		{
-			for (child in displayObject.__children) __drawCoverage(coverage, child, x0, y0);
+			for (child in displayObject.__children) __drawCoverage(coverage, child);
 		}
 		else if (graphics == null)
 		{
@@ -688,7 +681,7 @@ class CairoRenderer extends DisplayObjectRenderer
 			var matrix = Matrix.__pool.get();
 			displayObject.__getBounds(bounds, Matrix.__identity);
 			matrix.copyFrom(displayObject.__renderTransform);
-			__applyCoverageMatrix(coverage, matrix, x0, y0);
+			__applyCoverageMatrix(coverage, matrix);
 			coverage.setSourceRGB(0, 0, 0);
 			coverage.rectangle(bounds.x, bounds.y, bounds.width, bounds.height);
 			coverage.fill();
@@ -702,7 +695,7 @@ class CairoRenderer extends DisplayObjectRenderer
 		(see `__drawCoverage`): a shape's coverage render, made if missing, or for a text field the
 		alpha of its bitmap, which it draws in opaque colors.
 	**/
-	@:noCompletion private function __drawGraphicsCoverage(coverage:Cairo, displayObject:DisplayObject, x0:Int, y0:Int):Void
+	@:noCompletion private function __drawGraphicsCoverage(coverage:Cairo, displayObject:DisplayObject):Void
 	{
 		var graphics = displayObject.__graphics;
 		CairoGraphics.render(graphics, this, true);
@@ -711,7 +704,7 @@ class CairoRenderer extends DisplayObjectRenderer
 		var matrix = Matrix.__pool.get();
 		matrix.scale(1 / graphics.__bitmapScaleX, 1 / graphics.__bitmapScaleY);
 		matrix.concat(graphics.__worldTransform);
-		__applyCoverageMatrix(coverage, matrix, x0, y0);
+		__applyCoverageMatrix(coverage, matrix);
 		if (graphics.__coverage != null)
 		{
 			coverage.setSourceSurface(graphics.__coverage.getSurface(), 0, 0);
@@ -735,9 +728,9 @@ class CairoRenderer extends DisplayObjectRenderer
 
 	/**
 		Sets `coverage` to draw where the object is drawn: `matrix` with the world transform and pixel
-		rounding applied, less the context's origin (x0, y0).
+		rounding applied.
 	**/
-	@:noCompletion private function __applyCoverageMatrix(coverage:Cairo, matrix:Matrix, x0:Int, y0:Int):Void
+	@:noCompletion private function __applyCoverageMatrix(coverage:Cairo, matrix:Matrix):Void
 	{
 		if (__worldTransform != null) matrix.concat(__worldTransform);
 		if (__roundPixels)
@@ -745,7 +738,6 @@ class CairoRenderer extends DisplayObjectRenderer
 			matrix.tx = Math.round(matrix.tx);
 			matrix.ty = Math.round(matrix.ty);
 		}
-		matrix.translate(-x0, -y0);
 		coverage.matrix = matrix.__toMatrix3();
 	}
 
@@ -755,29 +747,23 @@ class CairoRenderer extends DisplayObjectRenderer
 	**/
 	@:noCompletion private function __ensureTouched(displayObject:DisplayObject):Void
 	{
-		if (__touchedRoot == null || __touchedActive) return;
+		if (__touchedGroup == null || __touchedBuilt) return;
 
-		var bitmap = __touchedBitmaps[__layerDepth];
-		if (bitmap == null || bitmap.width < __touchedWidth || bitmap.height < __touchedHeight)
-		{
-			if (bitmap != null) bitmap.dispose();
-			bitmap = new BitmapData(__touchedWidth, __touchedHeight, true, 0);
-			__touchedBitmaps[__layerDepth] = bitmap;
-		}
-		__touchedBitmap = bitmap;
-		__touched = new Cairo(bitmap.getSurface());
+		__touchedBitmap = __touchedBitmaps[__layerDepth] = __scratchBitmap(__touchedBitmaps[__layerDepth], __touchedWidth, __touchedHeight);
+		__touched = new Cairo(__touchedBitmap.getSurface());
 		__touched.setSourceRGBA(0, 0, 0, 0);
 		__touched.setOperator(CairoOperator.SOURCE);
-		__touched.paint();
+		__touched.rectangle(0, 0, __touchedWidth, __touchedHeight);
+		__touched.fill();
 		__touched.setOperator(CairoOperator.OVER);
-		__touchedActive = true;
-		__walkTouched(__touchedRoot, displayObject);
+		__touchedBuilt = true;
+		__walkTouched(__touchedGroup, displayObject);
 	}
 
 	@:noCompletion private override function __drawTouched(displayObject:DisplayObject, graphicsOnly:Bool):Void
 	{
-		if (graphicsOnly) __drawGraphicsCoverage(__touched, displayObject, __touchedX, __touchedY);
-		else __drawCoverage(__touched, displayObject, __touchedX, __touchedY);
+		if (graphicsOnly) __drawGraphicsCoverage(__touched, displayObject);
+		else __drawCoverage(__touched, displayObject);
 	}
 
 	/**
@@ -801,18 +787,11 @@ class CairoRenderer extends DisplayObjectRenderer
 	@:noCompletion private function __compositeFormulaOnViews(objectPattern:CairoPattern, blendMode:BlendMode, x0:Int, y0:Int, width:Int, height:Int):Void
 	{
 		#if !js
-		var target = __layerBitmap;
+		var target = __targetBitmap;
 		var tx = 0, ty = 0;
 		if (target == null)
 		{
-			if (__copiedTarget == null || __copiedTarget.width < width || __copiedTarget.height < height)
-			{
-				var w = __copiedTarget != null && __copiedTarget.width > width ? __copiedTarget.width : width;
-				var h = __copiedTarget != null && __copiedTarget.height > height ? __copiedTarget.height : height;
-				if (__copiedTarget != null) __copiedTarget.dispose();
-				__copiedTarget = new BitmapData(w, h, true, 0);
-			}
-			target = __copiedTarget;
+			target = __windowCopy = __scratchBitmap(__windowCopy, width, height);
 			target.__surface = null;
 			tx = x0;
 			ty = y0;
@@ -829,34 +808,24 @@ class CairoRenderer extends DisplayObjectRenderer
 			copy.setOperator(CairoOperator.SOURCE);
 			copy.paint();
 		}
-		var bytes = target.image.data.buffer;
-		var stride = target.image.buffer.stride;
 
-		// the coverage as a pattern in the target's coordinates, and the object over what is not
-		// covered, (1 - c) S
+		// the coverage as a pattern, and the object over what it does not cover, (1 - c) S
 		var touched:CairoPattern = null;
 		var uncovered:CairoPattern = null;
-		if (__touchedActive)
+		if (__touchedBuilt)
 		{
-			cairo.setSourceSurface(__touchedBitmap.getSurface(), __touchedX, __touchedY);
+			cairo.setSourceSurface(__touchedBitmap.getSurface(), 0, 0);
 			touched = cairo.source;
-			cairo.pushGroupWithContent(CairoContent.COLOR_ALPHA);
-			cairo.source = objectPattern;
-			cairo.setOperator(CairoOperator.OVER);
-			cairo.paint();
-			cairo.source = touched;
-			cairo.setOperator(CairoOperator.DEST_OUT);
-			cairo.paint();
-			uncovered = cairo.popGroup();
+			uncovered = __uncoveredPattern(objectPattern);
 		}
 
 		// the alpha on its own: the object over the backdrop, in the run's plane, or for a copied
 		// target in a group written back below
 		var alpha:CairoPattern = null;
-		if (target == __copiedTarget)
+		if (target == __windowCopy)
 		{
 			cairo.pushGroupWithContent(CairoContent.ALPHA);
-			cairo.setSourceSurface(CairoImageSurface.create(bytes, CairoFormat.ARGB32, target.width, target.height, stride), tx, ty);
+			cairo.setSourceSurface(__view(target, CairoFormat.ARGB32), tx, ty);
 			cairo.setOperator(CairoOperator.SOURCE);
 			cairo.paint();
 			cairo.source = objectPattern;
@@ -875,7 +844,7 @@ class CairoRenderer extends DisplayObjectRenderer
 					__alphaPlanes[__layerDepth] = plane;
 				}
 				__alphaPlane = new Cairo(plane);
-				__alphaPlane.setSourceSurface(CairoImageSurface.create(bytes, CairoFormat.ARGB32, target.width, target.height, stride), 0, 0);
+				__alphaPlane.setSourceSurface(__view(target, CairoFormat.ARGB32), 0, 0);
 				__alphaPlane.setOperator(CairoOperator.SOURCE);
 				__alphaPlane.paint();
 				__alphaPlaneRect = Rectangle.__pool.get();
@@ -891,7 +860,7 @@ class CairoRenderer extends DisplayObjectRenderer
 		}
 
 		// the color, on the RGB24 view
-		var rgb = new Cairo(CairoImageSurface.create(bytes, CairoFormat.RGB24, target.width, target.height, stride));
+		var rgb = new Cairo(__view(target, CairoFormat.RGB24));
 		rgb.translate(-tx, -ty);
 		rgb.rectangle(x0, y0, width, height);
 		rgb.clip();
@@ -946,7 +915,7 @@ class CairoRenderer extends DisplayObjectRenderer
 			}
 		}
 
-		if (target == __copiedTarget)
+		if (target == __windowCopy)
 		{
 			__writeAlphaBytes(target, alpha, x0 - tx, y0 - ty, width, height);
 			target.__surface = null;
@@ -977,11 +946,12 @@ class CairoRenderer extends DisplayObjectRenderer
 			__alphaBytesMask.extend = CairoExtend.REPEAT;
 			__alphaBytesMask.filter = CairoFilter.NEAREST;
 		}
-		var alphaBytes = new Cairo(CairoImageSurface.create(bitmap.image.data.buffer, CairoFormat.A8, bitmap.width * 4, bitmap.height, bitmap.image.buffer.stride));
+		var alphaBytes = new Cairo(__view(bitmap, CairoFormat.A8, 4));
 		alphaBytes.rectangle(x0 * 4, y0, width * 4, height);
 		alphaBytes.clip();
 		alpha.filter = CairoFilter.NEAREST;
-		alpha.matrix = new Matrix3(0.25, 0, 0, 1, 0, 0);
+		__matrix3.setTo(0.25, 0, 0, 1, 0, 0);
+		alpha.matrix = __matrix3;
 		alphaBytes.source = alpha;
 		alphaBytes.setOperator(CairoOperator.SOURCE);
 		alphaBytes.mask(__alphaBytesMask);
@@ -994,7 +964,7 @@ class CairoRenderer extends DisplayObjectRenderer
 	@:noCompletion private function __mergeAlphaPlane():Void
 	{
 		var rect = __alphaPlaneRect;
-		__writeAlphaBytes(__layerBitmap, CairoPattern.createForSurface(__alphaPlane.target), Std.int(rect.x), Std.int(rect.y), Std.int(rect.width),
+		__writeAlphaBytes(__targetBitmap, CairoPattern.createForSurface(__alphaPlane.target), Std.int(rect.x), Std.int(rect.y), Std.int(rect.width),
 			Std.int(rect.height));
 		Rectangle.__pool.release(rect);
 		__alphaPlaneRect = null;

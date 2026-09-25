@@ -52,14 +52,13 @@ class DisplayObjectRenderer extends EventDispatcher
 	@:noCompletion private var __groupBlendMode:BlendMode;
 	// the group whose touches are tracked (see __touch); null at the top of a render, where every
 	// pixel counts as touched
-	@:noCompletion private var __touchedRoot:DisplayObject;
-	// whether that group's touched buffer has been built
-	@:noCompletion private var __touchedActive:Bool;
+	@:noCompletion private var __touchedGroup:DisplayObject;
+	@:noCompletion private var __touchedBuilt:Bool;
 	// how many groups of this renderer the current object is inside
 	@:noCompletion private var __layerDepth:Int = 0;
 	// the current buffer's level, and whether it has content yet (see __openBuffer)
 	@:noCompletion private var __bufferLevel:Int = 0;
-	@:noCompletion private var __bufferDrawn:Bool = false;
+	@:noCompletion private var __bufferHasContent:Bool = false;
 	@:noCompletion private var __pixelRatio:Float;
 	@:noCompletion private var __roundPixels:Bool;
 	@:noCompletion private var __stage:Stage;
@@ -90,28 +89,46 @@ class DisplayObjectRenderer extends EventDispatcher
 	**/
 	@:noCompletion private function __touch(displayObject:DisplayObject, subtree:Bool = false):Void
 	{
-		if (!displayObject.__renderable || displayObject.__worldAlpha <= 0) return;
-		if (__isCutter(displayObject) && !__cutterShowsAsIs()) return;
+		if (!__countsAsTouching(displayObject)) return;
 		if (subtree)
 		{
 			// a group counts as drawn into the buffer through __closeBuffer, if anything was drawn into it
-			if (__touchedActive) __walkTouched(displayObject, null);
+			if (__touchedBuilt) __walkTouched(displayObject, null);
 		}
 		else if (displayObject.__children == null)
 		{
-			__bufferDrawn = true;
-			if (__touchedActive) __drawTouched(displayObject, false);
+			__bufferHasContent = true;
+			if (__touchedBuilt) __drawTouched(displayObject, false);
 		}
 	}
 
 	/**
-		Whether `displayObject` is composited with ERASE or ALPHA, by its own mode or the one given to
-		`BitmapData.draw`.
+		The mode `displayObject` is composited with: the one given to `BitmapData.draw`, or its own,
+		which counts as NORMAL when it only inherits the mode of the group being rendered.
+	**/
+	@:noCompletion private function __effectiveBlendMode(displayObject:DisplayObject):BlendMode
+	{
+		var blendMode = __overrideBlendMode != null ? __overrideBlendMode : displayObject.__worldBlendMode;
+		return blendMode == __groupBlendMode ? NORMAL : blendMode;
+	}
+
+	/**
+		Whether `displayObject` is composited with ERASE or ALPHA (see `__effectiveBlendMode`).
 	**/
 	@:noCompletion private function __isCutter(displayObject:DisplayObject):Bool
 	{
-		var blendMode = __overrideBlendMode != null ? __overrideBlendMode : displayObject.__worldBlendMode;
+		var blendMode = __effectiveBlendMode(displayObject);
 		return blendMode == ERASE || blendMode == ALPHA;
+	}
+
+	/**
+		Whether `displayObject` counts as drawn for `__touch`: visible, and not a cutter unless cutters
+		follow the touched model here (see `__cutterShowsAsIs`).
+	**/
+	@:noCompletion private function __countsAsTouching(displayObject:DisplayObject):Bool
+	{
+		if (!displayObject.__renderable || displayObject.__worldAlpha <= 0) return false;
+		return !__isCutter(displayObject) || __cutterShowsAsIs();
 	}
 
 	/**
@@ -119,11 +136,11 @@ class DisplayObjectRenderer extends EventDispatcher
 	**/
 	@:noCompletion private function __touchGraphics(displayObject:DisplayObject):Void
 	{
-		if (!displayObject.__renderable || displayObject.__worldAlpha <= 0) return;
+		if (!__countsAsTouching(displayObject)) return;
 		var graphics = displayObject.__graphics;
 		if (graphics == null || graphics.__commands.length == 0) return;
-		__bufferDrawn = true;
-		if (__touchedActive) __drawTouched(displayObject, true);
+		__bufferHasContent = true;
+		if (__touchedBuilt) __drawTouched(displayObject, true);
 	}
 
 	/**
@@ -134,8 +151,7 @@ class DisplayObjectRenderer extends EventDispatcher
 	@:noCompletion private function __walkTouched(displayObject:DisplayObject, stopAt:DisplayObject):Bool
 	{
 		if (displayObject == stopAt) return true;
-		if (!displayObject.__renderable || displayObject.__worldAlpha <= 0) return false;
-		if (__isCutter(displayObject) && !__cutterShowsAsIs()) return false;
+		if (!__countsAsTouching(displayObject)) return false;
 		var children = displayObject.__children;
 		if (children == null)
 		{
@@ -184,7 +200,7 @@ class DisplayObjectRenderer extends EventDispatcher
 	{
 		var stage = __stage != null && __stage.__renderer == this;
 		__bufferLevel = stage ? 0 : 1;
-		__bufferDrawn = !stage;
+		__bufferHasContent = !stage;
 	}
 
 	/**
@@ -194,8 +210,8 @@ class DisplayObjectRenderer extends EventDispatcher
 	**/
 	@:noCompletion private function __openBuffer():Void
 	{
-		if (__bufferLevel == 0 || __bufferDrawn) __bufferLevel++;
-		__bufferDrawn = false;
+		if (__bufferLevel == 0 || __bufferHasContent) __bufferLevel++;
+		__bufferHasContent = false;
 	}
 
 	/**
@@ -203,7 +219,7 @@ class DisplayObjectRenderer extends EventDispatcher
 	**/
 	@:noCompletion private function __closeBuffer(level:Int, drawn:Bool):Void
 	{
-		__bufferDrawn = drawn || __bufferDrawn;
+		__bufferHasContent = drawn || __bufferHasContent;
 		__bufferLevel = level;
 	}
 
@@ -742,7 +758,7 @@ class DisplayObjectRenderer extends EventDispatcher
 						#else
 						displayObject.__cacheBitmapRenderer = new CairoRenderer(new Cairo(displayObject.__cacheBitmapData.getSurface()));
 						// the bitmap drawn into, for the composites that work on views of its bytes
-						cast(displayObject.__cacheBitmapRenderer, CairoRenderer).__layerBitmap = displayObject.__cacheBitmapData;
+						cast(displayObject.__cacheBitmapRenderer, CairoRenderer).__targetBitmap = displayObject.__cacheBitmapData;
 						#end
 					}
 
