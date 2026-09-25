@@ -54,7 +54,8 @@ class DisplayObjectRenderer extends EventDispatcher
 	// pixel counts as touched
 	@:noCompletion private var __touchedGroup:DisplayObject;
 	@:noCompletion private var __touchedBuilt:Bool;
-	// how many groups of this renderer the current object is inside
+	// how many groups the current object is inside; a cache bitmap's renderer starts at the depth it
+	// is drawn at, since the scratch buffers kept per depth are shared
 	@:noCompletion private var __layerDepth:Int = 0;
 	// the current buffer's level, and whether it has content yet (see __openBuffer)
 	@:noCompletion private var __bufferLevel:Int = 0;
@@ -81,8 +82,8 @@ class DisplayObjectRenderer extends EventDispatcher
 		Flash tracks how much of each pixel of a group earlier objects have covered. SUBTRACT and INVERT
 		draw the object as it is over uncovered pixels and apply the mode over covered ones, even where
 		the backdrop has become transparent again; ERASE and ALPHA do so only where `__cutterShowsAsIs`
-		holds. The buffer is built on demand (see `__ensureTouched`); without one, every pixel counts as
-		covered.
+		holds. A group builds its buffer the first time one of these needs it (see `__ensureTouched`);
+		outside any group there is none, and every pixel counts as covered.
 
 		A leaf adds its own coverage, a container's graphics are added by `__touchGraphics`, and with
 		`subtree` an object rendered as a group of its own is added as a whole.
@@ -103,8 +104,9 @@ class DisplayObjectRenderer extends EventDispatcher
 	}
 
 	/**
-		The mode `displayObject` is composited with: the one given to `BitmapData.draw`, or its own,
-		which counts as NORMAL when it only inherits the mode of the group being rendered.
+		The mode `displayObject` is composited with: the one given to `BitmapData.draw`, or its world
+		mode. The mode of the group being rendered counts as NORMAL, since the group's composite
+		applies it.
 	**/
 	@:noCompletion private function __effectiveBlendMode(displayObject:DisplayObject):BlendMode
 	{
@@ -144,9 +146,10 @@ class DisplayObjectRenderer extends EventDispatcher
 	}
 
 	/**
-		Draws the coverage of everything under `displayObject` into the touched buffer in drawing order,
-		stopping at `stopAt`, and returns whether it was reached. Used to fill a buffer built after the
-		fact (see `__ensureTouched`). Cutters are skipped unless `__cutterShowsAsIs` holds.
+		Draws the coverage of `displayObject` and its descendants into the touched buffer in drawing
+		order, stopping at `stopAt`, and returns whether it was reached. It fills a buffer built after
+		the fact (see `__ensureTouched`) and adds a whole group (see `__touch`). Objects that do not
+		count as touching are skipped with their children (see `__countsAsTouching`).
 	**/
 	@:noCompletion private function __walkTouched(displayObject:DisplayObject, stopAt:DisplayObject):Bool
 	{
@@ -185,7 +188,7 @@ class DisplayObjectRenderer extends EventDispatcher
 		Whether ERASE and ALPHA follow the touched model here (see `__touch`) instead of simply cutting.
 		On screen Flash does so only in a buffer nested inside one that has content
 		(see `__openBuffer`). The bitmap of `BitmapData.draw` counts as a buffer with content, so every
-		LAYER inside a draw call does.
+		group inside a draw call does.
 	**/
 	@:noCompletion private inline function __cutterShowsAsIs():Bool
 	{
@@ -215,11 +218,12 @@ class DisplayObjectRenderer extends EventDispatcher
 	}
 
 	/**
-		Leaves a group and restores `level`. The outer buffer has content if the group got any.
+		Leaves a group and restores the outer buffer's `level`. The outer buffer has content if it had
+		some before (`hadContent`) or the group got any.
 	**/
-	@:noCompletion private function __closeBuffer(level:Int, drawn:Bool):Void
+	@:noCompletion private function __closeBuffer(level:Int, hadContent:Bool):Void
 	{
-		__bufferHasContent = drawn || __bufferHasContent;
+		__bufferHasContent = hadContent || __bufferHasContent;
 		__bufferLevel = level;
 	}
 

@@ -115,8 +115,8 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	@:noCompletion private var __width:Int;
 	@:noCompletion private var __groupOffsetX:Int = 0;
 	@:noCompletion private var __groupOffsetY:Int = 0;
-	// group scratchBuffer buffers (textures: object, backdrop) and clip stacks per nesting level, shared by
-	// every renderer on the context: a cacheAsBitmap child renderer can run inside a group
+	// group scratch buffers (object, backdrop, ALPHA coverage, touched) and clip stacks per nesting
+	// level, shared by every renderer on the context: a cacheAsBitmap child renderer can run inside a group
 	@:noCompletion private static var __groupClipRects:Array<Array<Rectangle>> = [];
 	@:noCompletion private static var __groupDepth:Int = 0;
 	@:noCompletion private static var __groupScratchBuffers:Array<BitmapData> = [];
@@ -1221,7 +1221,7 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		var cacheOverrideBlendMode = __overrideBlendMode;
 		var cacheGroupBlendMode = __groupBlendMode;
 		var cacheWorldAlpha = __worldAlpha;
-		// a group tracks what its children touch, from the moment a child needs it (see __touch)
+		// a group tracks what its children touch, from the moment a child needs it (see __ensureTouched)
 		var cacheTouchedRoot = __touchedGroup, cacheTouched = __touched, cacheTouchedActive = __touchedBuilt;
 		__touchedGroup = displayObject;
 		__touched = null;
@@ -1333,7 +1333,7 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	{
 		var shader = __staticBlendShader;
 		shader.prepare(__shaderModeId(blendMode), alpha, discardTransparent, coverage);
-		var reads = blendMode == SUBTRACT || blendMode == INVERT || __cutterShowsAsIs();
+		var reads = blendMode == SUBTRACT || blendMode == INVERT || ((blendMode == ERASE || blendMode == ALPHA) && __cutterShowsAsIs());
 		if (reads) __ensureTouched(displayObject);
 		shader.setTouched(reads && __touchedBuilt ? __touched : null);
 		return shader;
@@ -1701,8 +1701,8 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	/**
 		Draws the area covered by the graphics of `displayObject` into the current target, opaque
 		(see `__drawCoverage`): a shape's coverage render, made if missing, or for a text field the
-		alpha of its bitmap, which it draws in opaque colors. A shape drawn as triangles draws its fills
-		directly.
+		alpha of its bitmap, which it draws in opaque colors. Without either, the whole bitmap. A shape
+		drawn as triangles draws its fills directly.
 	**/
 	@:noCompletion private function __drawGraphicsCoverage(displayObject:DisplayObject):Void
 	{
@@ -1725,10 +1725,8 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		Draws an opaque quad the size of `geometry`, placed with `matrix` and filled from `texture`.
-	**/
-	/**
-		A 1x1 opaque texture: the coverage pass draws every leaf's footprint with it (see `__drawCoverage`).
+		A 1x1 opaque white texture, for quads that only cover an area: leaf footprints and graphics
+		without a coverage render (see `__drawCoverage`), and `__scaleScratchAlpha`.
 	**/
 	@:noCompletion private static function __white():BitmapData
 	{
@@ -1736,6 +1734,9 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		return __staticWhite;
 	}
 
+	/**
+		Draws an opaque quad the size of `geometry`, placed with `matrix` and filled from `texture`.
+	**/
 	@:noCompletion private function __drawCoverageQuad(geometry:BitmapData, texture:BitmapData, matrix:Matrix):Void
 	{
 		var context = __context3D;

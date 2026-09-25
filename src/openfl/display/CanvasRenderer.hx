@@ -311,12 +311,10 @@ class CanvasRenderer extends DisplayObjectRenderer
 			objectContext.fillRect(0, 0, width, height);
 		}
 
-		// Flash applies SUBTRACT and INVERT to the part of every pixel that earlier objects have
-		// covered (see __touch), and draws the object as it is over the rest; ERASE and ALPHA cut
-		// wherever they are drawn. ALPHA and ERASE work with composite operations, and so do
-		// SUBTRACT and INVERT on an opaque target, whose formulas then have an opaque backdrop and
-		// nothing touched to tell apart. On a transparent target SUBTRACT and INVERT are done pixel
-		// by pixel: their formulas take the covered part's color, which no operation can give
+		// SUBTRACT and INVERT apply to the part of each pixel that earlier objects covered (see
+		// __touch) and show the object as it is over the rest. An opaque target is outside any group,
+		// so all of it counts as covered and composite operations do; on a transparent one they go
+		// pixel by pixel, since no operation gives the covered part's color
 		var pixels = (blendMode == SUBTRACT || blendMode == INVERT) && !__backdropIsOpaque();
 		if (pixels) __ensureTouched(displayObject);
 		// a cutter following the touched model (see __cutterShowsAsIs): the object over what is not
@@ -557,7 +555,7 @@ class CanvasRenderer extends DisplayObjectRenderer
 	/**
 		Paints the area covered by the graphics of `displayObject` into `coverage`
 		(see `__drawCoverage`): a shape's coverage render, made if missing, or for a text field the
-		alpha of its bitmap, which it draws in opaque colors.
+		alpha of its canvas, which it draws in opaque colors. Without either, the graphics' bounds.
 	**/
 	@:noCompletion private function __drawGraphicsCoverage(coverage:js.html.CanvasRenderingContext2D, displayObject:DisplayObject, x0:Int, y0:Int):Void
 	{

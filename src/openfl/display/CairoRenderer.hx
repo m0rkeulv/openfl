@@ -304,9 +304,9 @@ class CairoRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		Renders a container into a bitmap of its own (see `__renderIntoGroup`) and draws it onto the
-		target as one image with the container's alpha: with OVER for a LAYER, or with the operator of
-		`blendMode` for a container blended as a whole (see `__needsWholeObjectGroup`).
+		Renders `object` into a group bitmap (see `__renderIntoGroup`) and draws it onto the target as
+		one image with the object's alpha: with OVER for a LAYER, or with the operator of `blendMode`
+		for a container blended as a whole (see `__needsWholeObjectGroup`).
 	**/
 	@:noCompletion private function __renderGroup(object:IBitmapDrawable, blendMode:BlendMode = LAYER):Void
 	{
@@ -407,7 +407,7 @@ class CairoRenderer extends DisplayObjectRenderer
 		var parentLevel = __bufferLevel, parentDrawn = __bufferHasContent;
 		__openBuffer();
 		__blendMode = null;
-		// the group tracks what its children touch, from the moment a child needs it (see __touch)
+		// the group tracks what its children touch, from the moment a child needs it (see __ensureTouched)
 		var parentTouchedRoot = __touchedGroup, parentTouched = __touched, parentTouchedBitmap = __touchedBitmap;
 		var parentTouchedActive = __touchedBuilt;
 		var parentTouchedWidth = __touchedWidth, parentTouchedHeight = __touchedHeight;
@@ -693,7 +693,7 @@ class CairoRenderer extends DisplayObjectRenderer
 	/**
 		Paints the area covered by the graphics of `displayObject` into `coverage`
 		(see `__drawCoverage`): a shape's coverage render, made if missing, or for a text field the
-		alpha of its bitmap, which it draws in opaque colors.
+		alpha of its bitmap, which it draws in opaque colors. Without either, the whole bitmap.
 	**/
 	@:noCompletion private function __drawGraphicsCoverage(coverage:Cairo, displayObject:DisplayObject):Void
 	{
@@ -1000,8 +1000,8 @@ class CairoRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		SUBTRACT on an opaque target: a LIGHTEN then a DIFFERENCE with the object, premultiplied over
-		black first (see `__premultipliedPattern`).
+		SUBTRACT on an opaque target: a LIGHTEN then a DIFFERENCE with `objectPattern`, which the caller
+		has premultiplied over black (see `__premultipliedPattern`).
 	**/
 	@:noCompletion private function __compositeSubtract(objectPattern:CairoPattern):Void
 	{
