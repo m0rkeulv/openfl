@@ -6,6 +6,7 @@ import openfl.display._internal.DrawCommandReader;
 import openfl.display.BitmapData;
 import openfl.display.CairoRenderer;
 import openfl.display.GradientType;
+import openfl.display.BlendMode;
 import openfl.display.Graphics;
 import openfl.display.InterpolationMethod;
 import openfl.display.SpreadMethod;
@@ -53,6 +54,9 @@ class CairoGraphics
 	private static var hasFill:Bool;
 	private static var hasStroke:Bool;
 	private static var hitTesting:Bool;
+	// __renderCommands renders coverage: every fill and stroke opaque black
+	private static var coverage:Bool;
+	private static var coveragePattern:CairoPattern;
 	private static var inversePendingMatrix:Matrix;
 	private static var pendingMatrix:Matrix;
 	private static var strokeCommands:DrawCommandBuffer = new DrawCommandBuffer();
@@ -113,7 +117,7 @@ class CairoGraphics
 			}
 		}
 
-		cairo.source = strokePattern;
+		cairo.source = coverage ? coveragePattern : strokePattern;
 		if (!hitTesting) cairo.strokePreserve();
 
 		if (strokeBefore)
@@ -688,6 +692,7 @@ class CairoGraphics
 						{
 							data.destroy();
 							CairoGraphics.graphics = null;
+							hitTesting = false;
 							return true;
 						}
 
@@ -711,6 +716,7 @@ class CairoGraphics
 						{
 							data.destroy();
 							CairoGraphics.graphics = null;
+							hitTesting = false;
 							return true;
 						}
 
@@ -720,6 +726,7 @@ class CairoGraphics
 						{
 							data.destroy();
 							CairoGraphics.graphics = null;
+							hitTesting = false;
 							return true;
 						}
 
@@ -734,6 +741,7 @@ class CairoGraphics
 						{
 							data.destroy();
 							CairoGraphics.graphics = null;
+							hitTesting = false;
 							return true;
 						}
 
@@ -743,6 +751,7 @@ class CairoGraphics
 						{
 							data.destroy();
 							CairoGraphics.graphics = null;
+							hitTesting = false;
 							return true;
 						}
 
@@ -831,6 +840,7 @@ class CairoGraphics
 			data.destroy();
 
 			CairoGraphics.graphics = null;
+			hitTesting = false;
 			return hitTest;
 		}
 		#end
@@ -1481,7 +1491,7 @@ class CairoGraphics
 						tempMatrix3.tx = tileRect.x;
 						tempMatrix3.ty = tileRect.y;
 						fillPattern.matrix = tempMatrix3;
-						cairo.source = fillPattern;
+						cairo.source = coverage ? coveragePattern : fillPattern;
 
 						if (tileRect != sourceRect)
 						{
@@ -1494,7 +1504,7 @@ class CairoGraphics
 
 						if (!hitTesting)
 						{
-							if (alpha == 1)
+							if (alpha == 1 || coverage)
 							{
 								cairo.paint();
 							}
@@ -1675,7 +1685,7 @@ class CairoGraphics
 								}
 							}
 
-							cairo.source = fillPattern;
+							cairo.source = coverage ? coveragePattern : fillPattern;
 							if (!hitTesting) cairo.fillPreserve();
 
 							if (!hitTesting && hasScale9Grid && fillScale9Bounds != null && bitmapFill != null)
@@ -1730,7 +1740,7 @@ class CairoGraphics
 
 						tempMatrix3.setTo(t1, t2, t3, t4, dx, dy);
 						cairo.matrix = tempMatrix3;
-						cairo.source = fillPattern;
+						cairo.source = coverage ? coveragePattern : fillPattern;
 						if (!hitTesting) cairo.fill();
 
 						i += 3;
@@ -1845,7 +1855,7 @@ class CairoGraphics
 					Matrix.__pool.release(matrix);
 				}
 
-				cairo.source = strokePattern;
+				cairo.source = coverage ? coveragePattern : strokePattern;
 				if (!hitTesting) cairo.strokePreserve();
 			}
 
@@ -1898,7 +1908,7 @@ class CairoGraphics
 					Matrix.__pool.release(matrix);
 				}
 
-				cairo.source = fillPattern;
+				cairo.source = coverage ? coveragePattern : fillPattern;
 
 				if (pendingMatrix != null)
 				{
@@ -1952,94 +1962,15 @@ class CairoGraphics
 	}
 	#end
 
-	public static function render(graphics:Graphics, renderer:CairoRenderer):Void
+	/**
+		Plays the graphics' drawing commands into `target`. This is the normal render or, while
+		`coverage` is set, the coverage render, in which every fill and stroke is drawn opaque black.
+	**/
+	#if lime_cairo
+	private static function __renderCommands(graphics:Graphics, renderer:CairoRenderer, target:Cairo):Void
 	{
-		#if lime_cairo
-		CairoGraphics.graphics = graphics;
-		CairoGraphics.allowSmoothing = renderer.__allowSmoothing;
-		CairoGraphics.worldAlpha = renderer.__getAlpha(graphics.__owner.__worldAlpha);
-
-		#if (openfl_disable_hdpi || openfl_disable_hdpi_graphics)
-		var pixelRatio = 1;
-		#else
-		var pixelRatio = renderer.__pixelRatio;
-		#end
-
-		graphics.__update(renderer.__worldTransform, pixelRatio);
-
-		if (!graphics.__softwareDirty || graphics.__managed)
-		{
-			CairoGraphics.graphics = null;
-			return;
-		}
-
-		var scale9Grid:Rectangle = graphics.__owner.__scale9Grid;
-		#if (openfl_legacy_scale9grid && !cairo)
-		var hasScale9Grid:Bool = false;
-		#else
-		// no scale9Grid for masks
-		// no scale9Grid for rotation 0.02 degrees or higher (less than 0.02 is allowed in flash)
-		var hasScale9Grid = scale9Grid != null && !graphics.__owner.__isMask && Math.abs(graphics.__owner.__rotation) < 0.02;
-		#end
-		if (hasScale9Grid)
-		{
-			graphics.__bitmapScaleX = Math.abs(graphics.__owner.scaleX);
-			graphics.__bitmapScaleY = Math.abs(graphics.__owner.scaleY);
-		}
-		else
-		{
-			graphics.__bitmapScaleX = 1;
-			graphics.__bitmapScaleY = 1;
-		}
-
-		bounds = graphics.__bounds;
-
-		var width = graphics.__width;
-		var height = graphics.__height;
-
-		if (!graphics.__visible || graphics.__commands.length == 0 || bounds == null || width < 1 || height < 1)
-		{
-			graphics.__cairo = null;
-			graphics.__bitmap = null;
-		}
-		else
-		{
-			hitTesting = false;
-			var needsUpscaling = false;
-
-			if (graphics.__cairo != null)
-			{
-				var surface:CairoImageSurface = cast graphics.__cairo.target;
-
-				if (width > surface.width || height > surface.height)
-				{
-					graphics.__cairo = null;
-					needsUpscaling = true;
-				}
-			}
-
-			if (graphics.__cairo == null || graphics.__bitmap == null)
-			{
-				var bitmapWidth = needsUpscaling ? Std.int(width * 1.25) : width;
-				var bitmapHeight = needsUpscaling ? Std.int(height * 1.25) : height;
-
-				if (Graphics.maxTextureWidth != null && bitmapWidth > Graphics.maxTextureWidth)
-				{
-					bitmapWidth = Graphics.maxTextureWidth;
-				}
-
-				if (Graphics.maxTextureHeight != null && bitmapHeight > Graphics.maxTextureHeight)
-				{
-					bitmapHeight = Graphics.maxTextureHeight;
-				}
-
-				var bitmap = new BitmapData(bitmapWidth, bitmapHeight, true, 0);
-				var surface = bitmap.getSurface();
-				graphics.__cairo = new Cairo(surface);
-				graphics.__bitmap = bitmap;
-			}
-
-			cairo = graphics.__cairo;
+		if (CairoGraphics.coverage && coveragePattern == null) coveragePattern = CairoPattern.createRGB(0, 0, 0);
+		cairo = target;
 
 			renderer.__setBlendModeCairo(cairo, NORMAL);
 			renderer.applyMatrix(graphics.__renderTransform, cairo);
@@ -2279,6 +2210,121 @@ class CairoGraphics
 			}
 
 			data.destroy();
+	}
+	#end
+
+	/**
+		Renders the graphics to their surface if they have changed. When `withCoverage` is true, it also
+		renders their coverage, which ALPHA uses as a mask, including for graphics that were rendered
+		before without one.
+	**/
+	public static function render(graphics:Graphics, renderer:CairoRenderer, withCoverage:Bool = false):Void
+	{
+		#if lime_cairo
+		CairoGraphics.graphics = graphics;
+		CairoGraphics.allowSmoothing = renderer.__allowSmoothing;
+		CairoGraphics.worldAlpha = renderer.__getAlpha(graphics.__owner.__worldAlpha);
+
+		#if (openfl_disable_hdpi || openfl_disable_hdpi_graphics)
+		var pixelRatio = 1;
+		#else
+		var pixelRatio = renderer.__pixelRatio;
+		#end
+
+		graphics.__update(renderer.__worldTransform, pixelRatio);
+
+		if (!graphics.__softwareDirty || graphics.__managed)
+		{
+			// a shape that came under ALPHA after its render (its blend mode changed, or an ancestor's)
+			// still needs its coverage: rendered here on its own, the fills being unchanged
+			if (withCoverage && !graphics.__managed && graphics.__coverage == null && graphics.__bitmap != null)
+			{
+				bounds = graphics.__bounds;
+				__renderCoverage(graphics, renderer);
+			}
+			CairoGraphics.graphics = null;
+			return;
+		}
+
+		var scale9Grid:Rectangle = graphics.__owner.__scale9Grid;
+		#if (openfl_legacy_scale9grid && !cairo)
+		var hasScale9Grid:Bool = false;
+		#else
+		// no scale9Grid for masks
+		// no scale9Grid for rotation 0.02 degrees or higher (less than 0.02 is allowed in flash)
+		var hasScale9Grid = scale9Grid != null && !graphics.__owner.__isMask && Math.abs(graphics.__owner.__rotation) < 0.02;
+		#end
+		if (hasScale9Grid)
+		{
+			graphics.__bitmapScaleX = Math.abs(graphics.__owner.scaleX);
+			graphics.__bitmapScaleY = Math.abs(graphics.__owner.scaleY);
+		}
+		else
+		{
+			graphics.__bitmapScaleX = 1;
+			graphics.__bitmapScaleY = 1;
+		}
+
+		bounds = graphics.__bounds;
+
+		var width = graphics.__width;
+		var height = graphics.__height;
+
+		if (!graphics.__visible || graphics.__commands.length == 0 || bounds == null || width < 1 || height < 1)
+		{
+			graphics.__cairo = null;
+			graphics.__bitmap = null;
+			graphics.__coverage = null;
+		}
+		else
+		{
+			hitTesting = false;
+			var needsUpscaling = false;
+
+			if (graphics.__cairo != null)
+			{
+				var surface:CairoImageSurface = cast graphics.__cairo.target;
+
+				if (width > surface.width || height > surface.height)
+				{
+					graphics.__cairo = null;
+					needsUpscaling = true;
+				}
+			}
+
+			if (graphics.__cairo == null || graphics.__bitmap == null)
+			{
+				var bitmapWidth = needsUpscaling ? Std.int(width * 1.25) : width;
+				var bitmapHeight = needsUpscaling ? Std.int(height * 1.25) : height;
+
+				if (Graphics.maxTextureWidth != null && bitmapWidth > Graphics.maxTextureWidth)
+				{
+					bitmapWidth = Graphics.maxTextureWidth;
+				}
+
+				if (Graphics.maxTextureHeight != null && bitmapHeight > Graphics.maxTextureHeight)
+				{
+					bitmapHeight = Graphics.maxTextureHeight;
+				}
+
+				var bitmap = new BitmapData(bitmapWidth, bitmapHeight, true, 0);
+				var surface = bitmap.getSurface();
+				graphics.__cairo = new Cairo(surface);
+				graphics.__bitmap = bitmap;
+			}
+
+			__renderCommands(graphics, renderer, graphics.__cairo);
+
+			// a shape under ALPHA also needs its coverage, every fill and stroke opaque, so the
+			// composite can keep the uncovered part of an edge pixel (see CairoRenderer)
+			if (withCoverage)
+			{
+				__renderCoverage(graphics, renderer);
+			}
+			else
+			{
+				graphics.__coverage = null;
+			}
 
 			graphics.__bitmap.image.dirty = true;
 			graphics.__bitmap.image.version++;
@@ -2287,6 +2333,28 @@ class CairoGraphics
 		graphics.__softwareDirty = false;
 		graphics.__dirty = false;
 		CairoGraphics.graphics = null;
+		#end
+	}
+
+	/**
+		Renders the fills and strokes of `graphics` fully opaque into `graphics.__coverage`, a bitmap
+		the same size as `graphics.__bitmap`.
+	**/
+	private static function __renderCoverage(graphics:Graphics, renderer:CairoRenderer):Void
+	{
+		#if lime_cairo
+		var bitmap = graphics.__bitmap;
+		if (graphics.__coverage == null || graphics.__coverage.width != bitmap.width || graphics.__coverage.height != bitmap.height)
+		{
+			graphics.__coverage = new BitmapData(bitmap.width, bitmap.height, true, 0);
+		}
+		CairoGraphics.coverage = true;
+		__renderCommands(graphics, renderer, new Cairo(graphics.__coverage.getSurface()));
+		CairoGraphics.coverage = false;
+		// the OpenGL renderer uploads the coverage as a texture and re-uploads it only when the
+		// image version grows, like __bitmap
+		graphics.__coverage.image.dirty = true;
+		graphics.__coverage.image.version++;
 		#end
 	}
 
