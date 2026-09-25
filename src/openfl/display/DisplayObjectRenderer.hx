@@ -30,6 +30,7 @@ import lime.graphics.RenderContextType;
 @:access(openfl.display.BitmapData)
 @:access(openfl.display.DisplayObject)
 @:access(openfl.display.Graphics)
+@:access(openfl.display.Stage)
 @:access(openfl.display.Tilemap)
 @:access(openfl.display3D.Context3D)
 @:access(openfl.events.RenderEvent)
@@ -54,6 +55,15 @@ class DisplayObjectRenderer extends EventDispatcher
 	@:noCompletion private var __touchedRoot:DisplayObject;
 	// whether the touched buffer of that group has been built and is being kept up to date
 	@:noCompletion private var __touchedActive:Bool;
+	// how many groups of this renderer the object being drawn is inside: LAYER groups, the groups
+	// of containers blended as a whole, and the groups an object is rendered into on its own before
+	// a formula or shader composites it
+	@:noCompletion private var __layerDepth:Int = 0;
+	// the level of the buffer being drawn into, and whether anything has been drawn into it yet (see
+	// __openBuffer): the stage is level 0, the bitmap of a BitmapData.draw call or a cache bitmap
+	// level 1 with content, and a group opens a level of its own unless its buffer is still empty
+	@:noCompletion private var __bufferLevel:Int = 0;
+	@:noCompletion private var __bufferDrawn:Bool = false;
 	@:noCompletion private var __pixelRatio:Float;
 	@:noCompletion private var __roundPixels:Bool;
 	@:noCompletion private var __stage:Stage;
@@ -73,13 +83,14 @@ class DisplayObjectRenderer extends EventDispatcher
 		Records that `displayObject` has just been drawn into the current group, by adding what it
 		covers to the group's touched buffer.
 
-		This matters for SUBTRACT, INVERT, ERASE and ALPHA. Flash keeps, for every pixel of a group, how
-		much of it earlier objects have covered: the fills of shapes and text at their anti-aliasing, a
-		Bitmap over its whole rectangle, and ERASE and ALPHA objects included, even though they lower the
-		alpha. Where nothing has covered a pixel, an object with one of these modes is drawn as it is;
-		where something has, the mode applies, even if the backdrop has been made transparent again;
-		and at a partly covered edge pixel the two are mixed by the coverage. The backdrop's alpha
-		alone cannot tell these apart, so the coverage is kept in a buffer of its own.
+		This matters for SUBTRACT and INVERT. Flash keeps, for every pixel of a group, how much of it
+		earlier objects have covered: the fills of shapes and text at their anti-aliasing, a Bitmap over
+		its whole rectangle. Where nothing has covered a pixel, a SUBTRACT or INVERT object is drawn as
+		it is; where something has, the mode applies, even if the backdrop has been made transparent
+		again; and at a partly covered edge pixel the two are mixed by the coverage. The backdrop's
+		alpha alone cannot tell these apart, so the coverage is kept in a buffer of its own. ERASE and
+		ALPHA objects neither read it nor add to it: they cut wherever they are drawn, which over an
+		untouched pixel is nothing (see `__drawsOntoStage`).
 
 		The buffer is built only when a group turns out to contain such an object (see
 		`__ensureTouched`), and is null where everything counts as touched: the stage, the bitmap of a
@@ -92,10 +103,29 @@ class DisplayObjectRenderer extends EventDispatcher
 	**/
 	@:noCompletion private function __touch(displayObject:DisplayObject, subtree:Bool = false):Void
 	{
-		if (!__touchedActive) return;
 		if (!displayObject.__renderable || displayObject.__worldAlpha <= 0) return;
-		if (subtree) __walkTouched(displayObject, null);
-		else if (displayObject.__children == null) __drawTouched(displayObject, false);
+		if (__isCutter(displayObject) && !__cutterShowsAsIs()) return;
+		if (subtree)
+		{
+			// a group counts as drawn into the buffer through __closeBuffer, if anything was drawn into it
+			if (__touchedActive) __walkTouched(displayObject, null);
+		}
+		else if (displayObject.__children == null)
+		{
+			__bufferDrawn = true;
+			if (__touchedActive) __drawTouched(displayObject, false);
+		}
+	}
+
+	/**
+		Whether `displayObject` is composited with ERASE or ALPHA, through its own blend mode or the one
+		given to `BitmapData.draw`: a cutter, which counts as touching only where it is drawn as it is
+		over untouched pixels (see `__cutterShowsAsIs`).
+	**/
+	@:noCompletion private function __isCutter(displayObject:DisplayObject):Bool
+	{
+		var blendMode = __overrideBlendMode != null ? __overrideBlendMode : displayObject.__worldBlendMode;
+		return blendMode == ERASE || blendMode == ALPHA;
 	}
 
 	/**
@@ -103,20 +133,24 @@ class DisplayObjectRenderer extends EventDispatcher
 	**/
 	@:noCompletion private function __touchGraphics(displayObject:DisplayObject):Void
 	{
-		if (!__touchedActive) return;
 		if (!displayObject.__renderable || displayObject.__worldAlpha <= 0) return;
-		if (displayObject.__graphics != null) __drawTouched(displayObject, true);
+		var graphics = displayObject.__graphics;
+		if (graphics == null || graphics.__commands.length == 0) return;
+		__bufferDrawn = true;
+		if (__touchedActive) __drawTouched(displayObject, true);
 	}
 
 	/**
 		Draws the coverage of everything under `displayObject` into the touched buffer, in drawing
-		order, and stops before `stopAt`. Returns true if `stopAt` was reached. With `stopAt` null,
-		the whole subtree is drawn.
+		order, leaving out cutters and what is under them where they do not count as touching (see
+		`__cutterShowsAsIs`), and stops before `stopAt`. Returns true if `stopAt` was reached. With
+		`stopAt` null, the whole subtree is drawn.
 	**/
 	@:noCompletion private function __walkTouched(displayObject:DisplayObject, stopAt:DisplayObject):Bool
 	{
 		if (displayObject == stopAt) return true;
 		if (!displayObject.__renderable || displayObject.__worldAlpha <= 0) return false;
+		if (__isCutter(displayObject) && !__cutterShowsAsIs()) return false;
 		var children = displayObject.__children;
 		if (children == null)
 		{
@@ -138,6 +172,70 @@ class DisplayObjectRenderer extends EventDispatcher
 		buffer.
 	**/
 	@:noCompletion private function __drawTouched(displayObject:DisplayObject, graphicsOnly:Bool):Void {}
+
+	/**
+		Whether what is drawn now goes straight onto the stage (see `__bufferLevel`): into no group of
+		this renderer, not into the bitmap of a `BitmapData.draw` call, and not into the cache bitmap
+		of an object with filters or cacheAsBitmap, whose renderer is given the stage but draws into a
+		bitmap.
+
+		Flash draws an ERASE or ALPHA object only where this is false: a cutter needs a buffer of its
+		own to cut into, a LAYER, a container blended as a whole, a cache bitmap or a bitmap being drawn
+		into, and straight on the stage it is not drawn at all, whether the stage is opaque or not.
+	**/
+	@:noCompletion private inline function __drawsOntoStage():Bool
+	{
+		return __bufferLevel == 0;
+	}
+
+	/**
+		Whether an ERASE or ALPHA object composited now follows the touched model like SUBTRACT and
+		INVERT, drawn as it is over untouched pixels and counting as touching (see `__touch`), rather
+		than simply cutting, which over an untouched pixel is nothing.
+
+		Flash's window cuts in the first buffer, a LAYER or a container blended as a whole straight on
+		the stage, and follows the touched model in a buffer inside a buffer that has content (see
+		`__openBuffer`). BitmapData.draw's bitmap counts as a first buffer with content, so its draw()
+		follows the model in every LAYER inside it.
+	**/
+	@:noCompletion private inline function __cutterShowsAsIs():Bool
+	{
+		return __bufferLevel >= 2;
+	}
+
+	/**
+		Sets the buffer level for a render (see `__bufferLevel`): the stage, or a bitmap with content
+		when this renderer draws into the bitmap of a `BitmapData.draw` call or the cache bitmap of an
+		object with filters or cacheAsBitmap, whose renderer is given the stage but draws into a bitmap.
+	**/
+	@:noCompletion private function __resetBufferLevel():Void
+	{
+		var stage = __stage != null && __stage.__renderer == this;
+		__bufferLevel = stage ? 0 : 1;
+		__bufferDrawn = !stage;
+	}
+
+	/**
+		Opens a group's buffer: a level of its own when the buffer it is drawn into is the stage or has
+		content, or that buffer's own level when it is still empty, as Flash then draws the group
+		straight into it. The caller keeps the previous `__bufferLevel` and `__bufferDrawn` for
+		`__closeBuffer`.
+	**/
+	@:noCompletion private function __openBuffer():Void
+	{
+		if (__bufferLevel == 0 || __bufferDrawn) __bufferLevel++;
+		__bufferDrawn = false;
+	}
+
+	/**
+		Closes a group's buffer opened by `__openBuffer`: the group counts as drawn into the buffer it
+		was drawn into if anything was drawn into the group.
+	**/
+	@:noCompletion private function __closeBuffer(level:Int, drawn:Bool):Void
+	{
+		__bufferDrawn = drawn || __bufferDrawn;
+		__bufferLevel = level;
+	}
 
 	/**
 		Whether a shape should also render its coverage: a second copy of its fills, drawn fully opaque,
@@ -673,6 +771,8 @@ class DisplayObjectRenderer extends EventDispatcher
 						displayObject.__cacheBitmapRenderer = new CanvasRenderer(displayObject.__cacheBitmapData.image.buffer.__srcContext);
 						#else
 						displayObject.__cacheBitmapRenderer = new CairoRenderer(new Cairo(displayObject.__cacheBitmapData.getSurface()));
+						// the bitmap drawn into, for the composites that work on views of its bytes
+						cast(displayObject.__cacheBitmapRenderer, CairoRenderer).__layerBitmap = displayObject.__cacheBitmapData;
 						#end
 					}
 
@@ -686,6 +786,9 @@ class DisplayObjectRenderer extends EventDispatcher
 				if (displayObject.__cacheBitmapColorTransform == null) displayObject.__cacheBitmapColorTransform = new ColorTransform();
 
 				displayObject.__cacheBitmapRenderer.__stage = displayObject.stage;
+				// the scratch bitmaps of the groups are kept per layer depth and shared by every renderer:
+				// the cache is drawn while this renderer's groups are open, so its own start above them
+				displayObject.__cacheBitmapRenderer.__layerDepth = __layerDepth;
 
 				displayObject.__cacheBitmapRenderer.__allowSmoothing = renderer.__allowSmoothing;
 				// another renderer has drawn with this context since, so the mode is applied whatever

@@ -46,8 +46,6 @@ class CanvasRenderer extends DisplayObjectRenderer
 
 	@:noCompletion private var __isDOM:Bool;
 	@:noCompletion private var __tempMatrix:Matrix;
-	@:noCompletion private var __blendGroupDepth:Int = 0;
-	@:noCompletion private var __layerDepth:Int = 0;
 
 	#if (js && html5)
 	@:noCompletion private static var __groupCanvases:Array<js.html.CanvasElement> = [];
@@ -196,6 +194,7 @@ class CanvasRenderer extends DisplayObjectRenderer
 
 	@:noCompletion private override function __render(object:IBitmapDrawable):Void
 	{
+		__resetBufferLevel();
 		// the root is rendered as it is, its own blend mode being its parent's to apply, unless
 		// BitmapData.draw gave a blend mode: then the root is composited with it, as one object
 		if (__overrideBlendMode != null && __overrideBlendMode != NORMAL) __renderDrawable(object);
@@ -213,32 +212,36 @@ class CanvasRenderer extends DisplayObjectRenderer
 
 			// LAYER composes the subtree offscreen; the modes without a composite operation
 			// are composed the same way (see __renderGroup)
-			if (displayObject.__blendMode == LAYER && __blendGroupDepth == 0 && (__overrideBlendMode == null || __overrideBlendMode == NORMAL))
+			if (displayObject.__blendMode == LAYER && (__overrideBlendMode == null || __overrideBlendMode == NORMAL))
 			{
 				__renderGroup(displayObject, LAYER);
 				__touch(displayObject, true);
 				return;
 			}
 
-			if (__blendGroupDepth == 0)
-			{
-				var blendMode = __overrideBlendMode != null ? __overrideBlendMode : displayObject.__worldBlendMode;
-				if (blendMode == __groupBlendMode) blendMode = NORMAL;
+			var blendMode = __overrideBlendMode != null ? __overrideBlendMode : displayObject.__worldBlendMode;
+			if (blendMode == __groupBlendMode) blendMode = NORMAL;
 
-				switch (blendMode)
-				{
-					case SUBTRACT, INVERT, ERASE, ALPHA:
+			switch (blendMode)
+			{
+				case ERASE, ALPHA:
+					// a cutter is drawn only into a buffer of its own (see __drawsOntoStage); it
+					// counts as touching only where it is drawn as it is (see __cutterShowsAsIs)
+					if (__drawsOntoStage()) return;
+					__renderGroup(displayObject, blendMode);
+					__touch(displayObject, true);
+					return;
+				case SUBTRACT, INVERT:
+					__renderGroup(displayObject, blendMode);
+					__touch(displayObject, true);
+					return;
+				default:
+					if (__needsWholeObjectGroup(displayObject, blendMode))
+					{
 						__renderGroup(displayObject, blendMode);
 						__touch(displayObject, true);
 						return;
-					default:
-						if (__needsWholeObjectGroup(displayObject, blendMode))
-						{
-							__renderGroup(displayObject, blendMode);
-							__touch(displayObject, true);
-							return;
-						}
-				}
+					}
 			}
 		}
 		#end
@@ -302,7 +305,7 @@ class CanvasRenderer extends DisplayObjectRenderer
 		Rectangle.__pool.release(bounds);
 		if (!visible) return;
 
-		// four canvases per nesting level: the object, a backdrop copy, the uncovered object, coverage
+		// four canvases per nesting level: the object, a backdrop copy, the uncovered object, the ALPHA mask
 		var level = __groupDepth * 4;
 		var object = __beginGroupCanvas(level, width, height);
 		__renderIntoGroup(displayObject, object.getContext2d(), x0, y0, blendMode);
@@ -321,26 +324,31 @@ class CanvasRenderer extends DisplayObjectRenderer
 			objectContext.fillRect(0, 0, width, height);
 		}
 
-		// Flash applies these four modes to the part of every pixel that earlier objects have
-		// covered (see __touch), and draws the object as it is over the rest. Without a touched
-		// buffer, everything counts as covered. ALPHA and ERASE work with composite operations,
-		// and so do SUBTRACT and INVERT on an opaque target, whose formulas then have an opaque
-		// backdrop. On a transparent target SUBTRACT and INVERT are done pixel by pixel: their
-		// formulas take the covered part's color, which no operation can give
-		if (formulaMode) __ensureTouched(displayObject);
+		// Flash applies SUBTRACT and INVERT to the part of every pixel that earlier objects have
+		// covered (see __touch), and draws the object as it is over the rest; ERASE and ALPHA cut
+		// wherever they are drawn. ALPHA and ERASE work with composite operations, and so do
+		// SUBTRACT and INVERT on an opaque target, whose formulas then have an opaque backdrop and
+		// nothing touched to tell apart. On a transparent target SUBTRACT and INVERT are done pixel
+		// by pixel: their formulas take the covered part's color, which no operation can give
 		var pixels = (blendMode == SUBTRACT || blendMode == INVERT) && !__backdropIsOpaque();
+		if (pixels) __ensureTouched(displayObject);
+		// a cutter following the touched model (see __cutterShowsAsIs): the object over what is not
+		// covered, added back after the cut
 		var uncovered:js.html.CanvasElement = null;
-		if (formulaMode && !pixels && __touchedActive)
+		if ((blendMode == ERASE || blendMode == ALPHA) && __cutterShowsAsIs())
 		{
-			// the object over what is not covered, added back after the composite
-			uncovered = __getGroupCanvas(level + 2, width, height);
-			var uncoveredContext = uncovered.getContext2d();
-			uncoveredContext.setTransform(1, 0, 0, 1, 0, 0);
-			uncoveredContext.globalAlpha = 1;
-			uncoveredContext.globalCompositeOperation = "copy";
-			uncoveredContext.drawImage(object, 0, 0, width, height, 0, 0, width, height);
-			uncoveredContext.globalCompositeOperation = "destination-out";
-			uncoveredContext.drawImage(__touched, x0, y0, width, height, 0, 0, width, height);
+			__ensureTouched(displayObject);
+			if (__touchedActive)
+			{
+				uncovered = __getGroupCanvas(level + 2, width, height);
+				var uncoveredContext = uncovered.getContext2d();
+				uncoveredContext.setTransform(1, 0, 0, 1, 0, 0);
+				uncoveredContext.globalAlpha = 1;
+				uncoveredContext.globalCompositeOperation = "copy";
+				uncoveredContext.drawImage(object, 0, 0, width, height, 0, 0, width, height);
+				uncoveredContext.globalCompositeOperation = "destination-out";
+				uncoveredContext.drawImage(__touched, x0, y0, width, height, 0, 0, width, height);
+			}
 		}
 
 		// compose the group onto the target. No clip here: an advanced blend mode under a
@@ -425,31 +433,26 @@ class CanvasRenderer extends DisplayObjectRenderer
 		origin, which lets every object keep its usual render transform.
 
 		The object's alpha is taken out of its children, because it is applied once to the whole group
-		afterwards. In a LAYER group, and in the group of any other mode this renderer composites in a
-		single draw (see `__compositeDirect`), children that only inherit the object's mode are drawn as
-		NORMAL. In the groups of the remaining modes, every child is drawn as NORMAL. All renderer state
-		is restored afterwards.
+		afterwards. Children that only inherit the object's mode are drawn as NORMAL, the others with
+		their own modes into the group; a mode given to BitmapData.draw applies to the root as one
+		object, not to its children. All renderer state is restored afterwards.
 	**/
 	@:noCompletion private function __renderIntoGroup(displayObject:DisplayObject, groupContext:js.html.CanvasRenderingContext2D, x0:Int, y0:Int,
 			blendMode:BlendMode):Void
 	{
-		var layer = switch (blendMode)
-		{
-			case SUBTRACT, INVERT, ERASE, ALPHA: false;
-			default: true;
-		}
 		__groupDepth++;
-		if (layer) __layerDepth++; else __blendGroupDepth++;
+		__layerDepth++;
+		var parentLevel = __bufferLevel, parentDrawn = __bufferDrawn;
+		__openBuffer();
 
 		var cacheContext = context;
 		var cacheWorldTransform = __worldTransform;
 		var cacheOverrideBlendMode = __overrideBlendMode;
 		var cacheGroupBlendMode = __groupBlendMode;
 		var cacheWorldAlpha = __worldAlpha;
-		// a LAYER tracks what its children touch, from the moment a child needs it (see __touch);
-		// inside a formula group no further group opens, so nothing there reads the tracking
+		// a group tracks what its children touch, from the moment a child needs it (see __touch)
 		var cacheTouchedRoot = __touchedRoot, cacheTouched = __touched, cacheTouchedActive = __touchedActive;
-		__touchedRoot = layer ? displayObject : null;
+		__touchedRoot = displayObject;
 		__touched = null;
 		__touchedActive = false;
 
@@ -462,11 +465,12 @@ class CanvasRenderer extends DisplayObjectRenderer
 
 		// the object's alpha applies once, to the composite (see __renderGroup): divided out here
 		__worldAlpha = 1 / displayObject.__worldAlpha;
-		// the mode this group is composited with: children that only inherit it render NORMAL in a
-		// LAYER-like group, every child renders NORMAL in a formula group, and shapes rendered
-		// inside either know whether their coverage is wanted (__isCompositedWithAlpha)
+		// the mode this group is composited with: children that only inherit it render NORMAL, the
+		// others with their own modes into the group, and shapes rendered inside know whether their
+		// coverage is wanted (__isCompositedWithAlpha). A mode given to BitmapData.draw applies to
+		// the root as one object, not to its children
 		if (blendMode != LAYER) __groupBlendMode = blendMode;
-		if (!layer) __overrideBlendMode = NORMAL;
+		__overrideBlendMode = null;
 
 		__blendMode = null;
 		__setBlendMode(NORMAL);
@@ -483,10 +487,9 @@ class CanvasRenderer extends DisplayObjectRenderer
 		__overrideBlendMode = cacheOverrideBlendMode;
 		__groupBlendMode = cacheGroupBlendMode;
 		__blendMode = null;
+		__closeBuffer(parentLevel, parentDrawn);
 		__groupDepth--;
-		if (layer) __layerDepth--;
-		else
-			__blendGroupDepth--;
+		__layerDepth--;
 	}
 
 	/**
@@ -537,7 +540,7 @@ class CanvasRenderer extends DisplayObjectRenderer
 
 		if (__backdropIsOpaque())
 		{
-			// Flash keeps the stage opaque: black behind the cut out pixels, not the page
+			// Flash keeps an opaque bitmap opaque: black behind the cut out pixels, not the page
 			context.globalCompositeOperation = "destination-over";
 			context.fillStyle = "#000000";
 			context.fillRect(x0, y0, width, height);
@@ -711,7 +714,8 @@ class CanvasRenderer extends DisplayObjectRenderer
 					fg = cg > sg ? cg - sg : 0;
 					fb = cb > sb ? cb - sb : 0;
 				}
-				var fa = sa + Std.int(ca * (255 - sa) / 255);
+				// the alpha: the union for INVERT, the sum for SUBTRACT, as Flash has them
+				var fa = invert ? sa + Std.int(ca * (255 - sa) / 255) : (sa + ca > 255 ? 255 : sa + ca);
 				// mixed with the object as it is by c, then with the alpha divided out again
 				var oa = Std.int(((255 - c) * sa + c * fa + 127) / 255);
 				if (oa > 0)

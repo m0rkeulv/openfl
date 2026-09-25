@@ -112,10 +112,8 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	@:noCompletion private var __upscaled:Bool;
 	@:noCompletion private var __values:Array<Float>;
 	@:noCompletion private var __width:Int;
-	@:noCompletion private var __blendGroupDepth:Int = 0;
 	@:noCompletion private var __groupOffsetX:Int = 0;
 	@:noCompletion private var __groupOffsetY:Int = 0;
-	@:noCompletion private var __layerDepth:Int = 0;
 	// group scratchBuffer buffers (textures: object, backdrop) and clip stacks per nesting level, shared by
 	// every renderer on the context: a cacheAsBitmap child renderer can run inside a group
 	@:noCompletion private static var __groupClipRects:Array<Array<Rectangle>> = [];
@@ -825,6 +823,7 @@ class OpenGLRenderer extends DisplayObjectRenderer
 
 	@:noCompletion private override function __render(object:IBitmapDrawable):Void
 	{
+		__resetBufferLevel();
 		__context3D.setColorMask(true, true, true, true);
 		__context3D.setCulling(NONE);
 		__context3D.setDepthTest(false, ALWAYS);
@@ -948,44 +947,46 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	{
 		if (object == null) return;
 
-		if (object.__drawableType != BITMAP_DATA)
+		// the coverage pass of an ALPHA group draws everything as it is (see __coverageOnly)
+		if (object.__drawableType != BITMAP_DATA && !__coverageOnly)
 		{
 			var displayObject:DisplayObject = cast object;
 
 			// LAYER composes the subtree offscreen; the modes that need the backdrop as a
 			// shader input are composed the same way (see __renderGroup)
-			if (displayObject.__blendMode == LAYER && __blendGroupDepth == 0 && (__overrideBlendMode == null || __overrideBlendMode == NORMAL))
+			if (displayObject.__blendMode == LAYER && (__overrideBlendMode == null || __overrideBlendMode == NORMAL))
 			{
 				__renderGroup(displayObject, LAYER);
 				__touch(displayObject, true);
 				return;
 			}
 
-			if (__blendGroupDepth == 0)
-			{
-				var blendMode = __overrideBlendMode != null ? __overrideBlendMode : displayObject.__worldBlendMode;
-				if (blendMode == __groupBlendMode) blendMode = NORMAL;
+			var blendMode = __overrideBlendMode != null ? __overrideBlendMode : displayObject.__worldBlendMode;
+			if (blendMode == __groupBlendMode) blendMode = NORMAL;
 
-				if (__needsBlendShader(blendMode))
+			// a cutter is drawn only into a buffer of its own (see __drawsOntoStage); it counts as
+			// touching only where it is drawn as it is (see __cutterShowsAsIs, __touch)
+			if ((blendMode == ERASE || blendMode == ALPHA) && __drawsOntoStage()) return;
+
+			if (__needsBlendShader(blendMode))
+			{
+				// one piece composes straight from its texture, anything else as a group
+				if (__isBlendLeaf(displayObject) && displayObject.__worldShader == null && __leafHasTexture(displayObject))
 				{
-					// one piece composes straight from its texture, anything else as a group
-					if (__isBlendLeaf(displayObject) && displayObject.__worldShader == null && __leafHasTexture(displayObject))
-					{
-						__compositeLeaf(displayObject, blendMode);
-					}
-					else
-					{
-						__renderGroup(displayObject, blendMode);
-					}
-					__touch(displayObject, true);
-					return;
+					__compositeLeaf(displayObject, blendMode);
 				}
-				if (__needsWholeObjectGroup(displayObject, blendMode))
+				else
 				{
 					__renderGroup(displayObject, blendMode);
-					__touch(displayObject, true);
-					return;
 				}
+				__touch(displayObject, true);
+				return;
+			}
+			if (__needsWholeObjectGroup(displayObject, blendMode))
+			{
+				__renderGroup(displayObject, blendMode);
+				__touch(displayObject, true);
+				return;
 			}
 		}
 
@@ -1039,7 +1040,9 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		DIFFERENCE, DARKEN, LIGHTEN, HARDLIGHT and OVERLAY always do, because blend factors cannot
 		express them. MULTIPLY, SUBTRACT, INVERT, ERASE and ALPHA can be done with blend factors, but
 		only on an opaque target (see `__backdropIsOpaque`): where the backdrop is transparent the
-		factors draw nothing, while Flash draws the object as it is there.
+		factors draw nothing, while Flash draws a MULTIPLY, SUBTRACT or INVERT object as it is there.
+		ERASE and ALPHA cut nothing there either way, and take the same path as the other two so that
+		one path handles them wherever they cut.
 
 		Groups clear the cached blend mode when they open and close, so blend factors chosen from this
 		answer are never reused at a different depth, where the answer may differ.
@@ -1110,9 +1113,12 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		var scratchBuffer = __getGroupScratchBuffer(level, width, height);
 		var backdrop = __groupScratchBuffers[level + 1];
 		var shaded = __needsBlendShader(blendMode);
-		if (shaded) __copyBackdrop(backdrop, x0, y0, width, height);
 
 		__renderIntoGroup(displayObject, scratchBuffer, x0, y0, width, height, blendMode);
+
+		// the group leaves the target as it was, so the backdrop is copied now: a composite inside
+		// the group hands the shared blend shader its own backdrop, and this one must come last
+		if (shaded) __copyBackdrop(backdrop, x0, y0, width, height);
 
 		scratchBuffer.__setUVRect(__context3D, 0, 0, width, height);
 
@@ -1212,7 +1218,9 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		var layer = !__needsBlendShader(blendMode);
 
 		__groupDepth++;
-		if (layer) __layerDepth++; else __blendGroupDepth++;
+		__layerDepth++;
+		var parentLevel = __bufferLevel, parentDrawn = __bufferDrawn;
+		__openBuffer();
 
 		var cacheRTT = context.__state.renderToTexture;
 		var cacheRTTDepthStencil = context.__state.renderToTextureDepthStencil;
@@ -1227,10 +1235,9 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		var cacheOverrideBlendMode = __overrideBlendMode;
 		var cacheGroupBlendMode = __groupBlendMode;
 		var cacheWorldAlpha = __worldAlpha;
-		// a LAYER tracks what its children touch, from the moment a child needs it (see __touch);
-		// inside a shader group no further group opens, so nothing there reads the tracking
+		// a group tracks what its children touch, from the moment a child needs it (see __touch)
 		var cacheTouchedRoot = __touchedRoot, cacheTouched = __touched, cacheTouchedActive = __touchedActive;
-		__touchedRoot = layer ? displayObject : null;
+		__touchedRoot = displayObject;
 		__touched = null;
 		__touchedActive = false;
 
@@ -1258,11 +1265,12 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		// the object's alpha applies once, to the composite (see __renderGroup): divided out here.
 		// The coverage pass draws every leaf opaque, so it takes no alpha at all
 		__worldAlpha = coverageOnly ? 1 : 1 / displayObject.__worldAlpha;
-		// the mode this group is composited with: children that only inherit it render NORMAL in a
-		// LAYER-like group, every child renders NORMAL in a shader group, and shapes rendered inside
-		// either know whether their coverage is wanted (__isCompositedWithAlpha)
+		// the mode this group is composited with: children that only inherit it render NORMAL, the
+		// others with their own modes into the group, and shapes rendered inside know whether their
+		// coverage is wanted (__isCompositedWithAlpha). A mode given to BitmapData.draw applies to
+		// the root as one object, not to its children
 		if (blendMode != LAYER) __groupBlendMode = blendMode;
-		if (!layer) __overrideBlendMode = NORMAL;
+		__overrideBlendMode = null;
 
 		__blendMode = null;
 		__setBlendMode(NORMAL);
@@ -1302,8 +1310,9 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		__resumeClipAndMask(this);
 		__coverageOnly = cacheCoverageOnly;
 
+		__closeBuffer(parentLevel, parentDrawn);
 		__groupDepth--;
-		if (layer) __layerDepth--; else __blendGroupDepth--;
+		__layerDepth--;
 	}
 
 	/**
@@ -1330,12 +1339,23 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	{
 		var shader = __staticBlendShader; // __copyBackdrop gave it the backdrop
 		shader.prepare(__blendGroupMode(blendMode), 1, discardTransparent, coverage);
-		__ensureTouched(displayObject);
-		shader.setTouched(__touchedActive ? __touched : null);
+		__setShaderTouched(shader, displayObject, blendMode);
 
 		// the shader writes the finished pixel
 		__context3D.setBlendFactors(ONE, ZERO);
 		__drawGroupScratchBuffer(scratchBuffer, x0, y0, shader, 1);
+	}
+
+	/**
+		Hands the blend shader the current group's touched buffer for a composite that reads it: SUBTRACT
+		and INVERT (see `__touch`), and a cutter where it is drawn as it is (see `__cutterShowsAsIs`),
+		building it first if the group tracks one.
+	**/
+	@:noCompletion private function __setShaderTouched(shader:BlendModeShader, displayObject:DisplayObject, blendMode:BlendMode):Void
+	{
+		var reads = blendMode == SUBTRACT || blendMode == INVERT || __cutterShowsAsIs();
+		if (reads) __ensureTouched(displayObject);
+		shader.setTouched(reads && __touchedActive ? __touched : null);
 	}
 
 	/**
@@ -1387,6 +1407,9 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		var cacheRTTSurfaceSelector = context.__state.renderToTextureSurfaceSelector;
 		var cacheCoverageOnly = __coverageOnly;
 
+		// the buffer has no stencil of its own and no clip: a mask or scrollRect in force on the
+		// target must not cut what is drawn into it
+		__suspendClipAndMask();
 		context.setRenderToTexture(__touched.getTexture(context), true);
 		if (clear) context.__clear(false, 0, 0, 0, 0, 0, 0, Context3DClearMask.ALL);
 		if (__staticWhite == null) __staticWhite = new BitmapData(1, 1, false, 0xFFFFFF);
@@ -1406,6 +1429,7 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		{
 			context.setRenderToBackBuffer();
 		}
+		__resumeClipAndMask(this);
 		__clearShader();
 	}
 
@@ -1498,8 +1522,7 @@ class OpenGLRenderer extends DisplayObjectRenderer
 				var shader = __staticBlendShader;
 				shader.prepare(__blendGroupMode(blendMode), __getAlpha(displayObject.__worldAlpha), graphics != null && blendMode == ALPHA && coverage == null,
 					coverage);
-				__ensureTouched(displayObject);
-				shader.setTouched(__touchedActive ? __touched : null);
+				__setShaderTouched(shader, displayObject, blendMode);
 
 				var context = __context3D;
 				context.setBlendFactors(ONE, ZERO);

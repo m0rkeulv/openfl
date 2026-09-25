@@ -1024,6 +1024,8 @@ class BitmapData implements IBitmapDrawable
 			var renderer = new CanvasRenderer(image.buffer.__srcContext);
 			#else
 			var renderer = new CairoRenderer(new Cairo(getSurface()));
+			// the bitmap drawn into, for the composites that work on views of its bytes
+			renderer.__layerBitmap = this;
 			#end
 
 			renderer.__allowSmoothing = smoothing;
