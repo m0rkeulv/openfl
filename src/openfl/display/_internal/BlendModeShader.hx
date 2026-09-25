@@ -70,12 +70,11 @@ class BlendModeShader extends BitmapFilterShader
 				backdrop = dst.rgb * (1.0 - srcAlpha) + srcAlpha * dstAlpha * blend;
 
 			} else {
-				// Flash's own formulas. SUBTRACT and INVERT apply to the part of the pixel that
-				// earlier objects have covered (c, from the group's touched buffer, which is set
-				// for them alone; all of it where there is none), on the color of that part: the
-				// backdrop is c of it. Over the rest the object shows as it is, and over a covered
-				// part that is transparent again they give a black or white silhouette. ERASE and
-				// ALPHA cut wherever they are drawn, which over a transparent pixel is nothing
+				// Flash's own formulas. They apply to the part of the pixel that earlier objects
+				// have covered (c, from the group's touched buffer, or all of it where there is
+				// none), on the color of that part: the backdrop is c of it. Over the rest the
+				// object shows as it is. Over a covered part that is transparent again, SUBTRACT
+				// and INVERT give a black or white silhouette and ERASE and ALPHA give nothing
 				float c = uHasTouched ? texture2D(uTouched, gl_FragCoord.xy * uTouchedFrame).a : 1.0;
 				vec4 d = c > 0.0 ? dst / c : vec4(0.0);
 				vec3 f;
@@ -132,9 +131,9 @@ class BlendModeShader extends BitmapFilterShader
 
 	/**
 		Sets the group's touched buffer: how much of every pixel of the current target earlier objects
-		have covered (see `DisplayObjectRenderer.__touch`), the same size as the target and read at
-		the fragment position. With null, everything counts as covered. Only SUBTRACT and INVERT read
-		it.
+		have covered (see `DisplayObjectRenderer.__touch`), the same size as the target and read at the
+		fragment position. With null, every pixel counts as covered. The renderer passes it for SUBTRACT
+		and INVERT, and for ERASE and ALPHA where they follow the touched model.
 	**/
 	public function setTouched(touched:BitmapData):Void
 	{

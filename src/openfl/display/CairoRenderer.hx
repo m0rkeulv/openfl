@@ -58,8 +58,8 @@ class CairoRenderer extends DisplayObjectRenderer
 	@:noCompletion private var __matrix:Matrix;
 	@SuppressWarnings("checkstyle:Dynamic") @:noCompletion private var __matrix3:#if lime Matrix3 #else Dynamic #end;
 	#if lime
-	// the touched buffer of the LAYER group being drawn into (see __touch), once built: a context on
-	// a bitmap the size of the layer, whose origin sits at (__touchedX, __touchedY) of the target.
+	// the touched buffer of the group being drawn into (see __touch), once built: a context on a
+	// bitmap the size of the group, whose origin sits at (__touchedX, __touchedY) of the target.
 	// One bitmap is kept per layer depth
 	@:noCompletion private var __touched:Cairo;
 	@:noCompletion private var __touchedBitmap:BitmapData;
@@ -68,14 +68,14 @@ class CairoRenderer extends DisplayObjectRenderer
 	@:noCompletion private var __touchedWidth:Int;
 	@:noCompletion private var __touchedHeight:Int;
 	@:noCompletion private static var __touchedBitmaps:Array<BitmapData> = [];
-	// the bitmap being drawn into, when it is one of ours: a LAYER's (see __renderLayerGroup) or
-	// the bitmap of a BitmapData.draw call. Null while drawing on the window or inside a Cairo group.
-	// One layer bitmap is kept per layer depth, as large as the largest layer drawn at that depth
+	// the bitmap being drawn into, when it is one of ours: a group's (see __renderIntoLayer), a
+	// cache bitmap, or the bitmap of a BitmapData.draw call. Null only while drawing on the window.
+	// One group bitmap is kept per layer depth, as large as the largest group drawn at that depth
 	@:noCompletion private var __layerBitmap:BitmapData;
 	@:noCompletion private static var __layerBitmaps:Array<BitmapData> = [];
-	// the mask that lets only the alpha bytes of BGRA pixels through (see __compositeFormulaOnViews),
-	// and the copy of the target rectangle that composite works on when the target is not a bitmap
-	// of ours
+	// the mask that lets only the alpha bytes of BGRA pixels through (see __writeAlphaBytes), and
+	// the copy of the target rectangle that __compositeFormulaOnViews works on when the target is
+	// the window
 	@:noCompletion private static var __alphaBytesMask:CairoPattern;
 	@:noCompletion private static var __copiedTarget:BitmapData;
 	// while a run of SUBTRACT/INVERT objects is drawn into a bitmap of ours, its alpha lives in a
@@ -228,8 +228,9 @@ class CairoRenderer extends DisplayObjectRenderer
 
 	#if lime
 	/**
-		Whether `object` is a SUBTRACT or INVERT object composited onto a transparent target, which
-		keeps a run of them going (see `__compositeFormulaOnViews`).
+		Whether `object` is a SUBTRACT or INVERT object composited onto a transparent target, and so
+		continues the current run of such objects instead of ending it (see
+		`__compositeFormulaOnViews`).
 	**/
 	@:noCompletion private function __continuesAlphaRun(object:IBitmapDrawable):Bool
 	{
@@ -323,18 +324,13 @@ class CairoRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		Renders a LAYER container into a bitmap of its own, then draws that bitmap onto the target as
-		one image with the container's alpha. Children with ERASE or ALPHA inside the layer therefore
-		only affect the layer's own content, not what lies behind it.
+		Renders a container into a bitmap of its own (see `__renderIntoLayer`), over the part of its
+		bounds that lies on the target, then draws that bitmap onto the target as one image with the
+		container's alpha. A LAYER is drawn with OVER. A container blended as a whole (see
+		`__needsWholeObjectGroup`) passes its `blendMode` and is drawn with that mode's operator.
 
-		The bitmap is the size of the container's bounds on the target, and the world transform is
-		shifted so that the bounds' corner lands at its origin, which lets every object keep its usual
-		render transform. Being a bitmap of ours rather than a Cairo group, its bytes can be viewed in
-		other formats, which SUBTRACT and INVERT need (see `__compositeFormulaOnViews`), and the
-		layer's touched buffer shares its origin and size.
-
-		With `blendMode`, the finished image is composited with that mode's operator instead of OVER:
-		a container blended as a whole (see `__needsWholeObjectGroup`) goes through here too.
+		Because the children are drawn into the container's own bitmap, ERASE and ALPHA children only
+		cut into the container's content, not into what lies behind it.
 	**/
 	@:noCompletion private function __renderLayerGroup(object:IBitmapDrawable, blendMode:BlendMode = LAYER):Void
 	{
@@ -367,17 +363,23 @@ class CairoRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		Renders `object` into a bitmap of ours, a buffer of its own: the LAYER bitmap kept per layer
-		depth, grown as needed, whose pixel (0, 0) is the target's (x0, y0), over `width` x `height`
-		pixels. Inside it the object's children draw with their own modes (those that only inherit
-		`blendMode`, the mode the object is composited with, as NORMAL, see `__setBlendMode`; a mode
-		given to BitmapData.draw applies to the root as one object, not to its children), with the
-		object's alpha divided out, and what they touch is tracked like a LAYER's (see `__touch`).
-		Returns the bitmap, which the next group at this depth reuses.
+		Renders `object` into the group bitmap kept for the current layer depth and returns it. Pixel
+		(0, 0) of the bitmap is pixel (x0, y0) of the target, and `width` x `height` pixels of it are
+		cleared and used. The bitmap is grown when needed and reused by the next group at the same
+		depth.
 
-		The bitmap is cleared through a view of its bytes, and the surface the object is drawn through
-		is made afterwards: Cairo treats a surface through which it has cleared everything as empty from
-		then on, whatever the views write into the bytes.
+		The group is a buffer of its own (see `__openBuffer`) and tracks what its children touch
+		(see `__touch`). The object's alpha is divided out of its children, because it is applied once
+		to the whole group afterwards. Children that only inherit `blendMode`, the mode the group is
+		composited with, are drawn as NORMAL; the others keep their own modes. A mode given to
+		`BitmapData.draw` applies to the root as a whole, not to its children. The world transform is
+		shifted by (-x0, -y0), so every object keeps its usual render transform. A run of SUBTRACT and
+		INVERT objects inside the group is ended before returning (see `__mergeAlphaPlane`).
+
+		Because the group is a bitmap of ours rather than a Cairo group, its bytes can be viewed in
+		other formats, which SUBTRACT and INVERT need (see `__compositeFormulaOnViews`). It is cleared
+		through such a view, and its surface is made only afterwards: Cairo treats a surface through
+		which everything was cleared as empty from then on, whatever is later written into the bytes.
 	**/
 	@:noCompletion private function __renderIntoLayer(object:IBitmapDrawable, x0:Int, y0:Int, width:Int, height:Int, blendMode:BlendMode):BitmapData
 	{
@@ -413,7 +415,7 @@ class CairoRenderer extends DisplayObjectRenderer
 		var parentLevel = __bufferLevel, parentDrawn = __bufferDrawn;
 		__openBuffer();
 		__blendMode = null;
-		// a LAYER tracks what its children touch, from the moment a child needs it (see __touch)
+		// the group tracks what its children touch, from the moment a child needs it (see __touch)
 		var parentTouchedRoot = __touchedRoot, parentTouched = __touched, parentTouchedBitmap = __touchedBitmap;
 		var parentTouchedActive = __touchedActive;
 		var parentTouchedX = __touchedX, parentTouchedY = __touchedY, parentTouchedWidth = __touchedWidth, parentTouchedHeight = __touchedHeight;
@@ -425,7 +427,7 @@ class CairoRenderer extends DisplayObjectRenderer
 		__touchedY = 0;
 		__touchedWidth = width;
 		__touchedHeight = height;
-		// the layer's alpha applies once, to the composite: divided out of the children here
+		// the object's alpha applies once, to the composite: divided out of the children here
 		var cacheWorldAlpha = __worldAlpha;
 		__worldAlpha = 1 / displayObject.__worldAlpha;
 		__renderDrawableDirect(object);
@@ -456,11 +458,16 @@ class CairoRenderer extends DisplayObjectRenderer
 		Composites `object` with one of the four modes Cairo has no single operator for: SUBTRACT,
 		INVERT, ERASE and ALPHA.
 
-		The object is rendered on its own into a Cairo group, and the matching `__composite` function
-		then combines that group with what is already on the target. A single Bitmap or Shape at full
-		alpha skips the group and is read straight from its own surface (see `__leafPattern`). Where
-		nothing has been drawn into the target yet, a SUBTRACT or INVERT object is drawn as it is
-		instead, as Flash does (see `__touch`); ERASE and ALPHA cut wherever they are drawn.
+		A single Bitmap or Shape at full alpha is read straight from its own surface
+		(see `__leafPattern`). Anything else is first rendered into a group bitmap
+		(see `__renderIntoLayer`) and read from there. The matching composite function then combines it
+		with the target, clipped to the object's bounds.
+
+		SUBTRACT and INVERT follow the touched model: where nothing in the current group has covered a
+		pixel yet, the object is drawn as it is (see `__touch`). ERASE and ALPHA cut, and follow the
+		touched model only where `__cutterShowsAsIs` holds. On a transparent target, SUBTRACT and INVERT
+		work on views of the target's bytes (see `__compositeFormulaOnViews`); everything else is done
+		with plain operators.
 	**/
 	@:noCompletion private function __renderFormulaGroup(object:IBitmapDrawable, blendMode:BlendMode):Void
 	{
@@ -685,12 +692,9 @@ class CairoRenderer extends DisplayObjectRenderer
 
 	/**
 		Paints the area covered by `displayObject` and all its descendants into `coverage`, a context
-		whose origin sits at (x0, y0) of the target, using the operator currently set on that context.
-
-		For a shape, this is the area of its fills and strokes, taken from its coverage render, which
-		is made now if the shape has none yet. For a text field, it is the alpha of its rendered text.
-		For any other object without children, it is the object's bounding box. Every piece is placed
-		with the same transform it is drawn with.
+		whose origin sits at (x0, y0) of the target, with the operator currently set on that context.
+		Each piece is placed with the same transform it is drawn with: graphics through
+		`__drawGraphicsCoverage`, and any other object without children as its bounding box.
 	**/
 	@:noCompletion private function __drawCoverage(coverage:Cairo, displayObject:DisplayObject, x0:Int, y0:Int):Void
 	{
@@ -719,8 +723,13 @@ class CairoRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		Paints the area covered by the fills and strokes of the graphics of `displayObject` into
-		`coverage`, placed with the same transform they are drawn with (see `__drawCoverage`).
+		Paints the area covered by the graphics of `displayObject` into `coverage`, placed as they are
+		drawn (see `__drawCoverage`).
+
+		For a shape this is its coverage render, its fills and strokes at their anti-aliasing, made now
+		if the shape has none yet. A text field has no coverage render, but it draws opaque colors
+		straight into its bitmap, so the alpha of that bitmap is its coverage. Without either, the whole
+		rendered area counts.
 	**/
 	@:noCompletion private function __drawGraphicsCoverage(coverage:Cairo, displayObject:DisplayObject, x0:Int, y0:Int):Void
 	{
@@ -771,11 +780,12 @@ class CairoRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		Builds the current group's touched buffer if the group tracks one and it has not been built yet
-		(see `__touch`): the coverage of everything drawn into the group before `displayObject`, which
-		is about to be composited with a mode that reads it. From then on, every object drawn into the
-		group adds itself as it is drawn. The buffer is an image surface the size of the layer, kept
-		per layer depth.
+		Builds the current group's touched buffer, if the group keeps one and it has not been built yet
+		(see `__touch`). It starts with the coverage of everything drawn into the group before
+		`displayObject`, the object about to be composited with a mode that reads the buffer, and from
+		then on every object drawn into the group adds itself as it is drawn.
+
+		The buffer is a bitmap the size of the group, kept per layer depth.
 	**/
 	@:noCompletion private function __ensureTouched(displayObject:DisplayObject):Void
 	{
@@ -805,37 +815,38 @@ class CairoRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		Composites `objectPattern` onto a transparent target with SUBTRACT or INVERT, over the rectangle
-		(x0, y0, width, height) of the target, in place, with operators on views of the target's bytes
-		in other formats. The target is a bitmap of ours (see `__layerBitmap`).
+		Composites `objectPattern` onto a transparent target with SUBTRACT or INVERT, in place, over the
+		rectangle (x0, y0, width, height), using operators on views of the target's bytes in other
+		formats.
 
-		For every pixel, c is how much of it earlier objects have covered (the touched buffer, or all of
-		it without one) and the backdrop D is c of the covered part's color. Flash applies the mode's
-		formula to that color, opaque where the object S is opaque, mixes the result with the object
-		as it is by c, and gives the whole the alpha of S over D. That comes to a color of
-		max(0, D - cS) + (1 - c) S for SUBTRACT, and D (1 - 2s) + cs + (1 - c) S for INVERT, with an
-		alpha of min(1, s + Da) for SUBTRACT and s + Da (1 - s) for INVERT: color and alpha from
-		different expressions, which no operator on an ARGB surface can write at once.
+		For each pixel, c is how much of it earlier objects have covered (from the touched buffer, or 1
+		without one), D is the backdrop and S the object, both premultiplied, with alphas Da and s.
+		Flash applies the mode to the covered part and shows the object as it is over the rest:
 
-		An RGB24 view of the target's bytes treats the premultiplied color as opaque color, so the
-		color is worked out there without alpha weighting: max(0, D - cS) is a LIGHTEN followed by a
-		DIFFERENCE with the covered part of the object, held in a group of COLOR content, which is
-		opaque in the same way, and INVERT's color is a single DIFFERENCE, whose source is white at the
-		object's alpha with its color kept by the coverage, plus the object over what is not covered:
-		DIFFERENCE gives D (1 - s) + |P - sD| for a source (P, s), and P = cs + (1 - c) S is never
-		below sD, since the premultiplied color of a covered pixel never exceeds its coverage. A group
-		of ALPHA content holds the alpha on its own, the object over the backdrop. And an A8 view of
-		the target four times as wide, in which every fourth pixel is an alpha byte, lets that alpha
-		be written back through a repeating mask without touching the color.
+		  SUBTRACT  color max(0, D - cS) + (1 - c) S      alpha min(1, s + Da)
+		  INVERT    color D (1 - 2s) + cs + (1 - c) S     alpha s + Da (1 - s)
 
-		Writing the alpha bytes is as dear as the color, since that view is four times as wide, so it
-		is done once per run of SUBTRACT/INVERT objects rather than once per object: the first of a
-		run copies the target's alpha into a plane of its own (an A8 surface, one per layer depth),
-		each object adds itself to the plane (ADD for SUBTRACT, OVER for INVERT), and `__mergeAlphaPlane` writes the plane back
-		over the run's rectangle when anything else is drawn into the target or the target is done
-		(see `__renderDrawable`, `__renderLayerGroup`, `__render`). On the one target that is not a
-		bitmap of ours, a transparent window, the rectangle is copied out, given its alpha at once,
-		and painted back.
+		Color and alpha come from different expressions, which no operator on an ARGB surface can write
+		at once. So they are written separately:
+
+		- The color, on an RGB24 view of the bytes, which treats the premultiplied color as opaque
+		  color. SUBTRACT is a LIGHTEN followed by a DIFFERENCE with cS, the object painted through the
+		  coverage into an opaque group, and then the uncovered part (1 - c) S is added. INVERT is a
+		  single DIFFERENCE with a source that is white at the object's alpha where covered and the
+		  object itself where not: DIFFERENCE gives D (1 - s) + |P - sD| for a source (P, s), and here P
+		  is never below sD, since the backdrop is never more opaque than its coverage.
+		- The alpha, in an A8 plane of its own, where the object is added with ADD for SUBTRACT or OVER
+		  for INVERT. It is written back into the target's alpha bytes by `__writeAlphaBytes`.
+
+		Writing the alpha bytes costs as much as the color, so it happens once per run of SUBTRACT and
+		INVERT objects rather than once per object. The first object of a run copies the target's alpha
+		into the plane (one plane per layer depth), each object adds to it, and `__mergeAlphaPlane`
+		writes it back when anything else is drawn into the target or the target is finished (see
+		`__renderDrawable`, `__renderIntoLayer` and `__render`).
+
+		The target is normally a bitmap of ours (see `__layerBitmap`). The one exception is a
+		transparent window: then the rectangle is copied into a scratch bitmap, composited there with
+		its alpha written at once, and painted back.
 	**/
 	@:noCompletion private function __compositeFormulaOnViews(objectPattern:CairoPattern, blendMode:BlendMode, x0:Int, y0:Int, width:Int, height:Int):Void
 	{
@@ -998,10 +1009,12 @@ class CairoRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		Writes the alpha of `alpha`, an A8 pattern in the bitmap's coordinates, into the alpha bytes of
-		`bitmap` over the rectangle (x0, y0, width, height), leaving the color bytes alone: through an
-		A8 view of the bitmap four pixels wide per BGRA pixel, with the alpha stretched to match and a
-		repeating mask that lets only every fourth pixel through.
+		Writes `alpha`, an alpha-only pattern in the bitmap's pixel coordinates, into the alpha bytes of
+		`bitmap` over the rectangle (x0, y0, width, height), leaving the color bytes alone.
+
+		It paints through an A8 view of the bitmap four times as wide, in which each byte of a BGRA
+		pixel is one A8 pixel. The pattern is stretched four times horizontally to match, and a
+		repeating mask lets only every fourth pixel, the alpha byte, through.
 	**/
 	@:noCompletion private function __writeAlphaBytes(bitmap:BitmapData, alpha:CairoPattern, x0:Int, y0:Int, width:Int, height:Int):Void
 	{
@@ -1030,8 +1043,8 @@ class CairoRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		Ends a run of SUBTRACT/INVERT objects (see `__compositeFormulaOnViews`): writes the alpha plane
-		back into the target's alpha bytes over the rectangle the run has touched.
+		Ends a run of SUBTRACT and INVERT objects (see `__compositeFormulaOnViews`) by writing the alpha
+		plane back into the target's alpha bytes, over the rectangle the run covered.
 	**/
 	@:noCompletion private function __mergeAlphaPlane():Void
 	{
@@ -1044,7 +1057,8 @@ class CairoRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		INVERT on an opaque target, in place: a DIFFERENCE with white through the object.
+		INVERT on an opaque target, in place: a DIFFERENCE with white, masked by the object, gives D + s
+		(1 - 2D).
 	**/
 	@:noCompletion private function __compositeInvert(objectPattern:CairoPattern):Void
 	{
@@ -1072,8 +1086,9 @@ class CairoRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		SUBTRACT on an opaque target, in place: a LIGHTEN then a DIFFERENCE with the object, which
-		together give max(0, target - object).
+		SUBTRACT on an opaque target, in place: a LIGHTEN then a DIFFERENCE with the object give
+		max(0, D - S). The object has to be premultiplied over black first (see
+		`__premultipliedPattern`).
 	**/
 	@:noCompletion private function __compositeSubtract(objectPattern:CairoPattern):Void
 	{
