@@ -50,17 +50,14 @@ class DisplayObjectRenderer extends EventDispatcher
 	@SuppressWarnings("checkstyle:Dynamic") @:noCompletion private var __context:#if lime RenderContext #else Dynamic #end;
 	@:noCompletion private var __overrideBlendMode:BlendMode;
 	@:noCompletion private var __groupBlendMode:BlendMode;
-	// the group being drawn into, while what its content touches is tracked (see __touch); null at
-	// the top of a render (the stage, a cache bitmap, the bitmap of a BitmapData.draw call), where
-	// everything counts as touched
+	// the group whose touches are tracked (see __touch); null at the top of a render, where every
+	// pixel counts as touched
 	@:noCompletion private var __touchedRoot:DisplayObject;
-	// whether that group's touched buffer has been built and is being kept up to date
+	// whether that group's touched buffer has been built
 	@:noCompletion private var __touchedActive:Bool;
-	// how many groups of this renderer the object being drawn is inside: LAYERs, containers blended
-	// as a whole, and objects rendered on their own before they are composited
+	// how many groups of this renderer the current object is inside
 	@:noCompletion private var __layerDepth:Int = 0;
-	// the level of the buffer being drawn into, and whether anything has been drawn into it yet
-	// (see __drawsOntoStage and __openBuffer)
+	// the current buffer's level, and whether it has content yet (see __openBuffer)
 	@:noCompletion private var __bufferLevel:Int = 0;
 	@:noCompletion private var __bufferDrawn:Bool = false;
 	@:noCompletion private var __pixelRatio:Float;
@@ -79,26 +76,17 @@ class DisplayObjectRenderer extends EventDispatcher
 	@:noCompletion private var __worldTransform:Matrix;
 
 	/**
-		Records that `displayObject` has been drawn into the current buffer: the buffer now has content
-		(see `__openBuffer`), and what the object covers is added to the group's touched buffer, if one
-		is being kept.
+		Records that `displayObject` was drawn: the current buffer now has content (see `__openBuffer`),
+		and the object's coverage is added to the group's touched buffer, if one is kept.
 
-		Flash tracks, for every pixel of a group, how much of it earlier objects have covered: shapes
-		and text by their anti-aliased fills, a Bitmap by its whole rectangle. A SUBTRACT or INVERT
-		object is drawn as it is where nothing has covered a pixel, and gets its mode where something
-		has, even if the backdrop has since been made transparent again. At partly covered edge pixels
-		the two are mixed. The backdrop's alpha cannot tell these cases apart, so the coverage is kept
-		in a buffer of its own. ERASE and ALPHA objects follow the same rule only in nested buffers
-		(see `__cutterShowsAsIs`); elsewhere they neither read the buffer nor add to it.
+		Flash tracks how much of each pixel of a group earlier objects have covered. SUBTRACT and INVERT
+		draw the object as it is over uncovered pixels and apply the mode over covered ones, even where
+		the backdrop has become transparent again; ERASE and ALPHA do so only where `__cutterShowsAsIs`
+		holds. The buffer is built on demand (see `__ensureTouched`); without one, every pixel counts as
+		covered.
 
-		The touched buffer is only built once a group contains an object that reads it
-		(see `__ensureTouched`). At the top of a render, on the stage, in a cache bitmap or in the
-		bitmap of a `BitmapData.draw` call, there is none, and every pixel counts as covered.
-
-		A leaf adds its own coverage. A container adds nothing here: its own graphics were added before
-		its children (see `__touchGraphics`), and each child adds itself as it is drawn. An object that
-		was rendered as a group of its own, such as a nested LAYER, is added as a whole with `subtree`,
-		because its children were drawn into that group, not into this one.
+		A leaf adds its own coverage, a container's graphics are added by `__touchGraphics`, and with
+		`subtree` an object rendered as a group of its own is added as a whole.
 	**/
 	@:noCompletion private function __touch(displayObject:DisplayObject, subtree:Bool = false):Void
 	{
@@ -117,9 +105,8 @@ class DisplayObjectRenderer extends EventDispatcher
 	}
 
 	/**
-		Whether `displayObject` is composited with ERASE or ALPHA, through its own blend mode or the one
-		given to `BitmapData.draw`. Such an object is a cutter: it removes from what is behind it
-		instead of adding to it, and it counts as touching only where `__cutterShowsAsIs` holds.
+		Whether `displayObject` is composited with ERASE or ALPHA, by its own mode or the one given to
+		`BitmapData.draw`.
 	**/
 	@:noCompletion private function __isCutter(displayObject:DisplayObject):Bool
 	{
@@ -128,8 +115,7 @@ class DisplayObjectRenderer extends EventDispatcher
 	}
 
 	/**
-		Records a container's own graphics as drawn, before its children are drawn (see `__touch`). A
-		container without graphics, or with empty graphics, records nothing.
+		Records a container's own graphics as drawn, before its children (see `__touch`).
 	**/
 	@:noCompletion private function __touchGraphics(displayObject:DisplayObject):Void
 	{
@@ -141,13 +127,9 @@ class DisplayObjectRenderer extends EventDispatcher
 	}
 
 	/**
-		Draws the coverage of everything under `displayObject` into the touched buffer, in drawing
-		order, and stops when it reaches `stopAt`. Returns true if `stopAt` was reached; with `stopAt`
-		null the whole subtree is drawn. Cutters, and everything inside them, are skipped unless they
-		count as touching (see `__cutterShowsAsIs`).
-
-		This fills a newly built buffer with the objects drawn before the one that needed it
-		(see `__ensureTouched`).
+		Draws the coverage of everything under `displayObject` into the touched buffer in drawing order,
+		stopping at `stopAt`, and returns whether it was reached. Used to fill a buffer built after the
+		fact (see `__ensureTouched`). Cutters are skipped unless `__cutterShowsAsIs` holds.
 	**/
 	@:noCompletion private function __walkTouched(displayObject:DisplayObject, stopAt:DisplayObject):Bool
 	{
@@ -169,21 +151,14 @@ class DisplayObjectRenderer extends EventDispatcher
 	}
 
 	/**
-		Draws what `displayObject` covers into the current group's touched buffer. For a leaf, that is
-		the coverage of its graphics, or its bounding rectangle if it has none. With `graphicsOnly`,
-		`displayObject` is a container and only its own graphics are drawn. Each renderer implements
-		this for its own kind of buffer.
+		Draws what a leaf covers into the touched buffer, or with `graphicsOnly` a container's own
+		graphics. Each renderer implements it for its own kind of buffer.
 	**/
 	@:noCompletion private function __drawTouched(displayObject:DisplayObject, graphicsOnly:Bool):Void {}
 
 	/**
-		Whether what is being drawn goes straight onto the stage: not into a group of this renderer, not
-		into the bitmap of a `BitmapData.draw` call, and not into a cache bitmap, whose renderer is
-		given the stage but draws into a bitmap.
-
-		Flash draws an ERASE or ALPHA object only when it ends up in a buffer: a LAYER, a container
-		blended as a whole, a cache bitmap or a bitmap being drawn into. Directly on the stage it is not
-		drawn at all, whether the stage is opaque or transparent.
+		Whether drawing goes straight onto the stage, rather than into a group, a cache bitmap or a
+		`BitmapData.draw` bitmap. Flash does not draw ERASE or ALPHA objects there at all.
 	**/
 	@:noCompletion private inline function __drawsOntoStage():Bool
 	{
@@ -191,14 +166,10 @@ class DisplayObjectRenderer extends EventDispatcher
 	}
 
 	/**
-		Whether an ERASE or ALPHA object follows the touched model of SUBTRACT and INVERT here: drawn as
-		it is where nothing has been covered yet, and counting as touching (see `__touch`). Otherwise it
-		simply cuts, which does nothing over an uncovered pixel.
-
-		On screen, Flash cuts in a first-level buffer, such as a LAYER directly on the stage, and uses
-		the touched model only in a buffer nested inside a buffer that already has content
-		(see `__openBuffer`). The bitmap of a `BitmapData.draw` call counts as a first-level buffer with
-		content, so every LAYER inside a draw call uses the touched model.
+		Whether ERASE and ALPHA follow the touched model here (see `__touch`) instead of simply cutting.
+		On screen Flash does so only in a buffer nested inside one that has content
+		(see `__openBuffer`). The bitmap of `BitmapData.draw` counts as a buffer with content, so every
+		LAYER inside a draw call does.
 	**/
 	@:noCompletion private inline function __cutterShowsAsIs():Bool
 	{
@@ -206,9 +177,8 @@ class DisplayObjectRenderer extends EventDispatcher
 	}
 
 	/**
-		Sets the buffer level at the start of a render: 0 on the stage, or 1 with content when this
-		renderer draws into a bitmap, either the bitmap of a `BitmapData.draw` call or a cache bitmap,
-		whose renderer is given the stage but draws elsewhere.
+		Starts a render at level 0 on the stage, or at level 1 with content when drawing into a bitmap
+		(`BitmapData.draw` or a cache bitmap).
 	**/
 	@:noCompletion private function __resetBufferLevel():Void
 	{
@@ -218,10 +188,9 @@ class DisplayObjectRenderer extends EventDispatcher
 	}
 
 	/**
-		Enters a group's buffer. The group gets the next level when the buffer it is drawn into is the
-		stage or already has content. Inside a buffer that is still empty it keeps that buffer's level,
-		since Flash then treats the two as one. The caller saves `__bufferLevel` and `__bufferDrawn`
-		beforehand and passes them to `__closeBuffer`.
+		Enters a group: it gets the next level when the current buffer is the stage or has content, and
+		shares the current level when that buffer is still empty. The caller keeps the old state for
+		`__closeBuffer`.
 	**/
 	@:noCompletion private function __openBuffer():Void
 	{
@@ -230,8 +199,7 @@ class DisplayObjectRenderer extends EventDispatcher
 	}
 
 	/**
-		Leaves a group's buffer opened by `__openBuffer` and restores the saved `level`. If anything was
-		drawn into the group, the buffer it was drawn into now has content.
+		Leaves a group and restores `level`. The outer buffer has content if the group got any.
 	**/
 	@:noCompletion private function __closeBuffer(level:Int, drawn:Bool):Void
 	{

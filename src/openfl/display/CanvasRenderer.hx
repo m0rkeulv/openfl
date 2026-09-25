@@ -50,8 +50,8 @@ class CanvasRenderer extends DisplayObjectRenderer
 	#if (js && html5)
 	@:noCompletion private static var __groupCanvases:Array<js.html.CanvasElement> = [];
 	@:noCompletion private static var __groupDepth:Int = 0;
-	// the touched buffer of the group being drawn into (see __touch), once built: a canvas in the
-	// same coordinates as the group's, kept per layer depth
+	// the current group's touched buffer (see __touch), once built: a canvas per layer depth, in
+	// the group's coordinates
 	@:noCompletion private var __touched:js.html.CanvasElement;
 	@:noCompletion private static var __touchedCanvases:Array<js.html.CanvasElement> = [];
 	#end
@@ -280,16 +280,10 @@ class CanvasRenderer extends DisplayObjectRenderer
 
 	#if (js && html5)
 	/**
-		Renders `displayObject` into a group the size of its bounds, then combines that group with the
-		target according to `blendMode`.
-
-		The group is a canvas. LAYER and the modes the canvas supports directly are a single drawImage
-		with the matching composite operation. ERASE and ALPHA use destination-out and destination-in,
-		clipped to the object's bounds because those operations would otherwise affect the whole target;
-		where they follow the touched model (see `__cutterShowsAsIs`), the object is added back over the
-		uncovered pixels afterwards. SUBTRACT and INVERT are built from several operations directly on
-		an opaque target, and are computed pixel by pixel on a transparent one (see
-		`__compositeFormulaPixels`).
+		Renders `displayObject` into a group canvas and combines it with the target by `blendMode`: one
+		drawImage for LAYER and the canvas's own modes; destination-out or destination-in clipped to the
+		bounds for ERASE and ALPHA; several operations for SUBTRACT and INVERT on an opaque target, and
+		`__compositeFormulaPixels` on a transparent one.
 	**/
 	@:noCompletion private function __renderGroup(displayObject:DisplayObject, blendMode:BlendMode):Void
 	{
@@ -429,16 +423,13 @@ class CanvasRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		Renders `displayObject` into a group canvas by pointing the renderer at that canvas for the
-		duration. The world transform is shifted so that (x0, y0) of the target lands at the group's
-		origin, which lets every object keep its usual render transform.
+		Renders `displayObject` into a group canvas, with the world transform shifted so that (x0, y0)
+		of the target is the canvas origin.
 
-		The group is a buffer of its own (see `__openBuffer`) and tracks what its children touch
-		(see `__touch`). The object's alpha is divided out of its children, because it is applied once
-		to the whole group afterwards. Children that only inherit `blendMode`, the mode the group is
-		composited with, are drawn as NORMAL; the others keep their own modes. A mode given to
-		`BitmapData.draw` applies to the root as a whole, not to its children. All renderer state is
-		restored afterwards.
+		The group is a buffer of its own: children keep their own modes (those that only inherit
+		`blendMode` draw as NORMAL), the object's alpha is divided out to be applied once to the result,
+		and touches are tracked (see `__touch`). A mode given to `BitmapData.draw` applies to the root
+		only.
 	**/
 	@:noCompletion private function __renderIntoGroup(displayObject:DisplayObject, groupContext:js.html.CanvasRenderingContext2D, x0:Int, y0:Int,
 			blendMode:BlendMode):Void
@@ -551,10 +542,9 @@ class CanvasRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		Paints the area covered by `displayObject` and all its descendants into `coverage`, a context
-		whose origin sits at (x0, y0) of the target, with the composite operation currently set on it.
-		Each piece is placed with the same transform it is drawn with: graphics through
-		`__drawGraphicsCoverage`, and any other object without children as its bounding box.
+		Paints the area covered by `displayObject` and its descendants into `coverage`, whose origin is
+		(x0, y0) of the target, with its current composite operation: graphics through
+		`__drawGraphicsCoverage`, other leaves as their bounding box.
 	**/
 	@:noCompletion private function __drawCoverage(coverage:js.html.CanvasRenderingContext2D, displayObject:DisplayObject, x0:Int, y0:Int):Void
 	{
@@ -581,12 +571,9 @@ class CanvasRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		Paints the area covered by the graphics of `displayObject` into `coverage`, placed as they are
-		drawn (see `__drawCoverage`).
-
-		For a shape this is its coverage render, its fills and strokes at their anti-aliasing, made now
-		if the shape has none yet. A text field has no coverage render, but it draws opaque colors
-		straight into its bitmap, so the alpha of that bitmap is its coverage.
+		Paints the area covered by the graphics of `displayObject` into `coverage`
+		(see `__drawCoverage`): a shape's coverage render, made if missing, or for a text field the
+		alpha of its bitmap, which it draws in opaque colors.
 	**/
 	@:noCompletion private function __drawGraphicsCoverage(coverage:js.html.CanvasRenderingContext2D, displayObject:DisplayObject, x0:Int, y0:Int):Void
 	{
@@ -621,12 +608,8 @@ class CanvasRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		Builds the current group's touched buffer, if the group keeps one and it has not been built yet
-		(see `__touch`). It starts with the coverage of everything drawn into the group before
-		`displayObject`, the object about to be composited with a mode that reads the buffer, and from
-		then on every object drawn into the group adds itself as it is drawn.
-
-		The buffer is a canvas at least the size of the group's, kept per layer depth.
+		Builds the group's touched buffer on first use (see `__touch`): the coverage of everything drawn
+		into the group before `displayObject`. Objects drawn afterwards add themselves.
 	**/
 	@:noCompletion private function __ensureTouched(displayObject:DisplayObject):Void
 	{
@@ -663,15 +646,9 @@ class CanvasRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		Composites `object`, a group canvas, onto a transparent target with SUBTRACT or INVERT, pixel by
-		pixel, over the rectangle (x0, y0, width, height) of the target.
-
-		For each pixel, c is how much of it earlier objects have covered (from the touched buffer, or 1
-		without one), and the backdrop is c of the covered part's color. The mode's formula is applied
-		to that color and mixed with the object as it is by c; over a covered part that is transparent
-		again, SUBTRACT gives black and INVERT white. The alpha is min(1, s + Da) for SUBTRACT and s +
-		Da (1 - s) for INVERT. The canvas hands out its pixels with straight alpha, so they are
-		premultiplied on the way in and divided out on the way out.
+		Composites the group canvas `object` onto a transparent target with SUBTRACT or INVERT, pixel by
+		pixel, with the formulas of `CairoRenderer.__compositeFormulaOnViews`. Canvas pixels have
+		straight alpha, so they are premultiplied on the way in and divided out on the way out.
 	**/
 	@:noCompletion private function __compositeFormulaPixels(object:js.html.CanvasElement, x0:Int, y0:Int, width:Int, height:Int, blendMode:BlendMode):Void
 	{

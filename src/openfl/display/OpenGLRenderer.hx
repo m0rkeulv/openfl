@@ -119,13 +119,12 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	@:noCompletion private static var __groupClipRects:Array<Array<Rectangle>> = [];
 	@:noCompletion private static var __groupDepth:Int = 0;
 	@:noCompletion private static var __groupScratchBuffers:Array<BitmapData> = [];
-	// the touched buffer of the group being drawn into (see __touch), once built
+	// the current group's touched buffer (see __touch), once built
 	@:noCompletion private var __touched:BitmapData;
 	@:noCompletion private static var __staticBlendShader:BlendModeShader;
 	// a 1x1 opaque texture: the coverage pass draws every leaf's footprint with it (see __drawCoverage)
 	@:noCompletion private static var __staticWhite:BitmapData;
-	// __renderDrawableDirect draws coverage instead of the objects (see __drawCoverage): for the
-	// coverage pass of an ALPHA group, and while the touched buffer is drawn
+	// __renderDrawableDirect draws coverage instead of objects (see __drawCoverage)
 	@:noCompletion private var __coverageOnly:Bool;
 	@:noCompletion private static var __invertSilhouette:ColorTransform = new ColorTransform(0, 0, 0, 1, 255, 255, 255, 0);
 
@@ -1035,18 +1034,11 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		Whether `blendMode` has to go through `BlendModeShader` with a copy of the backdrop, rather than
-		through the blend factors.
-
-		DIFFERENCE, DARKEN, LIGHTEN, HARDLIGHT and OVERLAY always do, because blend factors cannot
-		express them. MULTIPLY, SUBTRACT, INVERT, ERASE and ALPHA do only on a transparent target
-		(see `__backdropIsOpaque`). There, blend factors would draw nothing where the backdrop is
-		transparent, while Flash draws a MULTIPLY, SUBTRACT or INVERT object as it is. ERASE and ALPHA
-		take the shader too, so that one path handles them wherever they follow the touched model
-		(see `__cutterShowsAsIs`).
-
-		Groups clear the cached blend mode when they open and close, so blend factors chosen from this
-		answer are never reused at a different depth, where the answer may differ.
+		Whether `blendMode` needs `BlendModeShader` and a backdrop copy instead of blend factors: always
+		for DIFFERENCE, DARKEN, LIGHTEN, HARDLIGHT and OVERLAY, which blend factors cannot express, and
+		for MULTIPLY, SUBTRACT, INVERT, ERASE and ALPHA on a transparent target
+		(see `__backdropIsOpaque`), where the result depends on the backdrop's alpha or coverage. Groups
+		reset the cached blend mode, so an answer is never reused at another depth.
 	**/
 	@:noCompletion private function __needsBlendShader(blendMode:BlendMode):Bool
 	{
@@ -1196,20 +1188,15 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		Renders `displayObject` into `scratchBuffer` by pointing the renderer at that texture for the
-		duration. The projection is shifted so that (x0, y0) of the target lands at the group's origin,
-		which lets every object keep its usual render transform, and scissor rectangles are shifted the
-		same way through `__groupOffsetX` and `__groupOffsetY`. Masks and clips from the object's
-		ancestors are suspended while the group renders, since they apply to the finished group instead,
-		and the group gets its own clip stack and stencil reference. With `coverageOnly`, the group
-		receives the object's coverage instead of its pixels (see `__drawCoverage`).
+		Renders `displayObject` into `scratchBuffer`, with the projection and scissor rectangles shifted
+		so that (x0, y0) of the target is the texture origin. The ancestors' masks and clips are
+		suspended, since they apply to the finished group. With `coverageOnly`, the group gets the
+		object's coverage instead of its pixels.
 
-		The group is a buffer of its own (see `__openBuffer`) and tracks what its children touch
-		(see `__touch`). The object's alpha is divided out of its children, because it is applied once
-		to the whole group afterwards. Children that only inherit `blendMode`, the mode the group is
-		composited with, are drawn as NORMAL; the others keep their own modes. A mode given to
-		`BitmapData.draw` applies to the root as a whole, not to its children. All renderer state is
-		restored afterwards.
+		The group is a buffer of its own: children keep their own modes (those that only inherit
+		`blendMode` draw as NORMAL), the object's alpha is divided out to be applied once to the result,
+		and touches are tracked (see `__touch`). A mode given to `BitmapData.draw` applies to the root
+		only.
 	**/
 	@:noCompletion private function __renderIntoGroup(displayObject:DisplayObject, scratchBuffer:BitmapData, x0:Int, y0:Int, width:Int, height:Int,
 			blendMode:BlendMode, coverageOnly:Bool = false):Void
@@ -1349,10 +1336,8 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		Hands the blend shader the current group's touched buffer when the composite reads it, building
-		the buffer first if needed: for SUBTRACT and INVERT, and for a cutter that follows the touched
-		model (see `__cutterShowsAsIs`). Otherwise the shader gets none and counts every pixel as
-		covered.
+		Gives the blend shader the touched buffer for SUBTRACT, INVERT, and cutters where
+		`__cutterShowsAsIs` holds; otherwise none, and every pixel counts as covered.
 	**/
 	@:noCompletion private function __setShaderTouched(shader:BlendModeShader, displayObject:DisplayObject, blendMode:BlendMode):Void
 	{
@@ -1362,13 +1347,8 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		Builds the current group's touched buffer, if the group keeps one and it has not been built yet
-		(see `__touch`). It starts with the coverage of everything drawn into the group before
-		`displayObject`, the object about to be composited with a mode that reads the buffer, and from
-		then on every object drawn into the group adds itself as it is drawn.
-
-		The buffer is a texture the size of the group's scratch buffer, kept per nesting level beside
-		the group's other three.
+		Builds the group's touched buffer on first use (see `__touch`): the coverage of everything drawn
+		into the group before `displayObject`. Objects drawn afterwards add themselves.
 	**/
 	@:noCompletion private function __ensureTouched(displayObject:DisplayObject):Void
 	{
@@ -1399,10 +1379,8 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		Runs `draw` with the touched buffer as the render target, in the coverage pass state
-		(see `__coverageOnly`), then puts the group's target back. With `clear`, the buffer is cleared
-		first. Clips and the stencil mask are suspended meanwhile: the buffer has no stencil of its own,
-		and a mask or scroll rectangle on the target must not cut what is drawn into it.
+		Runs `draw` into the touched buffer in the coverage pass state (see `__coverageOnly`), clearing
+		it first with `clear`. Clips and the stencil are suspended, since the buffer has no stencil.
 	**/
 	@:noCompletion private function __drawIntoTouched(clear:Bool, draw:Void->Void):Void
 	{
@@ -1663,11 +1641,9 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		Draws the area covered by `displayObject` and all its descendants into the current target, fully
-		opaque: for the coverage pass of an ALPHA group (see `__coverageOnly`), and into the touched
-		buffer (see `__drawIntoTouched`). Each piece is placed with the same transform it is drawn with:
-		graphics through `__drawGraphicsCoverage`, and any other object without children as its bounding
-		box.
+		Draws the area covered by `displayObject` and its descendants into the current target, opaque,
+		for ALPHA's coverage pass and the touched buffer: graphics through `__drawGraphicsCoverage`,
+		other leaves as their bounding box.
 	**/
 	@:noCompletion private function __drawCoverage(displayObject:DisplayObject):Void
 	{
@@ -1730,14 +1706,10 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		Draws the area covered by the graphics of `displayObject` into the current target, fully opaque,
-		placed as they are drawn (see `__drawCoverage`).
-
-		For a shape this is its coverage render, its fills and strokes at their anti-aliasing, made now
-		if the shape has none yet. A text field has no coverage render, but it draws opaque colors
-		straight into its bitmap, so the alpha of that bitmap is its coverage. Without either, the whole
-		rendered area counts. A shape drawn directly as triangles leaves no texture and draws its fills
-		into the target itself.
+		Draws the area covered by the graphics of `displayObject` into the current target, opaque
+		(see `__drawCoverage`): a shape's coverage render, made if missing, or for a text field the
+		alpha of its bitmap, which it draws in opaque colors. A shape drawn as triangles draws its fills
+		directly.
 	**/
 	@:noCompletion private function __drawGraphicsCoverage(displayObject:DisplayObject):Void
 	{
@@ -1760,8 +1732,7 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	}
 
 	/**
-		Draws a quad the size of `geometry`, placed with `matrix`, filled from `texture` and fully
-		opaque. The coverage pass uses it for a shape's coverage, or for a plain opaque quad.
+		Draws an opaque quad the size of `geometry`, placed with `matrix` and filled from `texture`.
 	**/
 	@:noCompletion private function __drawCoverageQuad(geometry:BitmapData, texture:BitmapData, matrix:Matrix):Void
 	{
