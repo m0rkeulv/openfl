@@ -89,13 +89,15 @@ class Context3DGraphics
 				{
 					if (isX)
 					{
-						tempScale9VerticesVector[i] = toScale9Position(vertices[i], scale9Grid.x, scale9Grid.width, bounds.width,
-							graphics.__owner.scaleX) / Math.abs(graphics.__owner.scaleX);
+						tempScale9VerticesVector[i] = bounds.x
+							+ (toScale9Position(vertices[i] - bounds.x, scale9Grid.x - bounds.x, scale9Grid.width, bounds.width,
+								graphics.__owner.scaleX) / Math.abs(graphics.__owner.scaleX));
 					}
 					else
 					{
-						tempScale9VerticesVector[i] = toScale9Position(vertices[i], scale9Grid.y, scale9Grid.height, bounds.height,
-							graphics.__owner.scaleY) / Math.abs(graphics.__owner.scaleY);
+						tempScale9VerticesVector[i] = bounds.y
+							+ (toScale9Position(vertices[i] - bounds.y, scale9Grid.y - bounds.y, scale9Grid.height, bounds.height,
+								graphics.__owner.scaleY) / Math.abs(graphics.__owner.scaleY));
 					}
 					i++;
 					isX = !isX;
@@ -303,7 +305,34 @@ class Context3DGraphics
 
 						ri = (hasIndices ? (indices[i] * 4) : i * 4);
 						if (ri < 0) continue;
-						tileRect.setTo(rects[ri], rects[ri + 1], rects[ri + 2], rects[ri + 3]);
+
+						if (hasScale9Grid)
+						{
+							var tileRectX = rects[ri];
+							var tileRectY = rects[ri + 1];
+							var tileRectWidth = rects[ri + 2];
+							var tileRectHeight = rects[ri + 3];
+							var scaledLeft = bounds.x
+								+ (toScale9Position(tileRectX - bounds.x, scale9Grid.x - bounds.x, scale9Grid.width, bounds.width,
+									graphics.__owner.scaleX) / graphics.__owner.scaleX);
+							var scaledTop = bounds.y
+								+ (toScale9Position(tileRectY - bounds.y, scale9Grid.y - bounds.y, scale9Grid.height, bounds.height,
+									graphics.__owner.scaleY) / graphics.__owner.scaleY);
+							var scaledRight = bounds.x
+								+ (toScale9Position(tileRectX + tileRectWidth - bounds.x, scale9Grid.x - bounds.x, scale9Grid.width, bounds.width,
+									graphics.__owner.scaleX) / graphics.__owner.scaleX);
+							var scaledBottom = bounds.y
+								+ (toScale9Position(tileRectY + tileRectHeight - bounds.y, scale9Grid.y - bounds.y, scale9Grid.height, bounds.height,
+									graphics.__owner.scaleY) / graphics.__owner.scaleY);
+
+							var scaledWidth = scaledRight - scaledLeft;
+							var scaledHeight = scaledBottom - scaledTop;
+							tileRect.setTo(scaledLeft, scaledTop, scaledWidth, scaledHeight);
+						}
+						else
+						{
+							tileRect.setTo(rects[ri], rects[ri + 1], rects[ri + 2], rects[ri + 3]);
+						}
 
 						tileWidth = tileRect.width;
 						tileHeight = tileRect.height;
@@ -677,7 +706,13 @@ class Context3DGraphics
 		return true;
 	}
 
-	public static function render(graphics:Graphics, renderer:OpenGLRenderer):Void
+	/**
+		Prepares graphics for drawing on the GPU. Graphics the direct path can handle are turned into
+		triangles. The rest, and any that already have an up-to-date texture, are rendered to a texture
+		by the software rasterizer. When `withCoverage` is true, the texture path also renders their
+		coverage, which ALPHA uses as a mask.
+	**/
+	public static function render(graphics:Graphics, renderer:OpenGLRenderer, withCoverage:Bool = false):Void
 	{
 		if (!graphics.__visible || graphics.__commands.length == 0) return;
 
@@ -713,9 +748,9 @@ class Context3DGraphics
 			}
 
 			#if (js && html5)
-			CanvasGraphics.render(graphics, cast renderer.__softwareRenderer);
+			CanvasGraphics.render(graphics, cast renderer.__softwareRenderer, withCoverage);
 			#elseif lime_cairo
-			CairoGraphics.render(graphics, cast renderer.__softwareRenderer);
+			CairoGraphics.render(graphics, cast renderer.__softwareRenderer, withCoverage);
 			#end
 
 			renderer.__softwareRenderer.__worldTransform = cacheTransform;
@@ -1081,14 +1116,17 @@ class Context3DGraphics
 
 								if (hasScale9Grid)
 								{
-									var scaledLeft = toScale9Position(c.x, scale9Grid.x, scale9Grid.width, bounds.width, graphics.__owner.scaleX);
-									var scaledTop = toScale9Position(c.y, scale9Grid.y, scale9Grid.height, bounds.height, graphics.__owner.scaleY);
-									var scaledRight = toScale9Position(c.x + c.width, scale9Grid.x, scale9Grid.width, bounds.width, graphics.__owner.scaleX);
-									var scaledBottom = toScale9Position(c.y + c.height, scale9Grid.y, scale9Grid.height, bounds.height,
+									var scaledLeft = toScale9Position(c.x - bounds.x, scale9Grid.x - bounds.x, scale9Grid.width, bounds.width,
+										graphics.__owner.scaleX);
+									var scaledTop = toScale9Position(c.y - bounds.y, scale9Grid.y - bounds.y, scale9Grid.height, bounds.height,
+										graphics.__owner.scaleY);
+									var scaledRight = toScale9Position(c.x + c.width - bounds.x, scale9Grid.x - bounds.x, scale9Grid.width, bounds.width,
+										graphics.__owner.scaleX);
+									var scaledBottom = toScale9Position(c.y + c.height - bounds.y, scale9Grid.y - bounds.y, scale9Grid.height, bounds.height,
 										graphics.__owner.scaleY);
 
-									x = scaledLeft / Math.abs(graphics.__owner.scaleX);
-									y = scaledTop / Math.abs(graphics.__owner.scaleY);
+									x = bounds.x + (scaledLeft / Math.abs(graphics.__owner.scaleX));
+									y = bounds.y + (scaledTop / Math.abs(graphics.__owner.scaleY));
 									width = (scaledRight - scaledLeft) / Math.abs(graphics.__owner.scaleX);
 									height = (scaledBottom - scaledTop) / Math.abs(graphics.__owner.scaleY);
 								}
