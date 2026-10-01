@@ -128,9 +128,6 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	@:noCompletion private static var __staticBlendShader:BlendModeShader;
 	@:noCompletion private static var __staticWhite:BitmapData;
 
-	// __renderDrawableDirect draws coverage instead of objects (see __drawCoverage)
-	@:noCompletion private var __coverageOnly:Bool;
-
 	@:noCompletion private static var __invertSilhouette:ColorTransform = new ColorTransform(0, 0, 0, 1, 255, 255, 255, 0);
 
 	@:noCompletion private function new(context:Context3D, defaultRenderTarget:BitmapData = null)
@@ -857,11 +854,11 @@ class OpenGLRenderer extends DisplayObjectRenderer
 
 			__upscaled = (__worldTransform.a != 1 || __worldTransform.d != 1);
 
-			// the root is rendered as it is, its own blend mode being its parent's to apply, unless
-			// BitmapData.draw gave a blend mode: then the root is composited with it, as one object
+			// the root is rendered as it is (see __renderRoot), unless BitmapData.draw gave a blend mode:
+			// then the root is composited with it, as one object
 			if (__overrideBlendMode != null && __overrideBlendMode != NORMAL) __renderDrawable(object);
 			else
-				__renderDrawableDirect(object);
+				__renderRoot(object);
 
 			// TODO: Handle this in Context3D as a viewport?
 
@@ -940,13 +937,34 @@ class OpenGLRenderer extends DisplayObjectRenderer
 			object.__mask = null;
 			object.__scrollRect = null;
 
-			__renderDrawableDirect(object);
+			__renderRoot(object);
 
 			object.__mask = cacheMask;
 			object.__scrollRect = cacheScrollRect;
 		}
 
 		__context3D.present();
+	}
+
+	/**
+		Renders the root of a render. Its own blend mode is for whoever composites the result: the
+		renderer that draws a cache bitmap applies it to the bitmap, and `BitmapData.draw` ignores it,
+		as Flash does. Applied inside the render, against a transparent target, MULTIPLY, SUBTRACT,
+		ERASE and ALPHA would leave a cache bitmap empty. So the root's mode counts as the group's mode
+		here, as inside any group: the root and the children that only inherit its mode draw NORMAL
+		(see `__effectiveBlendMode`). A blend mode given to `BitmapData.draw` replaces the root's own
+		and is left as it is.
+	**/
+	@:noCompletion private function __renderRoot(object:IBitmapDrawable):Void
+	{
+		var groupBlendMode = __groupBlendMode;
+		if (object.__drawableType != BITMAP_DATA && __overrideBlendMode == null)
+		{
+			var displayObject:DisplayObject = cast object;
+			__groupBlendMode = displayObject.__worldBlendMode;
+		}
+		__renderDrawableDirect(object);
+		__groupBlendMode = groupBlendMode;
 	}
 
 	@:noCompletion private function __renderDrawable(object:IBitmapDrawable):Void
@@ -1476,7 +1494,7 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		else
 		{
 			// renders the graphics to their texture when dirty (the texture path draws nothing here)
-			Context3DGraphics.render(graphics, this, blendMode == ALPHA);
+			Context3DGraphics.render(graphics, this);
 			if (graphics.__bitmap != null && graphics.__visible)
 			{
 				texture = graphics.__bitmap;
@@ -1737,7 +1755,7 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		// the direct triangle path draws its fills straight into the pass, opaque (applyAlpha and
 		// applyColorTransform see __coverageOnly); otherwise the render leaves a texture to draw,
 		// and a coverage render of the fills, made now if the shape has none yet
-		Context3DGraphics.render(graphics, this, true);
+		Context3DGraphics.render(graphics, this);
 		if (graphics.__bitmap != null && graphics.__visible)
 		{
 			var matrix = Matrix.__pool.get();
