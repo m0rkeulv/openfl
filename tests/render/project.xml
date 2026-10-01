@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<project>
+	<meta title="RenderTests" package="openfl.tests.render" version="1.0.0" company="" />
+	<app main="Main" file="RenderTests" path="Export" />
+	<!-- the window is as large as the largest reference; a scene is compared over its own size -->
+	<window width="800" height="768" fps="30" allow-high-dpi="false" />
+	<window borderless="true" if="hl" />
+	<!-- -Dsoftware: a Cairo window instead of OpenGL (with SDL_VIDEODRIVER=dummy it needs no display) -->
+	<window hardware="false" if="software" />
+	<source path="Source" />
+	<assets path="reference" rename="reference" type="image" />
+	<haxelib name="openfl" />
+</project>
