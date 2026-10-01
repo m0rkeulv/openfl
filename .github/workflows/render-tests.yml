@@ -1,0 +1,118 @@
+name: Render tests
+on: [push, pull_request]
+
+# The render test group (tests/render): scenes rendered by OpenFL and scored against AIR references.
+# The Cairo window runs under SDL's dummy video driver and needs no display; the OpenGL window runs
+# under Xvfb with Mesa's llvmpipe. Each job uploads the captures, difference images and sheets.
+
+env:
+  HAXE_VERSION: 4.3.7
+  LIME_VERSION: 8.3.2
+
+jobs:
+
+  render-cairo:
+    name: Cairo on HashLink and neko, no display
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      SDL_VIDEODRIVER: dummy
+      SDL_AUDIODRIVER: disk
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: true
+
+      - uses: krdlab/setup-haxe@v2
+        with:
+          haxe-version: ${{ env.HAXE_VERSION }}
+
+      - name: Set HAXEPATH
+        run: |
+          echo "HAXEPATH=$HAXE_STD_PATH/.." >> $GITHUB_ENV
+
+      - name: Install Haxe dependencies
+        run: |
+          haxelib install format --quiet
+          haxelib install hxp --quiet
+          haxelib install lime ${{ env.LIME_VERSION }} --quiet
+
+      - name: Setup environment
+        run: |
+          haxelib dev openfl ${{ github.workspace }}
+
+      - name: Install command aliases
+        run: |
+          haxelib run lime setup -alias -y
+          haxelib run openfl setup -alias -y
+
+      - name: Render tests on HashLink
+        run: |
+          haxelib run hxp test-render -Dtarget=hl -verbose --install-hxp-alias
+
+      - name: Render tests on neko
+        if: ${{ !cancelled() }}
+        run: |
+          haxelib run hxp test-render -Dtarget=neko -verbose --install-hxp-alias
+
+      - uses: actions/upload-artifact@v6
+        if: ${{ !cancelled() }}
+        with:
+          name: render-tests-cairo
+          path: tests/render/out
+          if-no-files-found: warn
+
+  render-opengl:
+    name: OpenGL on HashLink, Xvfb and Mesa llvmpipe
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      SDL_AUDIODRIVER: disk
+      LIBGL_ALWAYS_SOFTWARE: "1"
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: true
+
+      - uses: krdlab/setup-haxe@v2
+        with:
+          haxe-version: ${{ env.HAXE_VERSION }}
+
+      - name: Set HAXEPATH
+        run: |
+          echo "HAXEPATH=$HAXE_STD_PATH/.." >> $GITHUB_ENV
+
+      - name: Install Haxe dependencies
+        run: |
+          haxelib install format --quiet
+          haxelib install hxp --quiet
+          haxelib install lime ${{ env.LIME_VERSION }} --quiet
+
+      - name: Setup environment
+        run: |
+          haxelib dev openfl ${{ github.workspace }}
+
+      - name: Install command aliases
+        run: |
+          haxelib run lime setup -alias -y
+          haxelib run openfl setup -alias -y
+
+      - name: Install Xvfb and Mesa
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libgl1-mesa-dri mesa-utils
+
+      - name: Show the OpenGL renderer
+        run: |
+          xvfb-run -a glxinfo -B
+
+      - name: Render tests on HashLink
+        run: |
+          xvfb-run -a -s "-screen 0 1280x1024x24" haxelib run hxp test-render -Dtarget=hl -verbose --install-hxp-alias
+
+      - uses: actions/upload-artifact@v6
+        if: ${{ !cancelled() }}
+        with:
+          name: render-tests-opengl
+          path: tests/render/out
+          if-no-files-found: warn
