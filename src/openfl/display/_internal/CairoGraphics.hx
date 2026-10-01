@@ -110,7 +110,6 @@ class CairoGraphics
 		return filter != null ? filter : CairoFilter.BEST;
 	}
 	#end
-
 	private static var SIN45:Float = 0.70710678118654752440084436210485;
 	private static var TAN22:Float = 0.4142135623730950488016887242097;
 	private static var KAPPA = 0.5522848;
@@ -2115,168 +2114,36 @@ class CairoGraphics
 	}
 	#end
 
-	public static function render(graphics:Graphics, renderer:CairoRenderer, target:Cairo):Void
+	/**
+		Plays the graphics' drawing commands into `target`. This is the normal render or, while
+		`coverage` is set, the coverage render, in which every fill and stroke is drawn opaque black.
+		With a `scale` above 1 it draws into the supersampling surface, which the caller has cleared
+		(see `__renderSupersampled`); otherwise it clears `target` first.
+	**/
+	#if lime_cairo
+	private static function __renderCommands(graphics:Graphics, renderer:CairoRenderer, target:Cairo, scale:Int = 1):Void
 	{
 		if (CairoGraphics.coverage && coveragePattern == null) coveragePattern = CairoPattern.createRGB(0, 0, 0);
 		cairo = target;
 
-		#if lime_cairo
-		CairoGraphics.graphics = graphics;
-		CairoGraphics.allowSmoothing = renderer.__allowSmoothing;
-		CairoGraphics.worldAlpha = renderer.__getAlpha(graphics.__owner.__worldAlpha);
+		renderer.__setBlendModeCairo(cairo, NORMAL);
 
-		#if (openfl_disable_hdpi || openfl_disable_hdpi_graphics)
-		var pixelRatio = 1;
-		#else
-		var pixelRatio = renderer.__pixelRatio;
-		#end
-
-		graphics.__update(renderer.__worldTransform, pixelRatio);
-
-		if (!graphics.__softwareDirty || graphics.__managed)
+		if (scale > 1)
 		{
-			CairoGraphics.graphics = null;
-			return;
-		}
-
-		var scale9Grid:Rectangle = graphics.__owner.__scale9Grid;
-		#if (openfl_legacy_scale9grid && !cairo)
-		var hasScale9Grid:Bool = false;
-		#else
-		// no scale9Grid for masks
-		// no scale9Grid for rotation 0.02 degrees or higher (less than 0.02 is allowed in flash)
-		var hasScale9Grid = scale9Grid != null && !graphics.__owner.__isMask && Math.abs(graphics.__owner.__rotation) < 0.02;
-		#end
-		if (hasScale9Grid)
-		{
-			graphics.__bitmapScaleX = Math.abs(graphics.__owner.scaleX);
-			graphics.__bitmapScaleY = Math.abs(graphics.__owner.scaleY);
+			var scaled = Matrix.__pool.get();
+			scaled.copyFrom(graphics.__renderTransform);
+			scaled.scale(scale, scale);
+			renderer.applyMatrix(scaled, cairo);
+			Matrix.__pool.release(scaled);
 		}
 		else
 		{
-			graphics.__bitmapScaleX = 1;
-			graphics.__bitmapScaleY = 1;
-		}
-
-		bounds = graphics.__bounds;
-
-		var width = graphics.__width;
-		var height = graphics.__height;
-
-		if (!graphics.__visible || graphics.__commands.length == 0 || bounds == null || width < 1 || height < 1)
-		{
-			graphics.__cairo = null;
-			graphics.__bitmap = null;
-		}
-		else
-		{
-			hitTesting = false;
-			var needsUpscaling = false;
-
-			if (graphics.__cairo != null)
-			{
-				var surface:CairoImageSurface = cast graphics.__cairo.target;
-
-				if (width > surface.width || height > surface.height)
-				{
-					graphics.__cairo = null;
-					needsUpscaling = true;
-				}
-			}
-
-			if (graphics.__cairo == null || graphics.__bitmap == null)
-			{
-				var bitmapWidth = needsUpscaling ? Std.int(width * 1.25) : width;
-				var bitmapHeight = needsUpscaling ? Std.int(height * 1.25) : height;
-
-				if (Graphics.maxTextureWidth != null && bitmapWidth > Graphics.maxTextureWidth)
-				{
-					bitmapWidth = Graphics.maxTextureWidth;
-				}
-
-				if (Graphics.maxTextureHeight != null && bitmapHeight > Graphics.maxTextureHeight)
-				{
-					bitmapHeight = Graphics.maxTextureHeight;
-				}
-
-				var bitmap = new BitmapData(bitmapWidth, bitmapHeight, true, 0);
-				var surface = bitmap.getSurface();
-				graphics.__cairo = new Cairo(surface);
-				graphics.__bitmap = bitmap;
-			}
-
-			#if !openfl_cairo_no_supersample
-			// The supersampling factor follows Stage.quality.
-			var quality = __stageQuality(graphics);
-			var renderScaleFactor = __qualityToSupersample(quality);
-			if (renderScaleFactor < 1) renderScaleFactor = 1;
-
-			// Reduce the factor for very large shapes so the temporary surface
-			// stays under SUPERSAMPLE_MAX in either dimension.
-			var maxDim = width > height ? width : height;
-			while (renderScaleFactor > 1 && maxDim * renderScaleFactor > SUPERSAMPLE_MAX)
-			{
-				renderScaleFactor--;
-			}
-
-			if (renderScaleFactor > 1)
-			{
-				// Render into a larger scratch surface with hard-edged fills.
-				// it's downsampled into graphics.__bitmap once all commands run.
-				var ssW = width * renderScaleFactor;
-				var ssH = height * renderScaleFactor;
-
-				if (ssSurface == null || ssCairo == null || ssW > ssSurface.width || ssH > ssSurface.height)
-				{
-					ssSurface = new CairoImageSurface(CairoFormat.ARGB32, ssW, ssH);
-					ssCairo = new Cairo(ssSurface);
-				}
-
-				cairo = ssCairo;
-
-				// The scratch surface is shared and grows to the largest shape seen as allocating new surfaces is a real slowdown so we try to avoid it.
-				// We re use the surface by simply reset draw rules and clear only the part that this shape use (plus the margin the downsample kernel reads).
-				cairo.matrix = new Matrix3();
-				cairo.newPath();
-				cairo.setOperator(CLEAR);
-				cairo.rectangle(0, 0, ssW + SCRATCH_MARGIN, ssH + SCRATCH_MARGIN);
-				cairo.fill();
-				cairo.setOperator(OVER);
-
-				renderer.__setBlendModeCairo(cairo, NORMAL);
-
-				var ssMatrix = Matrix.__pool.get();
-				ssMatrix.copyFrom(graphics.__renderTransform);
-				ssMatrix.scale(renderScaleFactor, renderScaleFactor);
-				renderer.applyMatrix(ssMatrix, cairo);
-				Matrix.__pool.release(ssMatrix);
-			}
-			else
-			{
-				cairo = graphics.__cairo;
-
-				renderer.__setBlendModeCairo(cairo, NORMAL);
-				renderer.applyMatrix(graphics.__renderTransform, cairo);
-			}
-
-		if (renderScaleFactor == 1)
-			{
-				cairo.setOperator(CLEAR);
-				cairo.paint();
-				cairo.setOperator(OVER);
-			}
-
-			#else
-			cairo = graphics.__cairo;
-
-			renderer.__setBlendModeCairo(cairo, NORMAL);
 			renderer.applyMatrix(graphics.__renderTransform, cairo);
 
 			cairo.setOperator(CLEAR);
 			cairo.paint();
 			cairo.setOperator(OVER);
-
-			#end
+		}
 
 		fillCommands.clear();
 		strokeCommands.clear();
@@ -2542,6 +2409,78 @@ class CairoGraphics
 	#end
 
 	/**
+		Draws the graphics into `target`, `width` x `height` of a `clearWidth` x `clearHeight` surface: at
+		the supersampling factor Stage.quality asks for, through the shared scratch surface and scaled
+		down into `target`, or straight into it when the factor is 1 or the shape is too large.
+	**/
+	#if lime_cairo
+	private static function __renderSupersampled(graphics:Graphics, renderer:CairoRenderer, target:Cairo, width:Int, height:Int, clearWidth:Int,
+			clearHeight:Int):Void
+	{
+		#if !openfl_cairo_no_supersample
+		var quality = __stageQuality(graphics);
+		var factor = __qualityToSupersample(quality);
+		if (factor < 1) factor = 1;
+
+		// Reduce the factor for very large shapes so the temporary surface
+		// stays under SUPERSAMPLE_MAX in either dimension.
+		var maxDim = width > height ? width : height;
+		while (factor > 1 && maxDim * factor > SUPERSAMPLE_MAX)
+		{
+			factor--;
+		}
+
+		if (factor > 1)
+		{
+			var ssW = width * factor;
+			var ssH = height * factor;
+
+			if (ssSurface == null || ssCairo == null || ssW > ssSurface.width || ssH > ssSurface.height)
+			{
+				ssSurface = new CairoImageSurface(CairoFormat.ARGB32, ssW, ssH);
+				ssCairo = new Cairo(ssSurface);
+			}
+
+			// The scratch surface is shared and grows to the largest shape seen as allocating new surfaces is a real slowdown so we try to avoid it.
+			// We re use the surface by simply reset draw rules and clear only the part that this shape use (plus the margin the downsample kernel reads).
+			ssCairo.matrix = new Matrix3();
+			ssCairo.newPath();
+			ssCairo.setOperator(CLEAR);
+			ssCairo.rectangle(0, 0, ssW + SCRATCH_MARGIN, ssH + SCRATCH_MARGIN);
+			ssCairo.fill();
+			ssCairo.setOperator(OVER);
+
+			__renderCommands(graphics, renderer, ssCairo, factor);
+
+			// Cairo scales 2:1 through an exact 2x2 box average making it faster to perform 2x 2:1 scaling than a single 4:1
+			// some simple benchmarks suggests 80-90%  faster downsampling. depending on the raster time this can give anywere from 20-80%
+			// faster rendering for a given asset. Note that this is not guarantied and probably depends on CPU and SIMD support.
+			var src = ssSurface;
+			if (factor == 4)
+			{
+				var halfW = width * 2;
+				var halfH = height * 2;
+
+				if (ssHalfSurface == null || halfW > ssHalfSurface.width || halfH > ssHalfSurface.height)
+				{
+					ssHalfSurface = new CairoImageSurface(CairoFormat.ARGB32, halfW, halfH);
+					ssHalfCairo = new Cairo(ssHalfSurface);
+				}
+
+				__scaleDown(ssHalfCairo, src, 2, CairoFilter.GOOD, halfW, halfH, halfW + SCRATCH_MARGIN, halfH + SCRATCH_MARGIN);
+				src = ssHalfSurface;
+				factor = 2;
+			}
+			__scaleDown(target, src, factor, __qualityToDownsampleFilter(quality), width, height, clearWidth, clearHeight);
+			return;
+		}
+		#end
+
+		__renderCommands(graphics, renderer, target);
+	}
+	#end
+
+	/**
 		Renders the graphics to their surface if they have changed. When `withCoverage` is true, it also
 		renders their coverage, which ALPHA uses as a mask, including for graphics that were rendered
 		before without one.
@@ -2641,7 +2580,7 @@ class CairoGraphics
 				graphics.__bitmap = bitmap;
 			}
 
-			__renderCommands(graphics, renderer, graphics.__cairo);
+			__renderSupersampled(graphics, renderer, graphics.__cairo, width, height, graphics.__bitmap.width, graphics.__bitmap.height);
 
 			// a shape under ALPHA also needs its coverage, every fill and stroke opaque, so the
 			// composite can keep the uncovered part of an edge pixel (see CairoRenderer)
@@ -2653,34 +2592,6 @@ class CairoGraphics
 			{
 				graphics.__coverage = null;
 			}
-
-			#if !openfl_cairo_no_supersample
-			if (renderScaleFactor > 1)
-			{
-				// Cairo scales 2:1 through an exact 2x2 box average making it faster to perform 2x 2:1 scaling than a single 4:1
-				// some simple benchmarks suggests 80-90%  faster downsampling. depending on the raster time this can give anywere from 20-80%
-				// faster rendering for a given asset. Note that this is not guarantied and probably depends on CPU and SIMD support.
-				var src = ssSurface;
-				var factor = renderScaleFactor;
-				if (factor == 4)
-				{
-					var halfW = width * 2;
-					var halfH = height * 2;
-
-					if (ssHalfSurface == null || halfW > ssHalfSurface.width || halfH > ssHalfSurface.height)
-					{
-						ssHalfSurface = new CairoImageSurface(CairoFormat.ARGB32, halfW, halfH);
-						ssHalfCairo = new Cairo(ssHalfSurface);
-					}
-
-					__scaleDown(ssHalfCairo, src, 2, CairoFilter.GOOD, halfW, halfH, halfW + SCRATCH_MARGIN, halfH + SCRATCH_MARGIN);
-					src = ssHalfSurface;
-					factor = 2;
-				}
-				var filter = __qualityToDownsampleFilter(quality);
-				__scaleDown(graphics.__cairo, src, factor, filter, width, height, graphics.__bitmap.width, graphics.__bitmap.height);
-			}
-			#end
 
 			graphics.__bitmap.image.dirty = true;
 			graphics.__bitmap.image.version++;
@@ -2708,7 +2619,8 @@ class CairoGraphics
 			graphics.__coverage = new BitmapData(bitmap.width, bitmap.height, true, 0);
 		}
 		CairoGraphics.coverage = true;
-		__renderCommands(graphics, renderer, new Cairo(graphics.__coverage.getSurface()));
+		__renderSupersampled(graphics, renderer, new Cairo(graphics.__coverage.getSurface()), graphics.__width, graphics.__height, bitmap.width,
+			bitmap.height);
 		CairoGraphics.coverage = false;
 		// the OpenGL renderer uploads the coverage as a texture and re-uploads it only when the
 		// image version grows, like __bitmap
