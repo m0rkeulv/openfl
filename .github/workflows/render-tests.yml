@@ -18,6 +18,8 @@ jobs:
     env:
       SDL_VIDEODRIVER: dummy
       SDL_AUDIODRIVER: disk
+      # the runner has no sound card: OpenAL Soft's null backend keeps ALSA quiet
+      ALSOFT_DRIVERS: "null"
     steps:
       - uses: actions/checkout@v6
         with:
@@ -68,6 +70,8 @@ jobs:
     timeout-minutes: 20
     env:
       SDL_AUDIODRIVER: disk
+      ALSOFT_DRIVERS: "null"
+      # Mesa llvmpipe; tests/render/build.hx then builds with -Dopenfl_gl_sync_backdrop (see its README)
       LIBGL_ALWAYS_SOFTWARE: "1"
     steps:
       - uses: actions/checkout@v6

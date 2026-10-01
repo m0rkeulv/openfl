@@ -1592,6 +1592,12 @@ class OpenGLRenderer extends DisplayObjectRenderer
 			y = Std.int(context.__stage.window.height * context.__stage.window.scale) - height - y;
 		}
 
+		// Mesa's llvmpipe, the OpenGL of a headless CI runner, can copy the framebuffer before its
+		// rasterizer threads have finished drawing into it, and a flush is not enough. Waiting stalls
+		// the pipeline once per blended group, so it is opt-in (see tests/render/README.md)
+		#if openfl_gl_sync_backdrop
+		__gl.finish();
+		#end
 		__gl.copyTexSubImage2D(__gl.TEXTURE_2D, 0, 0, 0, x, y, width, height);
 
 		if (__staticBlendShader == null) __staticBlendShader = new BlendModeShader();
