@@ -64,18 +64,23 @@ class CairoRenderer extends DisplayObjectRenderer
 	@:noCompletion private var __touchedBitmap:BitmapData;
 	@:noCompletion private var __touchedWidth:Int;
 	@:noCompletion private var __touchedHeight:Int;
+
 	@:noCompletion private static var __touchedBitmaps:Array<BitmapData> = [];
+
 	// the bitmap being drawn into when it is ours (a group's, a cache bitmap, a BitmapData.draw
 	// bitmap), null on the window; and the group bitmaps, one per layer depth
 	@:noCompletion private var __targetBitmap:BitmapData;
+
 	@:noCompletion private static var __groupBitmaps:Array<BitmapData> = [];
 	// the mask of __writeAlphaBytes, and the copy of the window __compositeFormulaOnViews works on
 	@:noCompletion private static var __alphaBytesMask:CairoPattern;
 	@:noCompletion private static var __windowCopy:BitmapData;
+
 	// the alpha of the current SUBTRACT/INVERT run, its rectangle, and one plane per layer depth
 	// (see __compositeFormulaOnViews)
 	@:noCompletion private var __alphaPlane:Cairo;
 	@:noCompletion private var __alphaPlaneRect:Rectangle;
+
 	@:noCompletion private static var __alphaPlanes:Array<CairoImageSurface> = [];
 	#end
 
@@ -213,7 +218,8 @@ class CairoRenderer extends DisplayObjectRenderer
 		// the root is rendered as it is, its own blend mode being its parent's to apply, unless
 		// BitmapData.draw gave a blend mode: then the root is composited with it, as one object
 		if (__overrideBlendMode != null && __overrideBlendMode != NORMAL) __renderDrawable(object);
-		else __renderDrawableDirect(object);
+		else
+			__renderDrawableDirect(object);
 		#if lime
 		if (__alphaPlane != null) __mergeAlphaPlane();
 		#end
@@ -313,7 +319,10 @@ class CairoRenderer extends DisplayObjectRenderer
 		var displayObject:DisplayObject = cast object;
 		var bounds = Rectangle.__pool.get();
 		var visible = __getGroupBounds(displayObject, bounds);
-		var x0 = Std.int(bounds.x), y0 = Std.int(bounds.y), width = Std.int(bounds.width), height = Std.int(bounds.height);
+		var x0 = Std.int(bounds.x),
+			y0 = Std.int(bounds.y),
+			width = Std.int(bounds.width),
+			height = Std.int(bounds.height);
 		Rectangle.__pool.release(bounds);
 		if (!visible) return;
 
@@ -327,7 +336,8 @@ class CairoRenderer extends DisplayObjectRenderer
 		__setBlendModeCairo(cairo, blendMode);
 		var alpha = __getAlpha(displayObject.__worldAlpha);
 		if (alpha >= 1) cairo.paint();
-		else cairo.paintWithAlpha(alpha);
+		else
+			cairo.paintWithAlpha(alpha);
 		cairo.restore();
 		__blendMode = null; // the operator is set again by the next __setBlendMode
 	}
@@ -341,8 +351,10 @@ class CairoRenderer extends DisplayObjectRenderer
 		displayObject.__getFilterBounds(bounds, displayObject.__renderTransform);
 		if (__worldTransform != null) bounds.__transform(bounds, __worldTransform);
 		var target:CairoImageSurface = __targetBitmap != null ? __targetBitmap.getSurface() : cast cairo.target;
-		var x0 = Math.max(0, Math.floor(bounds.x)), y0 = Math.max(0, Math.floor(bounds.y));
-		var x1 = Math.min(target.width, Math.ceil(bounds.right)), y1 = Math.min(target.height, Math.ceil(bounds.bottom));
+		var x0 = Math.max(0, Math.floor(bounds.x)),
+			y0 = Math.max(0, Math.floor(bounds.y));
+		var x1 = Math.min(target.width, Math.ceil(bounds.right)),
+			y1 = Math.min(target.height, Math.ceil(bounds.bottom));
 		bounds.setTo(x0, y0, x1 - x0, y1 - y0);
 		return bounds.width > 0 && bounds.height > 0;
 	}
@@ -384,7 +396,8 @@ class CairoRenderer extends DisplayObjectRenderer
 	@:noCompletion private function __renderIntoGroup(object:IBitmapDrawable, x0:Int, y0:Int, width:Int, height:Int, blendMode:BlendMode):BitmapData
 	{
 		var displayObject:DisplayObject = cast object;
-		var previousGroupBlendMode = __groupBlendMode, previousOverride = __overrideBlendMode;
+		var previousGroupBlendMode = __groupBlendMode,
+			previousOverride = __overrideBlendMode;
 		if (blendMode != LAYER) __groupBlendMode = blendMode;
 		__overrideBlendMode = null;
 		var group = __groupBitmaps[__layerDepth] = __scratchBitmap(__groupBitmaps[__layerDepth], width, height);
@@ -394,23 +407,29 @@ class CairoRenderer extends DisplayObjectRenderer
 		clear.fill();
 		group.__surface = null;
 
-		var parentContext = cairo, parentTransform = __worldTransform, parentTarget = __targetBitmap;
+		var parentContext = cairo,
+			parentTransform = __worldTransform,
+			parentTarget = __targetBitmap;
 		var transform = Matrix.__pool.get();
 		if (parentTransform != null) transform.copyFrom(parentTransform);
 		transform.translate(-x0, -y0);
 		cairo = new Cairo(group.getSurface());
 		__worldTransform = transform;
 		__targetBitmap = group;
-		var parentAlphaPlane = __alphaPlane, parentAlphaPlaneRect = __alphaPlaneRect;
+		var parentAlphaPlane = __alphaPlane,
+			parentAlphaPlaneRect = __alphaPlaneRect;
 		__alphaPlane = null;
 		__layerDepth++;
 		var parentLevel = __bufferLevel, parentDrawn = __bufferHasContent;
 		__openBuffer();
 		__blendMode = null;
 		// the group tracks what its children touch, from the moment a child needs it (see __ensureTouched)
-		var parentTouchedRoot = __touchedGroup, parentTouched = __touched, parentTouchedBitmap = __touchedBitmap;
+		var parentTouchedRoot = __touchedGroup,
+			parentTouched = __touched,
+			parentTouchedBitmap = __touchedBitmap;
 		var parentTouchedActive = __touchedBuilt;
-		var parentTouchedWidth = __touchedWidth, parentTouchedHeight = __touchedHeight;
+		var parentTouchedWidth = __touchedWidth,
+			parentTouchedHeight = __touchedHeight;
 		__touchedGroup = displayObject;
 		__touched = null;
 		__touchedBitmap = null;
@@ -458,7 +477,10 @@ class CairoRenderer extends DisplayObjectRenderer
 		// cannot reach outside it
 		var bounds = Rectangle.__pool.get();
 		var visible = __getGroupBounds(displayObject, bounds);
-		var x0 = Std.int(bounds.x), y0 = Std.int(bounds.y), width = Std.int(bounds.width), height = Std.int(bounds.height);
+		var x0 = Std.int(bounds.x),
+			y0 = Std.int(bounds.y),
+			width = Std.int(bounds.width),
+			height = Std.int(bounds.height);
 		Rectangle.__pool.release(bounds);
 		if (!visible) return;
 
@@ -673,7 +695,8 @@ class CairoRenderer extends DisplayObjectRenderer
 
 		if (displayObject.__children != null)
 		{
-			for (child in displayObject.__children) __drawCoverage(coverage, child);
+			for (child in displayObject.__children)
+				__drawCoverage(coverage, child);
 		}
 		else if (graphics == null)
 		{
@@ -763,7 +786,8 @@ class CairoRenderer extends DisplayObjectRenderer
 	@:noCompletion private override function __drawTouched(displayObject:DisplayObject, graphicsOnly:Bool):Void
 	{
 		if (graphicsOnly) __drawGraphicsCoverage(__touched, displayObject);
-		else __drawCoverage(__touched, displayObject);
+		else
+			__drawCoverage(__touched, displayObject);
 	}
 
 	/**
@@ -901,7 +925,8 @@ class CairoRenderer extends DisplayObjectRenderer
 			cairo.source = objectPattern;
 			cairo.setOperator(CairoOperator.OVER);
 			if (touched != null) cairo.mask(touched);
-			else cairo.paint();
+			else
+				cairo.paint();
 			rgb.source = cairo.popGroup();
 			rgb.setOperator(CairoOperator.LIGHTEN);
 			rgb.paint();

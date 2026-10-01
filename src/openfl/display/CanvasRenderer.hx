@@ -50,9 +50,11 @@ class CanvasRenderer extends DisplayObjectRenderer
 	#if (js && html5)
 	@:noCompletion private static var __groupCanvases:Array<js.html.CanvasElement> = [];
 	@:noCompletion private static var __groupDepth:Int = 0;
+
 	// the current group's touched buffer (see __touch), once built: a canvas per layer depth, in
 	// the group's coordinates
 	@:noCompletion private var __touched:js.html.CanvasElement;
+
 	@:noCompletion private static var __touchedCanvases:Array<js.html.CanvasElement> = [];
 	#end
 
@@ -198,7 +200,8 @@ class CanvasRenderer extends DisplayObjectRenderer
 		// the root is rendered as it is, its own blend mode being its parent's to apply, unless
 		// BitmapData.draw gave a blend mode: then the root is composited with it, as one object
 		if (__overrideBlendMode != null && __overrideBlendMode != NORMAL) __renderDrawable(object);
-		else __renderDrawableDirect(object);
+		else
+			__renderDrawableDirect(object);
 	}
 
 	@:noCompletion private function __renderDrawable(object:IBitmapDrawable):Void
@@ -429,7 +432,9 @@ class CanvasRenderer extends DisplayObjectRenderer
 		var cacheGroupBlendMode = __groupBlendMode;
 		var cacheWorldAlpha = __worldAlpha;
 		// a group tracks what its children touch, from the moment a child needs it (see __touch)
-		var cacheTouchedRoot = __touchedGroup, cacheTouched = __touched, cacheTouchedActive = __touchedBuilt;
+		var cacheTouchedRoot = __touchedGroup,
+			cacheTouched = __touched,
+			cacheTouchedActive = __touchedBuilt;
 		__touchedGroup = displayObject;
 		__touched = null;
 		__touchedBuilt = false;
@@ -483,8 +488,8 @@ class CanvasRenderer extends DisplayObjectRenderer
 		context.drawImage(object, 0, 0, width, height, x0, y0, width, height);
 	}
 
-	@:noCompletion private function __compositeAlphaErase(object:js.html.CanvasElement, level:Int, x0:Int, y0:Int, width:Int, height:Int,
-			blendMode:BlendMode, displayObject:DisplayObject):Void
+	@:noCompletion private function __compositeAlphaErase(object:js.html.CanvasElement, level:Int, x0:Int, y0:Int, width:Int, height:Int, blendMode:BlendMode,
+			displayObject:DisplayObject):Void
 	{
 		if (blendMode == ALPHA && __alphaNeedsMask(displayObject))
 		{
@@ -539,7 +544,8 @@ class CanvasRenderer extends DisplayObjectRenderer
 
 		if (displayObject.__children != null)
 		{
-			for (child in displayObject.__children) __drawCoverage(coverage, child, x0, y0);
+			for (child in displayObject.__children)
+				__drawCoverage(coverage, child, x0, y0);
 		}
 		else if (graphics == null)
 		{
@@ -622,7 +628,8 @@ class CanvasRenderer extends DisplayObjectRenderer
 		touchedContext.globalCompositeOperation = "source-over";
 		touchedContext.fillStyle = "#000000";
 		if (graphicsOnly) __drawGraphicsCoverage(touchedContext, displayObject, 0, 0);
-		else __drawCoverage(touchedContext, displayObject, 0, 0);
+		else
+			__drawCoverage(touchedContext, displayObject, 0, 0);
 	}
 
 	/**
@@ -657,8 +664,13 @@ class CanvasRenderer extends DisplayObjectRenderer
 			{
 				var da = d[i + 3];
 				// premultiplied: the object, and the covered part's color, of which the backdrop is c
-				var sr = Std.int(s[i] * sa / 255), sg = Std.int(s[i + 1] * sa / 255), sb = Std.int(s[i + 2] * sa / 255);
-				var cr = Std.int(d[i] * da / c), cg = Std.int(d[i + 1] * da / c), cb = Std.int(d[i + 2] * da / c), ca = Std.int(da * 255 / c);
+				var sr = Std.int(s[i] * sa / 255),
+					sg = Std.int(s[i + 1] * sa / 255),
+					sb = Std.int(s[i + 2] * sa / 255);
+				var cr = Std.int(d[i] * da / c),
+					cg = Std.int(d[i + 1] * da / c),
+					cb = Std.int(d[i + 2] * da / c),
+					ca = Std.int(da * 255 / c);
 				if (cr > 255) cr = 255;
 				if (cg > 255) cg = 255;
 				if (cb > 255) cb = 255;
@@ -866,7 +878,7 @@ class CanvasRenderer extends DisplayObjectRenderer
 	{
 		switch (value)
 		{
-			//NOTE: ALPHA, ERASE, INVERT, SUBTRACT and LAYER are composed by __renderGroup
+			// NOTE: ALPHA, ERASE, INVERT, SUBTRACT and LAYER are composed by __renderGroup
 
 			case ADD:
 				context.globalCompositeOperation = "lighter";
@@ -904,4 +916,3 @@ class CanvasRenderer extends DisplayObjectRenderer
 #else
 typedef CanvasRenderer = Dynamic;
 #end
-

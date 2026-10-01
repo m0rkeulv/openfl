@@ -64,12 +64,14 @@ class DisplayObjectRenderer extends EventDispatcher
 	@:noCompletion private var __roundPixels:Bool;
 	@:noCompletion private var __stage:Stage;
 	@:noCompletion private var __tempColorTransform:ColorTransform;
+
 	/**
 		Whether the surface being drawn into has an alpha channel. `BitmapData.draw` sets this to false
 		when it draws into an opaque bitmap. When the stage is rendered, the stage's own `transparent`
 		setting is used instead.
 	**/
 	@:noCompletion private var __transparent:Bool = true;
+
 	@SuppressWarnings("checkstyle:Dynamic") @:noCompletion private var __type:#if lime RenderContextType #else Dynamic #end;
 	@:noCompletion private var __worldAlpha:Float;
 	@:noCompletion private var __worldColorTransform:ColorTransform;

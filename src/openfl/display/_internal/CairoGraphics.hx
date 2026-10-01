@@ -1972,244 +1972,243 @@ class CairoGraphics
 		if (CairoGraphics.coverage && coveragePattern == null) coveragePattern = CairoPattern.createRGB(0, 0, 0);
 		cairo = target;
 
-			renderer.__setBlendModeCairo(cairo, NORMAL);
-			renderer.applyMatrix(graphics.__renderTransform, cairo);
+		renderer.__setBlendModeCairo(cairo, NORMAL);
+		renderer.applyMatrix(graphics.__renderTransform, cairo);
 
-			cairo.setOperator(CLEAR);
-			cairo.paint();
-			cairo.setOperator(OVER);
+		cairo.setOperator(CLEAR);
+		cairo.paint();
+		cairo.setOperator(OVER);
 
-			fillCommands.clear();
-			strokeCommands.clear();
+		fillCommands.clear();
+		strokeCommands.clear();
 
-			hasFill = false;
-			hasStroke = false;
+		hasFill = false;
+		hasStroke = false;
 
-			fillPattern = null;
-			strokePattern = null;
+		fillPattern = null;
+		strokePattern = null;
 
-			var hasLineStyle = false;
-			var initStrokeX = 0.0;
-			var initStrokeY = 0.0;
+		var hasLineStyle = false;
+		var initStrokeX = 0.0;
+		var initStrokeY = 0.0;
 
-			var data = new DrawCommandReader(graphics.__commands);
+		var data = new DrawCommandReader(graphics.__commands);
 
-			for (type in graphics.__commands.types)
+		for (type in graphics.__commands.types)
+		{
+			switch (type)
 			{
-				switch (type)
-				{
-					case CUBIC_CURVE_TO:
-						var c = data.readCubicCurveTo();
-						fillCommands.cubicCurveTo(c.controlX1, c.controlY1, c.controlX2, c.controlY2, c.anchorX, c.anchorY);
+				case CUBIC_CURVE_TO:
+					var c = data.readCubicCurveTo();
+					fillCommands.cubicCurveTo(c.controlX1, c.controlY1, c.controlX2, c.controlY2, c.anchorX, c.anchorY);
 
-						if (hasLineStyle)
-						{
-							strokeCommands.cubicCurveTo(c.controlX1, c.controlY1, c.controlX2, c.controlY2, c.anchorX, c.anchorY);
-						}
-						else
-						{
-							initStrokeX = c.anchorX;
-							initStrokeY = c.anchorY;
-						}
+					if (hasLineStyle)
+					{
+						strokeCommands.cubicCurveTo(c.controlX1, c.controlY1, c.controlX2, c.controlY2, c.anchorX, c.anchorY);
+					}
+					else
+					{
+						initStrokeX = c.anchorX;
+						initStrokeY = c.anchorY;
+					}
 
-					case CURVE_TO:
-						var c = data.readCurveTo();
-						fillCommands.curveTo(c.controlX, c.controlY, c.anchorX, c.anchorY);
+				case CURVE_TO:
+					var c = data.readCurveTo();
+					fillCommands.curveTo(c.controlX, c.controlY, c.anchorX, c.anchorY);
 
-						if (hasLineStyle)
-						{
-							strokeCommands.curveTo(c.controlX, c.controlY, c.anchorX, c.anchorY);
-						}
-						else
-						{
-							initStrokeX = c.anchorX;
-							initStrokeY = c.anchorY;
-						}
+					if (hasLineStyle)
+					{
+						strokeCommands.curveTo(c.controlX, c.controlY, c.anchorX, c.anchorY);
+					}
+					else
+					{
+						initStrokeX = c.anchorX;
+						initStrokeY = c.anchorY;
+					}
 
-					case LINE_TO:
-						var c = data.readLineTo();
-						fillCommands.lineTo(c.x, c.y);
+				case LINE_TO:
+					var c = data.readLineTo();
+					fillCommands.lineTo(c.x, c.y);
 
-						if (hasLineStyle)
-						{
-							strokeCommands.lineTo(c.x, c.y);
-						}
-						else
-						{
-							initStrokeX = c.x;
-							initStrokeY = c.y;
-						}
+					if (hasLineStyle)
+					{
+						strokeCommands.lineTo(c.x, c.y);
+					}
+					else
+					{
+						initStrokeX = c.x;
+						initStrokeY = c.y;
+					}
 
-					case MOVE_TO:
-						var c = data.readMoveTo();
-						fillCommands.moveTo(c.x, c.y);
+				case MOVE_TO:
+					var c = data.readMoveTo();
+					fillCommands.moveTo(c.x, c.y);
 
-						if (hasLineStyle)
-						{
-							strokeCommands.moveTo(c.x, c.y);
-						}
-						else
-						{
-							initStrokeX = c.x;
-							initStrokeY = c.y;
-						}
+					if (hasLineStyle)
+					{
+						strokeCommands.moveTo(c.x, c.y);
+					}
+					else
+					{
+						initStrokeX = c.x;
+						initStrokeY = c.y;
+					}
 
-					case END_FILL:
-						data.readEndFill();
-						endFill();
-						endStroke();
-						hasFill = false;
-						bitmapFill = null;
-						bitmapFillMatrix = null;
+				case END_FILL:
+					data.readEndFill();
+					endFill();
+					endStroke();
+					hasFill = false;
+					bitmapFill = null;
+					bitmapFillMatrix = null;
+					initStrokeX = 0;
+					initStrokeY = 0;
+
+				case LINE_GRADIENT_STYLE:
+					var c = data.readLineGradientStyle();
+
+					if (!hasLineStyle && (initStrokeX != 0 || initStrokeY != 0))
+					{
+						strokeCommands.moveTo(initStrokeX, initStrokeY);
 						initStrokeX = 0;
 						initStrokeY = 0;
+					}
 
-					case LINE_GRADIENT_STYLE:
-						var c = data.readLineGradientStyle();
+					hasLineStyle = true;
+					strokeCommands.lineGradientStyle(c.type, c.colors, c.alphas, c.ratios, c.matrix, c.spreadMethod, c.interpolationMethod, c.focalPointRatio);
 
-						if (!hasLineStyle && (initStrokeX != 0 || initStrokeY != 0))
+				case LINE_BITMAP_STYLE:
+					var c = data.readLineBitmapStyle();
+
+					if (!hasLineStyle && (initStrokeX != 0 || initStrokeY != 0))
+					{
+						strokeCommands.moveTo(initStrokeX, initStrokeY);
+						initStrokeX = 0;
+						initStrokeY = 0;
+					}
+
+					hasLineStyle = true;
+					strokeCommands.lineBitmapStyle(c.bitmap, c.matrix, c.repeat, c.smooth);
+
+				case LINE_STYLE:
+					var c = data.readLineStyle();
+
+					if (!hasLineStyle && c.thickness != null)
+					{
+						if (initStrokeX != 0 || initStrokeY != 0)
 						{
 							strokeCommands.moveTo(initStrokeX, initStrokeY);
 							initStrokeX = 0;
 							initStrokeY = 0;
 						}
+					}
 
-						hasLineStyle = true;
-						strokeCommands.lineGradientStyle(c.type, c.colors, c.alphas, c.ratios, c.matrix, c.spreadMethod, c.interpolationMethod,
+					hasLineStyle = c.thickness != null;
+					strokeCommands.lineStyle(c.thickness, c.color, c.alpha, c.pixelHinting, c.scaleMode, c.caps, c.joints, c.miterLimit);
+
+				case BEGIN_BITMAP_FILL, BEGIN_FILL, BEGIN_GRADIENT_FILL, BEGIN_SHADER_FILL:
+					endFill();
+					endStroke();
+
+					if (type == BEGIN_BITMAP_FILL)
+					{
+						var c = data.readBeginBitmapFill();
+						fillCommands.beginBitmapFill(c.bitmap, c.matrix, c.repeat, c.smooth);
+						strokeCommands.beginBitmapFill(c.bitmap, c.matrix, c.repeat, c.smooth);
+					}
+					else if (type == BEGIN_GRADIENT_FILL)
+					{
+						var c = data.readBeginGradientFill();
+						fillCommands.beginGradientFill(c.type, c.colors, c.alphas, c.ratios, c.matrix, c.spreadMethod, c.interpolationMethod,
 							c.focalPointRatio);
+						strokeCommands.beginGradientFill(c.type, c.colors, c.alphas, c.ratios, c.matrix, c.spreadMethod, c.interpolationMethod,
+							c.focalPointRatio);
+					}
+					else if (type == BEGIN_SHADER_FILL)
+					{
+						var c = data.readBeginShaderFill();
+						fillCommands.beginShaderFill(c.shaderBuffer);
+						strokeCommands.beginShaderFill(c.shaderBuffer);
+					}
+					else
+					{
+						var c = data.readBeginFill();
+						fillCommands.beginFill(c.color, c.alpha);
+						strokeCommands.beginFill(c.color, c.alpha);
+					}
 
-					case LINE_BITMAP_STYLE:
-						var c = data.readLineBitmapStyle();
+				case DRAW_CIRCLE:
+					var c = data.readDrawCircle();
+					fillCommands.drawCircle(c.x, c.y, c.radius);
 
-						if (!hasLineStyle && (initStrokeX != 0 || initStrokeY != 0))
-						{
-							strokeCommands.moveTo(initStrokeX, initStrokeY);
-							initStrokeX = 0;
-							initStrokeY = 0;
-						}
+					if (hasLineStyle)
+					{
+						strokeCommands.drawCircle(c.x, c.y, c.radius);
+					}
 
-						hasLineStyle = true;
-						strokeCommands.lineBitmapStyle(c.bitmap, c.matrix, c.repeat, c.smooth);
+				case DRAW_ELLIPSE:
+					var c = data.readDrawEllipse();
+					fillCommands.drawEllipse(c.x, c.y, c.width, c.height);
 
-					case LINE_STYLE:
-						var c = data.readLineStyle();
+					if (hasLineStyle)
+					{
+						strokeCommands.drawEllipse(c.x, c.y, c.width, c.height);
+					}
 
-						if (!hasLineStyle && c.thickness != null)
-						{
-							if (initStrokeX != 0 || initStrokeY != 0)
-							{
-								strokeCommands.moveTo(initStrokeX, initStrokeY);
-								initStrokeX = 0;
-								initStrokeY = 0;
-							}
-						}
+				case DRAW_RECT:
+					var c = data.readDrawRect();
+					fillCommands.drawRect(c.x, c.y, c.width, c.height);
 
-						hasLineStyle = c.thickness != null;
-						strokeCommands.lineStyle(c.thickness, c.color, c.alpha, c.pixelHinting, c.scaleMode, c.caps, c.joints, c.miterLimit);
+					if (hasLineStyle)
+					{
+						strokeCommands.drawRect(c.x, c.y, c.width, c.height);
+					}
 
-					case BEGIN_BITMAP_FILL, BEGIN_FILL, BEGIN_GRADIENT_FILL, BEGIN_SHADER_FILL:
-						endFill();
-						endStroke();
+				case DRAW_ROUND_RECT:
+					var c = data.readDrawRoundRect();
+					fillCommands.drawRoundRect(c.x, c.y, c.width, c.height, c.ellipseWidth, c.ellipseHeight);
 
-						if (type == BEGIN_BITMAP_FILL)
-						{
-							var c = data.readBeginBitmapFill();
-							fillCommands.beginBitmapFill(c.bitmap, c.matrix, c.repeat, c.smooth);
-							strokeCommands.beginBitmapFill(c.bitmap, c.matrix, c.repeat, c.smooth);
-						}
-						else if (type == BEGIN_GRADIENT_FILL)
-						{
-							var c = data.readBeginGradientFill();
-							fillCommands.beginGradientFill(c.type, c.colors, c.alphas, c.ratios, c.matrix, c.spreadMethod, c.interpolationMethod,
-								c.focalPointRatio);
-							strokeCommands.beginGradientFill(c.type, c.colors, c.alphas, c.ratios, c.matrix, c.spreadMethod, c.interpolationMethod,
-								c.focalPointRatio);
-						}
-						else if (type == BEGIN_SHADER_FILL)
-						{
-							var c = data.readBeginShaderFill();
-							fillCommands.beginShaderFill(c.shaderBuffer);
-							strokeCommands.beginShaderFill(c.shaderBuffer);
-						}
-						else
-						{
-							var c = data.readBeginFill();
-							fillCommands.beginFill(c.color, c.alpha);
-							strokeCommands.beginFill(c.color, c.alpha);
-						}
+					if (hasLineStyle)
+					{
+						strokeCommands.drawRoundRect(c.x, c.y, c.width, c.height, c.ellipseWidth, c.ellipseHeight);
+					}
 
-					case DRAW_CIRCLE:
-						var c = data.readDrawCircle();
-						fillCommands.drawCircle(c.x, c.y, c.radius);
+				case DRAW_QUADS:
+					var c = data.readDrawQuads();
+					fillCommands.drawQuads(c.rects, c.indices, c.transforms);
 
-						if (hasLineStyle)
-						{
-							strokeCommands.drawCircle(c.x, c.y, c.radius);
-						}
+				case DRAW_TRIANGLES:
+					var c = data.readDrawTriangles();
+					fillCommands.drawTriangles(c.vertices, c.indices, c.uvtData, c.culling);
 
-					case DRAW_ELLIPSE:
-						var c = data.readDrawEllipse();
-						fillCommands.drawEllipse(c.x, c.y, c.width, c.height);
+				case OVERRIDE_BLEND_MODE:
+					var c = data.readOverrideBlendMode();
+					renderer.__setBlendModeCairo(cairo, c.blendMode);
 
-						if (hasLineStyle)
-						{
-							strokeCommands.drawEllipse(c.x, c.y, c.width, c.height);
-						}
+				case WINDING_EVEN_ODD:
+					data.readWindingEvenOdd();
+					fillCommands.windingEvenOdd();
 
-					case DRAW_RECT:
-						var c = data.readDrawRect();
-						fillCommands.drawRect(c.x, c.y, c.width, c.height);
+				case WINDING_NON_ZERO:
+					data.readWindingNonZero();
+					fillCommands.windingNonZero();
 
-						if (hasLineStyle)
-						{
-							strokeCommands.drawRect(c.x, c.y, c.width, c.height);
-						}
-
-					case DRAW_ROUND_RECT:
-						var c = data.readDrawRoundRect();
-						fillCommands.drawRoundRect(c.x, c.y, c.width, c.height, c.ellipseWidth, c.ellipseHeight);
-
-						if (hasLineStyle)
-						{
-							strokeCommands.drawRoundRect(c.x, c.y, c.width, c.height, c.ellipseWidth, c.ellipseHeight);
-						}
-
-					case DRAW_QUADS:
-						var c = data.readDrawQuads();
-						fillCommands.drawQuads(c.rects, c.indices, c.transforms);
-
-					case DRAW_TRIANGLES:
-						var c = data.readDrawTriangles();
-						fillCommands.drawTriangles(c.vertices, c.indices, c.uvtData, c.culling);
-
-					case OVERRIDE_BLEND_MODE:
-						var c = data.readOverrideBlendMode();
-						renderer.__setBlendModeCairo(cairo, c.blendMode);
-
-					case WINDING_EVEN_ODD:
-						data.readWindingEvenOdd();
-						fillCommands.windingEvenOdd();
-
-					case WINDING_NON_ZERO:
-						data.readWindingNonZero();
-						fillCommands.windingNonZero();
-
-					default:
-						data.skip(type);
-				}
+				default:
+					data.skip(type);
 			}
+		}
 
-			if (fillCommands.length > 0)
-			{
-				endFill();
-			}
+		if (fillCommands.length > 0)
+		{
+			endFill();
+		}
 
-			if (strokeCommands.length > 0)
-			{
-				endStroke();
-			}
+		if (strokeCommands.length > 0)
+		{
+			endStroke();
+		}
 
-			data.destroy();
+		data.destroy();
 	}
 	#end
 

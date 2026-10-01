@@ -115,17 +115,22 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	@:noCompletion private var __width:Int;
 	@:noCompletion private var __groupOffsetX:Int = 0;
 	@:noCompletion private var __groupOffsetY:Int = 0;
+
 	// group scratch buffers (object, backdrop, ALPHA coverage, touched) and clip stacks per nesting
 	// level, shared by every renderer on the context: a cacheAsBitmap child renderer can run inside a group
 	@:noCompletion private static var __groupClipRects:Array<Array<Rectangle>> = [];
 	@:noCompletion private static var __groupDepth:Int = 0;
 	@:noCompletion private static var __groupScratchBuffers:Array<BitmapData> = [];
+
 	// the current group's touched buffer (see __touch), once built
 	@:noCompletion private var __touched:BitmapData;
+
 	@:noCompletion private static var __staticBlendShader:BlendModeShader;
 	@:noCompletion private static var __staticWhite:BitmapData;
+
 	// __renderDrawableDirect draws coverage instead of objects (see __drawCoverage)
 	@:noCompletion private var __coverageOnly:Bool;
+
 	@:noCompletion private static var __invertSilhouette:ColorTransform = new ColorTransform(0, 0, 0, 1, 255, 255, 255, 0);
 
 	@:noCompletion private function new(context:Context3D, defaultRenderTarget:BitmapData = null)
@@ -855,7 +860,8 @@ class OpenGLRenderer extends DisplayObjectRenderer
 			// the root is rendered as it is, its own blend mode being its parent's to apply, unless
 			// BitmapData.draw gave a blend mode: then the root is composited with it, as one object
 			if (__overrideBlendMode != null && __overrideBlendMode != NORMAL) __renderDrawable(object);
-			else __renderDrawableDirect(object);
+			else
+				__renderDrawableDirect(object);
 
 			// TODO: Handle this in Context3D as a viewport?
 
@@ -1019,8 +1025,10 @@ class OpenGLRenderer extends DisplayObjectRenderer
 				{
 					switch (type)
 					{
-						case BEGIN_FILL, BEGIN_BITMAP_FILL, BEGIN_GRADIENT_FILL, BEGIN_SHADER_FILL: pieces++;
-						case DRAW_QUADS, DRAW_TRIANGLES: pieces += 2;
+						case BEGIN_FILL, BEGIN_BITMAP_FILL, BEGIN_GRADIENT_FILL, BEGIN_SHADER_FILL:
+							pieces++;
+						case DRAW_QUADS, DRAW_TRIANGLES:
+							pieces += 2;
 						default:
 					}
 				}
@@ -1095,7 +1103,10 @@ class OpenGLRenderer extends DisplayObjectRenderer
 
 		var bounds = Rectangle.__pool.get();
 		var visible = __getGroupBounds(displayObject, bounds);
-		var x0 = Std.int(bounds.x), y0 = Std.int(bounds.y), width = Std.int(bounds.width), height = Std.int(bounds.height);
+		var x0 = Std.int(bounds.x),
+			y0 = Std.int(bounds.y),
+			width = Std.int(bounds.width),
+			height = Std.int(bounds.height);
 		Rectangle.__pool.release(bounds);
 		if (!visible) return;
 
@@ -1214,7 +1225,8 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		var cacheRTTSurfaceSelector = context.__state.renderToTextureSurfaceSelector;
 
 		var cacheFlipped = __flipped;
-		var cacheDisplayWidth = __displayWidth, cacheDisplayHeight = __displayHeight;
+		var cacheDisplayWidth = __displayWidth,
+			cacheDisplayHeight = __displayHeight;
 		var cacheOffsetX = __groupOffsetX, cacheOffsetY = __groupOffsetY;
 		var cacheClipRects = __clipRects, cacheNumClipRects = __numClipRects;
 		var cacheStencilReference = __stencilReference;
@@ -1222,7 +1234,9 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		var cacheGroupBlendMode = __groupBlendMode;
 		var cacheWorldAlpha = __worldAlpha;
 		// a group tracks what its children touch, from the moment a child needs it (see __ensureTouched)
-		var cacheTouchedRoot = __touchedGroup, cacheTouched = __touched, cacheTouchedActive = __touchedBuilt;
+		var cacheTouchedRoot = __touchedGroup,
+			cacheTouched = __touched,
+			cacheTouchedActive = __touchedBuilt;
 		__touchedGroup = displayObject;
 		__touched = null;
 		__touchedBuilt = false;
@@ -1346,7 +1360,8 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	@:noCompletion private function __restoreRenderTarget(texture:TextureBase, depthStencil:Bool, antiAlias:Int, surfaceSelector:Int):Void
 	{
 		if (texture != null) __context3D.setRenderToTexture(texture, depthStencil, antiAlias, surfaceSelector);
-		else __context3D.setRenderToBackBuffer();
+		else
+			__context3D.setRenderToBackBuffer();
 	}
 
 	/**
@@ -1375,9 +1390,11 @@ class OpenGLRenderer extends DisplayObjectRenderer
 
 	@:noCompletion private override function __drawTouched(displayObject:DisplayObject, graphicsOnly:Bool):Void
 	{
-		__drawIntoTouched(false, function() {
+		__drawIntoTouched(false, function()
+		{
 			if (graphicsOnly) __drawGraphicsCoverage(displayObject);
-			else __drawCoverage(displayObject);
+			else
+				__drawCoverage(displayObject);
 		});
 	}
 
@@ -1477,7 +1494,10 @@ class OpenGLRenderer extends DisplayObjectRenderer
 			placement.copyFrom(matrix);
 			placement.concat(__worldTransform);
 			if (pixelSnapping == ALWAYS
-				|| (pixelSnapping == AUTO && placement.b == 0 && placement.c == 0 && (placement.a < 1.001 && placement.a > 0.999)
+				|| (pixelSnapping == AUTO
+					&& placement.b == 0
+					&& placement.c == 0
+					&& (placement.a < 1.001 && placement.a > 0.999)
 					&& (placement.d < 1.001 && placement.d > 0.999)))
 			{
 				placement.tx = Math.round(placement.tx);
@@ -1488,7 +1508,10 @@ class OpenGLRenderer extends DisplayObjectRenderer
 			bounds.__transform(bounds, placement);
 			Matrix.__pool.release(placement);
 			var visible = __clampGroupBounds(bounds);
-			var x0 = Std.int(bounds.x), y0 = Std.int(bounds.y), width = Std.int(bounds.width), height = Std.int(bounds.height);
+			var x0 = Std.int(bounds.x),
+				y0 = Std.int(bounds.y),
+				width = Std.int(bounds.width),
+				height = Std.int(bounds.height);
 			Rectangle.__pool.release(bounds);
 
 			if (visible)
@@ -1498,8 +1521,8 @@ class OpenGLRenderer extends DisplayObjectRenderer
 				var backdrop = __groupScratchBuffers[level + 1];
 				__copyBackdrop(backdrop, x0, y0, width, height);
 
-				var shader = __prepareBlendShader(displayObject, blendMode, __getAlpha(displayObject.__worldAlpha),
-					graphics != null && blendMode == ALPHA && coverage == null, coverage);
+				var shader = __prepareBlendShader(displayObject, blendMode,
+					__getAlpha(displayObject.__worldAlpha), graphics != null && blendMode == ALPHA && coverage == null, coverage);
 
 				var context = __context3D;
 				context.setBlendFactors(ONE, ZERO);
@@ -1603,7 +1626,10 @@ class OpenGLRenderer extends DisplayObjectRenderer
 	{
 		var scratchBuffer = __groupScratchBuffers[level];
 
-		if (scratchBuffer == null || scratchBuffer.width < width || scratchBuffer.height < height || scratchBuffer.__textureContext != __context3D.__context)
+		if (scratchBuffer == null
+			|| scratchBuffer.width < width
+			|| scratchBuffer.height < height
+			|| scratchBuffer.__textureContext != __context3D.__context)
 		{
 			if (scratchBuffer != null)
 			{
@@ -1648,7 +1674,8 @@ class OpenGLRenderer extends DisplayObjectRenderer
 
 		if (displayObject.__children != null)
 		{
-			for (child in displayObject.__children) __drawCoverage(child);
+			for (child in displayObject.__children)
+				__drawCoverage(child);
 		}
 		else if (graphics == null)
 		{
@@ -1898,8 +1925,10 @@ class OpenGLRenderer extends DisplayObjectRenderer
 		{
 			// inside a group the target is the group's scratch buffer, whose origin is the group's
 			// box: the offset comes off before the scale below, since the flush scales the result
-			var left = clipRect.x - __groupOffsetX, top = clipRect.y - __groupOffsetY;
-			var right = clipRect.right - __groupOffsetX, bottom = clipRect.bottom - __groupOffsetY;
+			var left = clipRect.x - __groupOffsetX,
+				top = clipRect.y - __groupOffsetY;
+			var right = clipRect.right - __groupOffsetX,
+				bottom = clipRect.bottom - __groupOffsetY;
 			var x = Math.ffloor(left);
 			var y = Math.ffloor(top);
 			var width = (clipRect.width > 0 ? Math.fceil(right) - x : 0);
@@ -1953,11 +1982,13 @@ class OpenGLRenderer extends DisplayObjectRenderer
 
 			case ERASE:
 				if (__backdropIsOpaque()) __context3D.setBlendFactorsSeparate(ZERO, ONE_MINUS_SOURCE_ALPHA, ZERO, ONE);
-				else __context3D.setBlendFactors(ZERO, ONE_MINUS_SOURCE_ALPHA);
+				else
+					__context3D.setBlendFactors(ZERO, ONE_MINUS_SOURCE_ALPHA);
 
 			case ALPHA:
 				if (__backdropIsOpaque()) __context3D.setBlendFactorsSeparate(ZERO, SOURCE_ALPHA, ZERO, ONE);
-				else __context3D.setBlendFactors(ZERO, SOURCE_ALPHA);
+				else
+					__context3D.setBlendFactors(ZERO, SOURCE_ALPHA);
 
 			case INVERT:
 				__context3D.setBlendFactorsSeparate(ONE_MINUS_DESTINATION_COLOR, ONE_MINUS_SOURCE_ALPHA, ONE, ONE_MINUS_SOURCE_ALPHA);

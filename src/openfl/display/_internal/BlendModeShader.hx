@@ -12,7 +12,6 @@ import openfl.filters.BitmapFilterShader;
 @SuppressWarnings("checkstyle:FieldDocComment")
 class BlendModeShader extends BitmapFilterShader
 {
-
 	@:glFragmentSource("varying vec2 openfl_TextureCoordv;
 		uniform sampler2D openfl_Texture;
 		uniform sampler2D uBackdrop;
@@ -108,6 +107,7 @@ class BlendModeShader extends BitmapFilterShader
 		uHasTouched.value = [false];
 		#end
 	}
+
 	/**
 		Sets the copy of the backdrop the shader blends against. (x, y) is the framebuffer position the
 		copy was taken from, so that the fragment position maps straight onto it.
