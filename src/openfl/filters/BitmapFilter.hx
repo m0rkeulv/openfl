@@ -285,9 +285,10 @@ class BitmapFilter
 				// the source pixel on the destination grid, premultiplied; transparent outside the source
 				var sourceR = 0.0, sourceG = 0.0, sourceB = 0.0, sourceA = 0.0;
 				var sourceX = x - destOffsetX;
+				var p = 0;
 				if (rowInSource && sourceX >= 0 && sourceX < sourceWidth)
 				{
-					var p = (sourceY * sourceWidth + sourceX) * 4;
+					p = (sourceY * sourceWidth + sourceX) * 4;
 					if (p < length && pixels.get(p) != 0)
 					{
 						sourceA = pixels.get(p) / 255.0;
@@ -350,6 +351,15 @@ class BitmapFilter
 						g = effectG * outside;
 						b = effectB * outside;
 						a = effectA * outside;
+					}
+					else if (sourceA == 1)
+					{
+						// an opaque source pixel hides an outer effect: it is copied as it is
+						out.set(i * 4, 0xFF);
+						out.set(i * 4 + 1, pixels.get(p + 1));
+						out.set(i * 4 + 2, pixels.get(p + 2));
+						out.set(i * 4 + 3, pixels.get(p + 3));
+						continue;
 					}
 					else
 					{
