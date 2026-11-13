@@ -178,7 +178,8 @@ import lime._internal.graphics.ImageDataUtil;
 		var shadowG = (((__shadowColor >> 8) & 0xFF) / 255.0) * __shadowAlpha;
 		var shadowB = ((__shadowColor & 0xFF) / 255.0) * __shadowAlpha;
 
-		var fxR = new Array<Float>(), fxG = new Array<Float>(), fxB = new Array<Float>(), fxA = new Array<Float>();
+		var fxR = BitmapFilter.__channel(width * height), fxG = BitmapFilter.__channel(width * height);
+		var fxB = BitmapFilter.__channel(width * height), fxA = BitmapFilter.__channel(width * height);
 		for (y in 0...height)
 		{
 			for (x in 0...width)
@@ -194,10 +195,10 @@ import lime._internal.graphics.ImageDataUtil;
 				var highlight = dist > 1 ? 1.0 : (dist < 0 ? 0.0 : dist);
 				var shadow = -dist > 1 ? 1.0 : (-dist < 0 ? 0.0 : -dist);
 
-				fxR.push(highlightR * highlight + shadowR * shadow);
-				fxG.push(highlightG * highlight + shadowG * shadow);
-				fxB.push(highlightB * highlight + shadowB * shadow);
-				fxA.push(__highlightAlpha * highlight + __shadowAlpha * shadow);
+				fxR[y * width + x] = highlightR * highlight + shadowR * shadow;
+				fxG[y * width + x] = highlightG * highlight + shadowG * shadow;
+				fxB[y * width + x] = highlightB * highlight + shadowB * shadow;
+				fxA[y * width + x] = __highlightAlpha * highlight + __shadowAlpha * shadow;
 			}
 		}
 

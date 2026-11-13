@@ -6,6 +6,7 @@ import openfl.display.BlendMode;
 import openfl.display.DisplayObjectRenderer;
 import openfl.display.Shader;
 import openfl.geom.Point;
+import haxe.ds.Vector;
 import haxe.io.Bytes;
 import openfl.geom.Rectangle;
 
@@ -113,9 +114,9 @@ class BitmapFilter
 		Samples outside the source read 0, matching the transparent border the GL
 		path gets from its cache texture.
 	**/
-	@:noCompletion private static function __alphaMask(source:BitmapData, sourceRect:Rectangle, destPoint:Point, width:Int, height:Int):Array<Float>
+	@:noCompletion private static function __alphaMask(source:BitmapData, sourceRect:Rectangle, destPoint:Point, width:Int, height:Int):Vector<Float>
 	{
-		var mask = [for (i in 0...width * height) 0.0];
+		var mask = __channel(width * height);
 
 		var pixels = __argbPixels(source, sourceRect);
 		var length = pixels.length;
@@ -145,10 +146,10 @@ class BitmapFilter
 		Box-blur a 0..1 mask in place, matching `BoxBlurShader`: `quality`
 		iterations of one horizontal then one vertical pass.
 	**/
-	@:noCompletion private static function __blurMask(mask:Array<Float>, width:Int, height:Int, blurX:Float, blurY:Float, quality:Int):Array<Float>
+	@:noCompletion private static function __blurMask(mask:Vector<Float>, width:Int, height:Int, blurX:Float, blurY:Float, quality:Int):Vector<Float>
 	{
 		var passes = (quality > 0) ? quality : 1;
-		var scratch = [for (i in 0...mask.length) 0.0];
+		var scratch = __channel(mask.length);
 
 		for (i in 0...passes)
 		{
@@ -158,7 +159,7 @@ class BitmapFilter
 		return mask;
 	}
 
-	@:noCompletion private static function __blurMaskAxis(src:Array<Float>, dest:Array<Float>, width:Int, height:Int, blur:Float, horizontal:Bool):Void
+	@:noCompletion private static function __blurMaskAxis(src:Vector<Float>, dest:Vector<Float>, width:Int, height:Int, blur:Float, horizontal:Bool):Void
 	{
 		var fullSize = (blur > 255) ? 255.0 : blur;
 
@@ -195,13 +196,13 @@ class BitmapFilter
 		}
 	}
 
-	@:noCompletion private static inline function __maskAt(mask:Array<Float>, width:Int, height:Int, x:Int, y:Int):Float
+	@:noCompletion private static inline function __maskAt(mask:Vector<Float>, width:Int, height:Int, x:Int, y:Int):Float
 	{
 		return (x < 0 || x >= width || y < 0 || y >= height) ? 0.0 : mask[y * width + x];
 	}
 
 
-	@:noCompletion private static function __maskAtFrac(mask:Array<Float>, width:Int, height:Int, fx:Float, fy:Float):Float
+	@:noCompletion private static function __maskAtFrac(mask:Vector<Float>, width:Int, height:Int, fx:Float, fy:Float):Float
 	{
 		var x0 = Math.floor(fx), y0 = Math.floor(fy);
 		var tx = fx - x0, ty = fy - y0;
@@ -221,26 +222,18 @@ class BitmapFilter
 		knockout: the src term is dropped (outer keeps `fx * (1 - src.a)`,
 		          inner keeps `fx * src.a`, full keeps `fx`)
 	**/
-	@:noCompletion private static function __compositeEffect(dest:BitmapData, source:BitmapData, sourceRect:Rectangle, destPoint:Point, fxR:Array<Float>,
-			fxG:Array<Float>, fxB:Array<Float>, fxA:Array<Float>, type:BitmapFilterType, knockout:Bool):BitmapData
+	@:noCompletion private static function __compositeEffect(dest:BitmapData, source:BitmapData, sourceRect:Rectangle, destPoint:Point, fxR:Vector<Float>,
+			fxG:Vector<Float>, fxB:Vector<Float>, fxA:Vector<Float>, type:BitmapFilterType, knockout:Bool):BitmapData
 	{
 		var width = dest.width;
 		var height = dest.height;
 
 		// source pixels on the destination grid, premultiplied
-		var srcR = new Array<Float>();
-		var srcG = new Array<Float>();
-		var srcB = new Array<Float>();
-		var srcA = new Array<Float>();
-
 		var pixelCount = width * height;
-		for (i in 0...pixelCount)
-		{
-			srcR.push(0.0);
-			srcG.push(0.0);
-			srcB.push(0.0);
-			srcA.push(0.0);
-		}
+		var srcR = __channel(pixelCount);
+		var srcG = __channel(pixelCount);
+		var srcB = __channel(pixelCount);
+		var srcA = __channel(pixelCount);
 
 		var pixels = __argbPixels(source, sourceRect);
 		var length = pixels.length;
@@ -346,6 +339,21 @@ class BitmapFilter
 
 		__setArgbPixels(dest, out);
 		return dest;
+	}
+
+	/**
+		One channel of `length` pixels, all 0: a fixed-size array made once at its final size (a native
+		float array on HashLink and hxcpp), instead of an Array grown by push.
+	**/
+	@:noCompletion private static function __channel(length:Int):Vector<Float>
+	{
+		var channel = new Vector<Float>(length);
+		// static targets start a Vector at 0; the others start it empty
+		#if !target.static
+		for (i in 0...length)
+			channel[i] = 0;
+		#end
+		return channel;
 	}
 
 	/**

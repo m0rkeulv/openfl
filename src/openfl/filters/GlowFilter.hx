@@ -274,16 +274,17 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 		var colorG = (((__color >> 8) & 0xFF) / 255.0) * __alpha;
 		var colorB = ((__color & 0xFF) / 255.0) * __alpha;
 
-		var fxR = new Array<Float>(), fxG = new Array<Float>(), fxB = new Array<Float>(), fxA = new Array<Float>();
+		var fxR = BitmapFilter.__channel(width * height), fxG = BitmapFilter.__channel(width * height);
+		var fxB = BitmapFilter.__channel(width * height), fxA = BitmapFilter.__channel(width * height);
 		for (i in 0...width * height)
 		{
 			var glowCoverage = mask[i] * __strength;
 			if (glowCoverage > 1) glowCoverage = 1;
 			else if (glowCoverage < 0) glowCoverage = 0;
-			fxR.push(colorR * glowCoverage);
-			fxG.push(colorG * glowCoverage);
-			fxB.push(colorB * glowCoverage);
-			fxA.push(__alpha * glowCoverage);
+			fxR[i] = colorR * glowCoverage;
+			fxG[i] = colorG * glowCoverage;
+			fxB[i] = colorB * glowCoverage;
+			fxA[i] = __alpha * glowCoverage;
 		}
 
 		return BitmapFilter.__compositeEffect(bitmapData, sourceBitmapData, sourceRect, destPoint, fxR, fxG, fxB, fxA, __inner ? INNER : OUTER, __knockout);

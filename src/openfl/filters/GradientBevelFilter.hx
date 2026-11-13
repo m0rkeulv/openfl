@@ -98,7 +98,8 @@ import openfl.geom.Rectangle;
 		var offsetX = __distance * Math.cos(rad) * __renderScale;
 		var offsetY = __distance * Math.sin(rad) * __renderScale;
 
-		var fxR = new Array<Float>(), fxG = new Array<Float>(), fxB = new Array<Float>(), fxA = new Array<Float>();
+		var fxR = BitmapFilter.__channel(width * height), fxG = BitmapFilter.__channel(width * height);
+		var fxB = BitmapFilter.__channel(width * height), fxA = BitmapFilter.__channel(width * height);
 		for (y in 0...height)
 		{
 			for (x in 0...width)
@@ -115,10 +116,10 @@ import openfl.geom.Rectangle;
 				else if (edgeSlope < -1) edgeSlope = -1;
 
 				var i = Std.int((edgeSlope * 0.5 + 0.5) * 255 + 0.5) * 4;
-				fxR.push(ramp[i]);
-				fxG.push(ramp[i + 1]);
-				fxB.push(ramp[i + 2]);
-				fxA.push(ramp[i + 3]);
+				fxR[y * width + x] = ramp[i];
+				fxG[y * width + x] = ramp[i + 1];
+				fxB[y * width + x] = ramp[i + 2];
+				fxA[y * width + x] = ramp[i + 3];
 			}
 		}
 

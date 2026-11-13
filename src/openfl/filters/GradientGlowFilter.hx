@@ -118,29 +118,24 @@ import openfl.geom.Rectangle;
 			clipY1 = Math.max(objY + objH, objY + objH + offY + reachY);
 		}
 
-		var fxR = new Array<Float>(), fxG = new Array<Float>(), fxB = new Array<Float>(), fxA = new Array<Float>();
+		var fxR = BitmapFilter.__channel(width * height), fxG = BitmapFilter.__channel(width * height);
+		var fxB = BitmapFilter.__channel(width * height), fxA = BitmapFilter.__channel(width * height);
 		for (y in 0...height)
 		{
 			for (x in 0...width)
 			{
-				if (x < clipX0 || x >= clipX1 || y < clipY0 || y >= clipY1)
-				{
-					fxR.push(0);
-					fxG.push(0);
-					fxB.push(0);
-					fxA.push(0);
-					continue;
-				}
+				// outside the clip the effect stays 0, as the channels start
+				if (x < clipX0 || x >= clipX1 || y < clipY0 || y >= clipY1) continue;
 				var glowCoverage = BitmapFilter.__maskAtFrac(mask, width, height, x - glowOffsetX, y - glowOffsetY) * __strength;
 				if (glowCoverage > 1) glowCoverage = 1;
 				else if (glowCoverage < 0) glowCoverage = 0;
 
 				// index the ramp by the mask, exactly as GradientGlowShader does
 				var i = Std.int(glowCoverage * 255 + 0.5) * 4;
-				fxR.push(ramp[i]);
-				fxG.push(ramp[i + 1]);
-				fxB.push(ramp[i + 2]);
-				fxA.push(ramp[i + 3]);
+				fxR[y * width + x] = ramp[i];
+				fxG[y * width + x] = ramp[i + 1];
+				fxB[y * width + x] = ramp[i + 2];
+				fxA[y * width + x] = ramp[i + 3];
 			}
 		}
 

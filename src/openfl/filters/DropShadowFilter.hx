@@ -314,7 +314,8 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 		var shadowOffsetX = __exactOffsetX() * __renderScale;
 		var shadowOffsetY = __exactOffsetY() * __renderScale;
 
-		var fxR = new Array<Float>(), fxG = new Array<Float>(), fxB = new Array<Float>(), fxA = new Array<Float>();
+		var fxR = BitmapFilter.__channel(width * height), fxG = BitmapFilter.__channel(width * height);
+		var fxB = BitmapFilter.__channel(width * height), fxA = BitmapFilter.__channel(width * height);
 		for (y in 0...height)
 		{
 			for (x in 0...width)
@@ -325,10 +326,10 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 				if (shadowCoverage > 1) shadowCoverage = 1;
 				else if (shadowCoverage < 0) shadowCoverage = 0;
 
-				fxR.push(colorR * shadowCoverage);
-				fxG.push(colorG * shadowCoverage);
-				fxB.push(colorB * shadowCoverage);
-				fxA.push(__alpha * shadowCoverage);
+				fxR[y * width + x] = colorR * shadowCoverage;
+				fxG[y * width + x] = colorG * shadowCoverage;
+				fxB[y * width + x] = colorB * shadowCoverage;
+				fxA[y * width + x] = __alpha * shadowCoverage;
 			}
 		}
 
