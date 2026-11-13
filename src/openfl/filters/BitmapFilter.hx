@@ -272,6 +272,9 @@ class BitmapFilter
 		}
 
 		var out = Bytes.alloc(width * height * 4);
+		// BitmapFilterType is an abstract over Null<Int>: compared per pixel, its constants are boxed
+		var inner = (type == INNER);
+		var full = (type == FULL);
 
 		for (i in 0...width * height)
 		{
@@ -279,7 +282,7 @@ class BitmapFilter
 			var effectR = fxR[i], effectG = fxG[i], effectB = fxB[i], effectA = fxA[i];
 			var r:Float, g:Float, b:Float, a:Float;
 
-			if (type == INNER)
+			if (inner)
 			{
 				// the effect confined to the shape: scaled by the source alpha
 				var maskedR = effectR * sourceA, maskedG = effectG * sourceA, maskedB = effectB * sourceA, maskedA = effectA * sourceA;
@@ -298,7 +301,7 @@ class BitmapFilter
 					a = sourceA;
 				}
 			}
-			else if (type == FULL)
+			else if (full)
 			{
 				if (knockout)
 				{
