@@ -176,10 +176,41 @@ class BitmapFilter
 		var frac = Math.floor((half - (n + 0.5)) * 255) / 255;
 		var edge = n + 1;
 
+		// the box around the mask's samples that are not 0, grown by the blur's reach along its axis:
+		// outside it every sample the blur reads is 0, and so is the result
+		var left = width, top = height, right = -1, bottom = -1;
 		for (y in 0...height)
 		{
 			for (x in 0...width)
 			{
+				if (src[y * width + x] == 0) continue;
+				if (x < left) left = x;
+				if (x > right) right = x;
+				if (y < top) top = y;
+				bottom = y;
+			}
+		}
+		if (horizontal)
+		{
+			left -= edge;
+			right += edge;
+		}
+		else
+		{
+			top -= edge;
+			bottom += edge;
+		}
+
+		for (y in 0...height)
+		{
+			for (x in 0...width)
+			{
+				if (x < left || x > right || y < top || y > bottom)
+				{
+					dest[y * width + x] = 0;
+					continue;
+				}
+
 				var sum = __maskAt(src, width, height, x, y);
 
 				for (i in 1...(n + 1))
