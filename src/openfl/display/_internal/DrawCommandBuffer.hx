@@ -51,6 +51,7 @@ class DrawCommandBuffer
 		}
 		else
 		{
+			copyOnWrite = true;
 			clear();
 		}
 	}
@@ -231,6 +232,19 @@ class DrawCommandBuffer
 
 	public function clear():Void
 	{
+		if (!copyOnWrite)
+		{
+			// the arrays are this buffer's own: emptied in place they keep their room for the next commands
+			types.resize(0);
+			b.resize(0);
+			i.resize(0);
+			f.resize(0);
+			o.resize(0);
+			ff.resize(0);
+			ii.resize(0);
+			return;
+		}
+
 		types = empty.types;
 
 		b = empty.b;
