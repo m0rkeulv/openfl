@@ -87,7 +87,8 @@ import openfl.geom.Rectangle;
 		var width = bitmapData.width;
 		var height = bitmapData.height;
 
-		var levels = BitmapFilter.__alphaMask(sourceBitmapData, sourceRect, destPoint, width, height);
+		var pixels = BitmapFilter.__argbPixels(sourceBitmapData, sourceRect);
+		var levels = BitmapFilter.__alphaMask(pixels, sourceRect, destPoint, width, height);
 		var mask = BitmapFilter.__blurMask(levels, width, height, __blurX * __renderScale, __blurY * __renderScale, __quality);
 
 		if (__rampDirty) __buildRamp();
@@ -124,7 +125,7 @@ import openfl.geom.Rectangle;
 			}
 		}
 
-		return BitmapFilter.__compositeEffect(bitmapData, sourceBitmapData, sourceRect, destPoint, fxR, fxG, fxB, fxA, __type, __knockout);
+		return BitmapFilter.__compositeEffect(bitmapData, pixels, sourceRect, destPoint, fxR, fxG, fxB, fxA, __type, __knockout);
 	}
 
 	@:noCompletion private function __rampChannels():Array<Float>

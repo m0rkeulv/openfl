@@ -262,7 +262,8 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 		var height = bitmapData.height;
 
 		// blur the source alpha into the glow's coverage mask, then colourise it
-		var levels = BitmapFilter.__alphaMask(sourceBitmapData, sourceRect, destPoint, width, height);
+		var pixels = BitmapFilter.__argbPixels(sourceBitmapData, sourceRect);
+		var levels = BitmapFilter.__alphaMask(pixels, sourceRect, destPoint, width, height);
 		if (__inner)
 		{
 			for (i in 0...levels.length)
@@ -287,7 +288,7 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 			fxA[i] = __alpha * glowCoverage;
 		}
 
-		return BitmapFilter.__compositeEffect(bitmapData, sourceBitmapData, sourceRect, destPoint, fxR, fxG, fxB, fxA, __inner ? INNER : OUTER, __knockout);
+		return BitmapFilter.__compositeEffect(bitmapData, pixels, sourceRect, destPoint, fxR, fxG, fxB, fxA, __inner ? INNER : OUTER, __knockout);
 	}
 
 	@:noCompletion private override function __initShader(renderer:DisplayObjectRenderer, pass:Int, sourceBitmapData:BitmapData):Shader

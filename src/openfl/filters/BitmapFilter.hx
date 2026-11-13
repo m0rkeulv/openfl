@@ -109,16 +109,15 @@ class BitmapFilter
 	}
 
 	/**
-		The source's alpha channel as a mask of whole levels (0..255) laid out on the
-		destination grid, using the sourceRect/destPoint mapping `__applyFilter` is given.
+		The alpha channel of the source's `pixels` (as `__argbPixels` returns them) as a mask of
+		whole levels (0..255) laid out on the destination grid, using the sourceRect/destPoint
+		mapping `__applyFilter` is given.
 		Samples outside the source read 0, matching the transparent border the GL
 		path gets from its cache texture.
 	**/
-	@:noCompletion private static function __alphaMask(source:BitmapData, sourceRect:Rectangle, destPoint:Point, width:Int, height:Int):Vector<Int>
+	@:noCompletion private static function __alphaMask(pixels:Bytes, sourceRect:Rectangle, destPoint:Point, width:Int, height:Int):Vector<Int>
 	{
 		var mask = __levels(width * height);
-
-		var pixels = __argbPixels(source, sourceRect);
 		var length = pixels.length;
 
 		var sw = Std.int(sourceRect.width);
@@ -320,9 +319,9 @@ class BitmapFilter
 	}
 
 	/**
-		Combine an effect layer with the source and write the result into `dest`,
-		matching the GL combine shaders. The effect is supplied as premultiplied
-		0..1 channels; `type` is INNER / OUTER / FULL.
+		Combine an effect layer with the source's `pixels` (as `__argbPixels` returns them)
+		and write the result into `dest`, matching the GL combine shaders. The effect is
+		supplied as premultiplied 0..1 channels; `type` is INNER / OUTER / FULL.
 
 		outer:    src + fx * (1 - src.a)
 		inner:    rgb = src.rgb * (1 - fx.a) + fx.rgb * src.a,  a = src.a
@@ -330,13 +329,11 @@ class BitmapFilter
 		knockout: the src term is dropped (outer keeps `fx * (1 - src.a)`,
 		          inner keeps `fx * src.a`, full keeps `fx`)
 	**/
-	@:noCompletion private static function __compositeEffect(dest:BitmapData, source:BitmapData, sourceRect:Rectangle, destPoint:Point, fxR:Vector<Float>,
+	@:noCompletion private static function __compositeEffect(dest:BitmapData, pixels:Bytes, sourceRect:Rectangle, destPoint:Point, fxR:Vector<Float>,
 			fxG:Vector<Float>, fxB:Vector<Float>, fxA:Vector<Float>, type:BitmapFilterType, knockout:Bool):BitmapData
 	{
 		var width = dest.width;
 		var height = dest.height;
-
-		var pixels = __argbPixels(source, sourceRect);
 		var length = pixels.length;
 
 		var sourceWidth = Std.int(sourceRect.width);
