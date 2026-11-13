@@ -72,7 +72,7 @@ class CairoGraphics
 
 	private static function __scaleDown(dst:Cairo, src:CairoImageSurface, factor:Int, filter:CairoFilter, dstWidth:Int, dstHeight:Int, clearWidth:Int, clearHeight:Int):Void
 	{
-		dst.matrix = new Matrix3();
+		dst.identityMatrix();
 		dst.newPath();
 		dst.setOperator(CLEAR);
 		dst.rectangle(0, 0, clearWidth, clearHeight);
@@ -81,7 +81,8 @@ class CairoGraphics
 
 		var pattern = CairoPattern.createForSurface(src);
 		pattern.filter = filter;
-		pattern.matrix = new Matrix3(factor, 0, 0, factor, 0, 0);
+		tempMatrix3.setTo(factor, 0, 0, factor, 0, 0);
+		pattern.matrix = tempMatrix3;
 		dst.source = pattern;
 		dst.rectangle(0, 0, dstWidth, dstHeight);
 		dst.fill();
@@ -2443,7 +2444,7 @@ class CairoGraphics
 
 			// The scratch surface is shared and grows to the largest shape seen as allocating new surfaces is a real slowdown so we try to avoid it.
 			// We re use the surface by simply reset draw rules and clear only the part that this shape use (plus the margin the downsample kernel reads).
-			ssCairo.matrix = new Matrix3();
+			ssCairo.identityMatrix();
 			ssCairo.newPath();
 			ssCairo.setOperator(CLEAR);
 			ssCairo.rectangle(0, 0, ssW + SCRATCH_MARGIN, ssH + SCRATCH_MARGIN);
