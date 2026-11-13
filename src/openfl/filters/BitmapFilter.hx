@@ -228,13 +228,6 @@ class BitmapFilter
 		var width = dest.width;
 		var height = dest.height;
 
-		// source pixels on the destination grid, premultiplied
-		var pixelCount = width * height;
-		var srcR = __channel(pixelCount);
-		var srcG = __channel(pixelCount);
-		var srcB = __channel(pixelCount);
-		var srcA = __channel(pixelCount);
-
 		var pixels = __argbPixels(source, sourceRect);
 		var length = pixels.length;
 
@@ -243,98 +236,99 @@ class BitmapFilter
 		var destOffsetX = Std.int(destPoint.x);
 		var destOffsetY = Std.int(destPoint.y);
 
-		for (y in 0...sourceHeight)
-		{
-			var destY = y + destOffsetY;
-			if (destY < 0 || destY >= height) continue;
-
-			for (x in 0...sourceWidth)
-			{
-				var destX = x + destOffsetX;
-				if (destX < 0 || destX >= width) continue;
-
-				var p = (y * sourceWidth + x) * 4;
-				if (p >= length) continue;
-				var a = pixels.get(p) / 255.0;
-				var i = destY * width + destX;
-				srcA[i] = a;
-				srcR[i] = (pixels.get(p + 1) / 255.0) * a;
-				srcG[i] = (pixels.get(p + 2) / 255.0) * a;
-				srcB[i] = (pixels.get(p + 3) / 255.0) * a;
-			}
-		}
-
 		var out = Bytes.alloc(width * height * 4);
 		// BitmapFilterType is an abstract over Null<Int>: compared per pixel, its constants are boxed
 		var inner = (type == INNER);
 		var full = (type == FULL);
 
-		for (i in 0...width * height)
+		for (y in 0...height)
 		{
-			var sourceR = srcR[i], sourceG = srcG[i], sourceB = srcB[i], sourceA = srcA[i];
-			var effectR = fxR[i], effectG = fxG[i], effectB = fxB[i], effectA = fxA[i];
-			var r:Float, g:Float, b:Float, a:Float;
+			var sourceY = y - destOffsetY;
+			var rowInSource = (sourceY >= 0 && sourceY < sourceHeight);
 
-			if (inner)
+			for (x in 0...width)
 			{
-				// the effect confined to the shape: scaled by the source alpha
-				var maskedR = effectR * sourceA, maskedG = effectG * sourceA, maskedB = effectB * sourceA, maskedA = effectA * sourceA;
-				if (knockout)
-				{
-					r = maskedR;
-					g = maskedG;
-					b = maskedB;
-					a = maskedA;
-				}
-				else
-				{
-					r = sourceR * (1 - effectA) + maskedR;
-					g = sourceG * (1 - effectA) + maskedG;
-					b = sourceB * (1 - effectA) + maskedB;
-					a = sourceA;
-				}
-			}
-			else if (full)
-			{
-				if (knockout)
-				{
-					r = effectR;
-					g = effectG;
-					b = effectB;
-					a = effectA;
-				}
-				else
-				{
-					r = sourceR * (1 - effectA) + effectR;
-					g = sourceG * (1 - effectA) + effectG;
-					b = sourceB * (1 - effectA) + effectB;
-					a = sourceA * (1 - effectA) + effectA;
-				}
-			}
-			else // OUTER
-			{
-				var outside = 1 - sourceA; // how much of this pixel lies outside the shape
-				if (knockout)
-				{
-					r = effectR * outside;
-					g = effectG * outside;
-					b = effectB * outside;
-					a = effectA * outside;
-				}
-				else
-				{
-					r = sourceR + effectR * outside;
-					g = sourceG + effectG * outside;
-					b = sourceB + effectB * outside;
-					a = sourceA + effectA * outside;
-				}
-			}
+				var i = y * width + x;
 
-			var color:Int = __toStraightARGB(r, g, b, a);
-			out.set(i * 4, color >>> 24);
-			out.set(i * 4 + 1, color >> 16);
-			out.set(i * 4 + 2, color >> 8);
-			out.set(i * 4 + 3, color);
+				// the source pixel on the destination grid, premultiplied; transparent outside the source
+				var sourceR = 0.0, sourceG = 0.0, sourceB = 0.0, sourceA = 0.0;
+				var sourceX = x - destOffsetX;
+				if (rowInSource && sourceX >= 0 && sourceX < sourceWidth)
+				{
+					var p = (sourceY * sourceWidth + sourceX) * 4;
+					if (p < length && pixels.get(p) != 0)
+					{
+						sourceA = pixels.get(p) / 255.0;
+						sourceR = (pixels.get(p + 1) / 255.0) * sourceA;
+						sourceG = (pixels.get(p + 2) / 255.0) * sourceA;
+						sourceB = (pixels.get(p + 3) / 255.0) * sourceA;
+					}
+				}
+
+				var effectR = fxR[i], effectG = fxG[i], effectB = fxB[i], effectA = fxA[i];
+				var r:Float, g:Float, b:Float, a:Float;
+
+				if (inner)
+				{
+					// the effect confined to the shape: scaled by the source alpha
+					var maskedR = effectR * sourceA, maskedG = effectG * sourceA, maskedB = effectB * sourceA, maskedA = effectA * sourceA;
+					if (knockout)
+					{
+						r = maskedR;
+						g = maskedG;
+						b = maskedB;
+						a = maskedA;
+					}
+					else
+					{
+						r = sourceR * (1 - effectA) + maskedR;
+						g = sourceG * (1 - effectA) + maskedG;
+						b = sourceB * (1 - effectA) + maskedB;
+						a = sourceA;
+					}
+				}
+				else if (full)
+				{
+					if (knockout)
+					{
+						r = effectR;
+						g = effectG;
+						b = effectB;
+						a = effectA;
+					}
+					else
+					{
+						r = sourceR * (1 - effectA) + effectR;
+						g = sourceG * (1 - effectA) + effectG;
+						b = sourceB * (1 - effectA) + effectB;
+						a = sourceA * (1 - effectA) + effectA;
+					}
+				}
+				else // OUTER
+				{
+					var outside = 1 - sourceA; // how much of this pixel lies outside the shape
+					if (knockout)
+					{
+						r = effectR * outside;
+						g = effectG * outside;
+						b = effectB * outside;
+						a = effectA * outside;
+					}
+					else
+					{
+						r = sourceR + effectR * outside;
+						g = sourceG + effectG * outside;
+						b = sourceB + effectB * outside;
+						a = sourceA + effectA * outside;
+					}
+				}
+
+				var color:Int = __toStraightARGB(r, g, b, a);
+				out.set(i * 4, color >>> 24);
+				out.set(i * 4 + 1, color >> 16);
+				out.set(i * 4 + 2, color >> 8);
+				out.set(i * 4 + 3, color);
+			}
 		}
 
 		__setArgbPixels(dest, out);
