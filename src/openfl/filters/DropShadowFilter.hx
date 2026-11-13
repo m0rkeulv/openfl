@@ -326,10 +326,11 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 				if (shadowCoverage > 1) shadowCoverage = 1;
 				else if (shadowCoverage < 0) shadowCoverage = 0;
 
-				fxR[y * width + x] = colorR * shadowCoverage;
-				fxG[y * width + x] = colorG * shadowCoverage;
-				fxB[y * width + x] = colorB * shadowCoverage;
-				fxA[y * width + x] = __alpha * shadowCoverage;
+				var pixelIndex = y * width + x;
+				fxR[pixelIndex] = colorR * shadowCoverage;
+				fxG[pixelIndex] = colorG * shadowCoverage;
+				fxB[pixelIndex] = colorB * shadowCoverage;
+				fxA[pixelIndex] = __alpha * shadowCoverage;
 			}
 		}
 

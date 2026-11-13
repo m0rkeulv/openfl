@@ -116,10 +116,11 @@ import openfl.geom.Rectangle;
 				else if (edgeSlope < -1) edgeSlope = -1;
 
 				var i = Std.int((edgeSlope * 0.5 + 0.5) * 255 + 0.5) * 4;
-				fxR[y * width + x] = ramp[i];
-				fxG[y * width + x] = ramp[i + 1];
-				fxB[y * width + x] = ramp[i + 2];
-				fxA[y * width + x] = ramp[i + 3];
+				var pixelIndex = y * width + x;
+				fxR[pixelIndex] = ramp[i];
+				fxG[pixelIndex] = ramp[i + 1];
+				fxB[pixelIndex] = ramp[i + 2];
+				fxA[pixelIndex] = ramp[i + 3];
 			}
 		}
 

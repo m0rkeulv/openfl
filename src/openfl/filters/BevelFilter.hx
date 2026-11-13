@@ -195,10 +195,11 @@ import lime._internal.graphics.ImageDataUtil;
 				var highlight = dist > 1 ? 1.0 : (dist < 0 ? 0.0 : dist);
 				var shadow = -dist > 1 ? 1.0 : (-dist < 0 ? 0.0 : -dist);
 
-				fxR[y * width + x] = highlightR * highlight + shadowR * shadow;
-				fxG[y * width + x] = highlightG * highlight + shadowG * shadow;
-				fxB[y * width + x] = highlightB * highlight + shadowB * shadow;
-				fxA[y * width + x] = __highlightAlpha * highlight + __shadowAlpha * shadow;
+				var pixelIndex = y * width + x;
+				fxR[pixelIndex] = highlightR * highlight + shadowR * shadow;
+				fxG[pixelIndex] = highlightG * highlight + shadowG * shadow;
+				fxB[pixelIndex] = highlightB * highlight + shadowB * shadow;
+				fxA[pixelIndex] = __highlightAlpha * highlight + __shadowAlpha * shadow;
 			}
 		}
 
