@@ -262,13 +262,13 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 		var height = bitmapData.height;
 
 		// blur the source alpha into the glow's coverage mask, then colourise it
-		var mask = BitmapFilter.__alphaMask(sourceBitmapData, sourceRect, destPoint, width, height);
+		var levels = BitmapFilter.__alphaMask(sourceBitmapData, sourceRect, destPoint, width, height);
 		if (__inner)
 		{
-			for (i in 0...mask.length)
-				mask[i] = 1 - mask[i];
+			for (i in 0...levels.length)
+				levels[i] = 255 - levels[i];
 		}
-		BitmapFilter.__blurMask(mask, width, height, __blurX * __renderScale, __blurY * __renderScale, __quality);
+		var mask = BitmapFilter.__blurMask(levels, width, height, __blurX * __renderScale, __blurY * __renderScale, __quality, __inner);
 
 		var colorR = (((__color >> 16) & 0xFF) / 255.0) * __alpha;
 		var colorG = (((__color >> 8) & 0xFF) / 255.0) * __alpha;

@@ -90,8 +90,8 @@ import openfl.geom.Rectangle;
 		var height = bitmapData.height;
 
 		// blurred source alpha, read back shifted by distance/angle (as the GL path samples the mask at coord - offset)
-		var mask = BitmapFilter.__alphaMask(sourceBitmapData, sourceRect, destPoint, width, height);
-		BitmapFilter.__blurMask(mask, width, height, __blurX * __renderScale, __blurY * __renderScale, __quality);
+		var levels = BitmapFilter.__alphaMask(sourceBitmapData, sourceRect, destPoint, width, height);
+		var mask = BitmapFilter.__blurMask(levels, width, height, __blurX * __renderScale, __blurY * __renderScale, __quality);
 
 		if (__rampDirty) __buildRamp();
 		var ramp = __rampChannels();

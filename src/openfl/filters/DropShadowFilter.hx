@@ -298,13 +298,13 @@ import lime._internal.graphics.ImageDataUtil; // TODO
 		var height = bitmapData.height;
 
 		// blur the source alpha, then read it back shifted by the shadow offset
-		var mask = BitmapFilter.__alphaMask(sourceBitmapData, sourceRect, destPoint, width, height);
+		var levels = BitmapFilter.__alphaMask(sourceBitmapData, sourceRect, destPoint, width, height);
 		if (__inner)
 		{
-			for (i in 0...mask.length)
-				mask[i] = 1 - mask[i];
+			for (i in 0...levels.length)
+				levels[i] = 255 - levels[i];
 		}
-		BitmapFilter.__blurMask(mask, width, height, __blurX * __renderScale, __blurY * __renderScale, __quality);
+		var mask = BitmapFilter.__blurMask(levels, width, height, __blurX * __renderScale, __blurY * __renderScale, __quality, __inner);
 
 		// shadow colour premultiplied by its alpha, as the shader's uColor
 		var colorR = (((__color >> 16) & 0xFF) / 255.0) * __alpha;

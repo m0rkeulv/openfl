@@ -161,8 +161,8 @@ import lime._internal.graphics.ImageDataUtil;
 
 		// Same Shader: blur the source alpha, then compare the mask either side of the light direction.
 		// The signed difference drives the highlight (light side) and the shadow (dark side).
-		var mask = BitmapFilter.__alphaMask(sourceBitmapData, sourceRect, destPoint, width, height);
-		BitmapFilter.__blurMask(mask, width, height, __blurX * __renderScale, __blurY * __renderScale, __quality);
+		var levels = BitmapFilter.__alphaMask(sourceBitmapData, sourceRect, destPoint, width, height);
+		var mask = BitmapFilter.__blurMask(levels, width, height, __blurX * __renderScale, __blurY * __renderScale, __quality);
 
 		var rad = __angle * Math.PI / 180;
 		// exact (fractional) step along the light angle, sampled bilinearly as the shader does

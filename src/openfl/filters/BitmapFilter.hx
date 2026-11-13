@@ -109,14 +109,14 @@ class BitmapFilter
 	}
 
 	/**
-		The source's alpha channel as a 0..1 mask laid out on the destination
-		grid, using the sourceRect/destPoint mapping `__applyFilter` is given.
+		The source's alpha channel as a mask of whole levels (0..255) laid out on the
+		destination grid, using the sourceRect/destPoint mapping `__applyFilter` is given.
 		Samples outside the source read 0, matching the transparent border the GL
 		path gets from its cache texture.
 	**/
-	@:noCompletion private static function __alphaMask(source:BitmapData, sourceRect:Rectangle, destPoint:Point, width:Int, height:Int):Vector<Float>
+	@:noCompletion private static function __alphaMask(source:BitmapData, sourceRect:Rectangle, destPoint:Point, width:Int, height:Int):Vector<Int>
 	{
-		var mask = __channel(width * height);
+		var mask = __levels(width * height);
 
 		var pixels = __argbPixels(source, sourceRect);
 		var length = pixels.length;
@@ -136,30 +136,61 @@ class BitmapFilter
 				var dx = x + ox;
 				if (dx < 0 || dx >= width) continue;
 				var p = (y * sw + x) * 4;
-				if (p < length) mask[dy * width + dx] = pixels.get(p) / 255.0;
+				if (p < length) mask[dy * width + dx] = pixels.get(p);
 			}
 		}
 		return mask;
 	}
 
 	/**
-		Box-blur a 0..1 mask in place, matching `BoxBlurShader`: `quality`
-		iterations of one horizontal then one vertical pass.
+		Box-blur a mask of whole levels (0..255) and return it as a 0..1 mask, matching
+		`BoxBlurShader`: `quality` iterations of one horizontal then one vertical pass.
+
+		`inverted` says the levels stand for `1 - alpha` (an inner effect's mask).
 	**/
-	@:noCompletion private static function __blurMask(mask:Vector<Float>, width:Int, height:Int, blurX:Float, blurY:Float, quality:Int):Vector<Float>
+	@:noCompletion private static function __blurMask(levels:Vector<Int>, width:Int, height:Int, blurX:Float, blurY:Float, quality:Int,
+			inverted:Bool = false):Vector<Float>
 	{
 		var passes = (quality > 0) ? quality : 1;
-		var scratch = __channel(mask.length);
+		var scratch = __levels(levels.length);
+		// one row or column at a time, with room at both ends for the widest blur's reach
+		var line = __levels((width > height ? width : height) + 256);
+
+		// What each level is as a float. Until a pass has blurred it, an inverted mask holds
+		// `1 - alpha / 255`, which is not always the same float as `level / 255`
+		var blurred = new Vector<Float>(256);
+		var unit = inverted ? new Vector<Float>(256) : blurred;
+		for (level in 0...256)
+		{
+			blurred[level] = level / 255;
+			if (inverted) unit[level] = 1 - (255 - level) / 255;
+		}
 
 		for (i in 0...passes)
 		{
-			__blurMaskAxis(mask, scratch, width, height, blurX, true);
-			__blurMaskAxis(scratch, mask, width, height, blurY, false);
+			__blurMaskAxis(levels, scratch, line, unit, width, height, blurX, true);
+			if (blurX > 1) unit = blurred;
+			__blurMaskAxis(scratch, levels, line, unit, width, height, blurY, false);
+			if (blurY > 1) unit = blurred;
 		}
+
+		var mask = __channel(levels.length);
+		for (i in 0...levels.length)
+			mask[i] = unit[levels[i]];
 		return mask;
 	}
 
-	@:noCompletion private static function __blurMaskAxis(src:Vector<Float>, dest:Vector<Float>, width:Int, height:Int, blur:Float, horizontal:Bool):Void
+	/**
+		One pass of the box blur along one axis. A sample becomes the sum of the `2n + 1` samples
+		around it, plus the two just beyond them at a part weight, over the blur size, rounded down to
+		a whole level.
+
+		The sum of the `2n + 1` is kept running along the line: one step on, the sample that comes
+		into reach is added and the one that falls out is taken away, so a pass costs the same for
+		every blur size.
+	**/
+	@:noCompletion private static function __blurMaskAxis(src:Vector<Int>, dest:Vector<Int>, line:Vector<Int>, unit:Vector<Float>, width:Int, height:Int,
+			blur:Float, horizontal:Bool):Void
 	{
 		var fullSize = (blur > 255) ? 255.0 : blur;
 
@@ -173,7 +204,8 @@ class BitmapFilter
 		var half = fullSize * 0.5;
 		var n = Std.int(Math.floor(half - 0.5));
 		if (n < 0) n = 0;
-		var frac = Math.floor((half - (n + 0.5)) * 255) / 255;
+		// the weight of the two samples beyond the `2n + 1`, in 255ths
+		var edgeWeight = Math.floor((half - (n + 0.5)) * 255);
 		var edge = n + 1;
 
 		// the box around the mask's samples that are not 0, grown by the blur's reach along its axis:
@@ -190,41 +222,86 @@ class BitmapFilter
 				bottom = y;
 			}
 		}
-		if (horizontal)
-		{
-			left -= edge;
-			right += edge;
-		}
-		else
-		{
-			top -= edge;
-			bottom += edge;
-		}
+		for (i in 0...dest.length)
+			dest[i] = 0;
+		for (i in 0...line.length)
+			line[i] = 0;
+		if (right < 0) return;
 
-		for (y in 0...height)
+		// a line is a row or a column: `lineLength` samples, `step` apart in the mask
+		var lineLength = horizontal ? width : height;
+		var step = horizontal ? 1 : width;
+		var firstLine = horizontal ? top : left;
+		var lastLine = horizontal ? bottom : right;
+		// the samples a line reads, and the ones it writes: `edge` further each way
+		var readFirst = horizontal ? left : top;
+		var readLast = horizontal ? right : bottom;
+		var first = (readFirst - edge < 0) ? 0 : readFirst - edge;
+		var last = (readLast + edge > lineLength - 1) ? lineLength - 1 : readLast + edge;
+		var toLevel = 1 / (255 * fullSize);
+
+		// What a stretch of one level blurs to, level by level: with an odd blur size every such
+		// stretch is a tie, and a picture is full of them (anything opaque)
+		var flat = new Vector<Int>(256);
+		var reach = 2 * edge + 1;
+		for (level in 0...256)
 		{
-			for (x in 0...width)
+			for (i in 0...reach)
+				line[i] = level;
+			flat[level] = __tieLevel(line, edge, edge, unit, edgeWeight, fullSize);
+		}
+		for (i in 0...reach)
+			line[i] = 0;
+
+		for (lineIndex in firstLine...lastLine + 1)
+		{
+			var lineStart = horizontal ? lineIndex * width : lineIndex;
+
+			// the line's samples at `edge + position`: what the blur reads past either end is 0
+			for (position in readFirst...readLast + 1)
+				line[edge + position] = src[lineStart + position * step];
+
+			var sum = 0;
+			for (at in first + edge - n...first + edge + n + 1)
+				sum += line[at];
+
+			// how many samples in a row, up to the one furthest ahead, have had its level
+			var newest = -1, equal = 0;
+
+			for (position in first...last + 1)
 			{
-				if (x < left || x > right || y < top || y > bottom)
+				var at = edge + position;
+				var ahead = line[at + edge];
+				equal = (ahead == newest) ? equal + 1 : 1;
+				newest = ahead;
+				var total = 255 * sum + edgeWeight * (ahead + line[at - edge]);
+				var level = total * toLevel;
+				var whole = Std.int(level);
+
+				// A result that lands on a whole level is a tie. Which way it rounds depends on how
+				// the samples add up as floats, so there they are added as floats
+				if (total != 0 && (level - whole < 0.000001 || whole + 1 - level < 0.000001))
 				{
-					dest[y * width + x] = 0;
-					continue;
+					whole = (equal >= reach) ? flat[ahead] : __tieLevel(line, at, edge, unit, edgeWeight, fullSize);
 				}
 
-				var sum = __maskAt(src, width, height, x, y);
-
-				for (i in 1...(n + 1))
-				{
-					if (horizontal) sum += __maskAt(src, width, height, x + i, y) + __maskAt(src, width, height, x - i, y);
-					else sum += __maskAt(src, width, height, x, y + i) + __maskAt(src, width, height, x, y - i);
-				}
-
-				if (horizontal) sum += (__maskAt(src, width, height, x + edge, y) + __maskAt(src, width, height, x - edge, y)) * frac;
-				else sum += (__maskAt(src, width, height, x, y + edge) + __maskAt(src, width, height, x, y - edge)) * frac;
-
-				dest[y * width + x] = Math.floor((sum / fullSize) * 255) / 255;
+				dest[lineStart + position * step] = whole;
+				sum += ahead - line[at - n];
 			}
 		}
+	}
+
+	/**
+		The blurred level at `at` of a line worked out with the samples as floats, added up in the
+		order the blur always used: the sample, then outward a pair at a time, then the two part ones.
+	**/
+	@:noCompletion private static inline function __tieLevel(line:Vector<Int>, at:Int, edge:Int, unit:Vector<Float>, edgeWeight:Int, fullSize:Float):Int
+	{
+		var sum = unit[line[at]];
+		for (i in 1...edge)
+			sum += unit[line[at + i]] + unit[line[at - i]];
+		sum += (unit[line[at + edge]] + unit[line[at - edge]]) * (edgeWeight / 255);
+		return Math.floor((sum / fullSize) * 255);
 	}
 
 	@:noCompletion private static inline function __maskAt(mask:Vector<Float>, width:Int, height:Int, x:Int, y:Int):Float
@@ -380,6 +457,18 @@ class BitmapFilter
 
 		__setArgbPixels(dest, out);
 		return dest;
+	}
+
+	/** `length` whole numbers, all 0. **/
+	@:noCompletion private static function __levels(length:Int):Vector<Int>
+	{
+		var levels = new Vector<Int>(length);
+		// static targets start a Vector at 0; the others start it empty
+		#if !target.static
+		for (i in 0...length)
+			levels[i] = 0;
+		#end
+		return levels;
 	}
 
 	/**
