@@ -349,6 +349,7 @@ class BitmapFilter
 		// BitmapFilterType is an abstract over Null<Int>: compared per pixel, its constants are boxed
 		var inner = (type == INNER);
 		var full = (type == FULL);
+		var outer = (!inner && !full);
 
 		for (y in 0...height)
 		{
@@ -359,26 +360,44 @@ class BitmapFilter
 			{
 				var i = y * width + x;
 
-				// the source pixel on the destination grid, premultiplied; transparent outside the source
-				var sourceR = 0.0, sourceG = 0.0, sourceB = 0.0, sourceA = 0.0;
+				// the source pixel on the destination grid; transparent outside the source
+				var sourceA = 0.0;
 				var sourceX = x - destOffsetX;
 				var p = 0;
 				if (rowInSource && sourceX >= 0 && sourceX < sourceWidth)
 				{
 					p = (sourceY * sourceWidth + sourceX) * 4;
-					if (p < length && pixels.get(p) != 0)
-					{
-						sourceA = pixels.get(p) / 255.0;
-						sourceR = (pixels.get(p + 1) / 255.0) * sourceA;
-						sourceG = (pixels.get(p + 2) / 255.0) * sourceA;
-						sourceB = (pixels.get(p + 3) / 255.0) * sourceA;
-					}
+					if (p < length) sourceA = pixels.get(p) / 255.0;
 				}
 
 				var effectA = fxA[i];
 				// no source and no effect gives alpha 0 in every mode, and so does no source alone
 				// when the effect is confined to the shape
 				if (sourceA == 0 && (inner || effectA == 0)) continue;
+
+				// Nothing of the effect shows where it is 0 (premultiplied, so all of it is), or where an
+				// outer effect lies under an opaque pixel: the source pixel stays as it is, or with
+				// knockout the pixel stays empty
+				if (effectA == 0 || (outer && sourceA == 1))
+				{
+					if (!knockout)
+					{
+						out.set(i * 4, pixels.get(p));
+						out.set(i * 4 + 1, pixels.get(p + 1));
+						out.set(i * 4 + 2, pixels.get(p + 2));
+						out.set(i * 4 + 3, pixels.get(p + 3));
+					}
+					continue;
+				}
+
+				// premultiplied
+				var sourceR = 0.0, sourceG = 0.0, sourceB = 0.0;
+				if (sourceA != 0)
+				{
+					sourceR = (pixels.get(p + 1) / 255.0) * sourceA;
+					sourceG = (pixels.get(p + 2) / 255.0) * sourceA;
+					sourceB = (pixels.get(p + 3) / 255.0) * sourceA;
+				}
 
 				var effectR = fxR[i], effectG = fxG[i], effectB = fxB[i];
 				var r:Float, g:Float, b:Float, a:Float;
@@ -428,15 +447,6 @@ class BitmapFilter
 						g = effectG * outside;
 						b = effectB * outside;
 						a = effectA * outside;
-					}
-					else if (sourceA == 1)
-					{
-						// an opaque source pixel hides an outer effect: it is copied as it is
-						out.set(i * 4, 0xFF);
-						out.set(i * 4 + 1, pixels.get(p + 1));
-						out.set(i * 4 + 2, pixels.get(p + 2));
-						out.set(i * 4 + 3, pixels.get(p + 3));
-						continue;
 					}
 					else
 					{
