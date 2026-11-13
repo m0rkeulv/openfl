@@ -361,7 +361,8 @@ class BitmapData implements IBitmapDrawable
 		// TODO: Ways to optimize this?
 
 		var needSecondBitmapData = filter.__needSecondBitmapData;
-		var needCopyOfOriginal = filter.__preserveObject;
+		// a filter that composites the object itself has no use for a copy of it
+		var needCopyOfOriginal = filter.__preserveObject && !filter.__softwareComposite;
 
 		var bitmapData2:BitmapData = null;
 		var bitmapData3:BitmapData = null;
@@ -380,14 +381,14 @@ class BitmapData implements IBitmapDrawable
 			bitmapData3 = new BitmapData(width, height, true, 0);
 		}
 
-		if (filter.__preserveObject)
+		if (needCopyOfOriginal)
 		{
 			bitmapData3.copyPixels(sourceBitmapData, sourceRect, destPoint);
 		}
 
 		var lastBitmap = filter.__applyFilter(bitmapData2, sourceBitmapData, sourceRect, destPoint);
 
-		if (filter.__preserveObject && !filter.__softwareComposite)
+		if (needCopyOfOriginal)
 		{
 			lastBitmap.draw(bitmapData3, null, null);
 		}

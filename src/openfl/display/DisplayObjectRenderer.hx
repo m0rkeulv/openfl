@@ -985,7 +985,8 @@ class DisplayObjectRenderer extends EventDispatcher
 							{
 								needSecondBitmapData = true;
 							}
-							if (filter.__preserveObject)
+							// a filter that composites the object itself has no use for a copy of it
+							if (filter.__preserveObject && !filter.__softwareComposite)
 							{
 								needCopyOfOriginal = true;
 							}
@@ -1054,7 +1055,7 @@ class DisplayObjectRenderer extends EventDispatcher
 							filter.__renderScale = pixelRatio;
 							filter.__objectRect = objectRect;
 
-							if (filter.__preserveObject)
+							if (filter.__preserveObject && !filter.__softwareComposite)
 							{
 								bitmap3.copyPixels(bitmap, bitmap.rect, destPoint);
 							}
