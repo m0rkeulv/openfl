@@ -190,6 +190,13 @@ import lime.math.RGBA;
 		var sourceStart = sourceData.byteOffset;
 		#end
 
+		// one row of the matrix per output channel: its share of the input's red, green, blue and alpha, then an offset
+		var m = __matrix;
+		var redFromR = m[0], redFromG = m[1], redFromB = m[2], redFromA = m[3], redOffset = m[4];
+		var greenFromR = m[5], greenFromG = m[6], greenFromB = m[7], greenFromA = m[8], greenOffset = m[9];
+		var blueFromR = m[10], blueFromG = m[11], blueFromB = m[12], blueFromA = m[13], blueOffset = m[14];
+		var alphaFromR = m[15], alphaFromG = m[16], alphaFromB = m[17], alphaFromA = m[18], alphaOffset = m[19];
+
 		var sourcePixel:RGBA = 0, destPixel:RGBA = 0;
 		var sourceOffset:Int, destOffset:Int;
 
@@ -215,22 +222,12 @@ import lime.math.RGBA;
 				}
 				else
 				{
-					destPixel.r = Std.int(Math.max(0,
-						Math.min((__matrix[0] * sourcePixel.r) + (__matrix[1] * sourcePixel.g) + (__matrix[2] * sourcePixel.b)
-							+ (__matrix[3] * sourcePixel.a) + __matrix[4],
-							255)));
-					destPixel.g = Std.int(Math.max(0,
-						Math.min((__matrix[5] * sourcePixel.r) + (__matrix[6] * sourcePixel.g) + (__matrix[7] * sourcePixel.b)
-							+ (__matrix[8] * sourcePixel.a) + __matrix[9],
-							255)));
-					destPixel.b = Std.int(Math.max(0,
-						Math.min((__matrix[10] * sourcePixel.r) + (__matrix[11] * sourcePixel.g) + (__matrix[12] * sourcePixel.b)
-							+ (__matrix[13] * sourcePixel.a) + __matrix[14],
-							255)));
-					destPixel.a = Std.int(Math.max(0,
-						Math.min((__matrix[15] * sourcePixel.r) + (__matrix[16] * sourcePixel.g) + (__matrix[17] * sourcePixel.b)
-							+ (__matrix[18] * sourcePixel.a) + __matrix[19],
-							255)));
+					var r = sourcePixel.r, g = sourcePixel.g, b = sourcePixel.b, a = sourcePixel.a;
+					destPixel.set(
+						__toByte(redFromR * r + redFromG * g + redFromB * b + redFromA * a + redOffset),
+						__toByte(greenFromR * r + greenFromG * g + greenFromB * b + greenFromA * a + greenOffset),
+						__toByte(blueFromR * r + blueFromG * g + blueFromB * b + blueFromA * a + blueOffset),
+						__toByte(alphaFromR * r + alphaFromG * g + alphaFromB * b + alphaFromA * a + alphaOffset));
 				}
 
 				if (destPremultiplied) destPixel.multiplyAlpha();
@@ -244,6 +241,12 @@ import lime.math.RGBA;
 		destBitmapData.image.dirty = true;
 		#end
 		return destBitmapData;
+	}
+
+	/** A matrix result as a channel value: cut to 0..255, the fraction dropped. **/
+	@:noCompletion private static inline function __toByte(value:Float):Int
+	{
+		return Std.int(value < 0 ? 0 : (value > 255 ? 255 : value));
 	}
 
 	#if lime
