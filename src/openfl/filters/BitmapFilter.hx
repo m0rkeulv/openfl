@@ -236,6 +236,7 @@ class BitmapFilter
 		var destOffsetX = Std.int(destPoint.x);
 		var destOffsetY = Std.int(destPoint.y);
 
+		// starts transparent: a pixel that is skipped stays 0
 		var out = Bytes.alloc(width * height * 4);
 		// BitmapFilterType is an abstract over Null<Int>: compared per pixel, its constants are boxed
 		var inner = (type == INNER);
@@ -265,7 +266,12 @@ class BitmapFilter
 					}
 				}
 
-				var effectR = fxR[i], effectG = fxG[i], effectB = fxB[i], effectA = fxA[i];
+				var effectA = fxA[i];
+				// no source and no effect gives alpha 0 in every mode, and so does no source alone
+				// when the effect is confined to the shape
+				if (sourceA == 0 && (inner || effectA == 0)) continue;
+
+				var effectR = fxR[i], effectG = fxG[i], effectB = fxB[i];
 				var r:Float, g:Float, b:Float, a:Float;
 
 				if (inner)
