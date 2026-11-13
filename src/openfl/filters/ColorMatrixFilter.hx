@@ -8,6 +8,7 @@ import openfl.geom.Point;
 import openfl.geom.Rectangle;
 #if lime
 import lime._internal.graphics.ImageCanvasUtil; // TODO
+import lime.graphics.PixelFormat;
 import lime.math.RGBA;
 #end
 
@@ -176,6 +177,19 @@ import lime.math.RGBA;
 		var sourcePremultiplied = sourceImage.buffer.premultiplied;
 		var destPremultiplied = image.buffer.premultiplied;
 
+		// where each channel sits in a pixel of either image, worked out once
+		var sourceR = __channelOffset(sourceFormat, 0), sourceG = __channelOffset(sourceFormat, 1);
+		var sourceB = __channelOffset(sourceFormat, 2), sourceA = __channelOffset(sourceFormat, 3);
+		var destR = __channelOffset(destFormat, 0), destG = __channelOffset(destFormat, 1);
+		var destB = __channelOffset(destFormat, 2), destA = __channelOffset(destFormat, 3);
+
+		// reading a UInt8Array element allocates on HashLink (lime's ArrayBufferIO.getUint8 returns
+		// Null<UInt>), so the source is read through the Bytes under it
+		#if !js
+		var sourceBytes = sourceData.buffer;
+		var sourceStart = sourceData.byteOffset;
+		#end
+
 		var sourcePixel:RGBA = 0, destPixel:RGBA = 0;
 		var sourceOffset:Int, destOffset:Int;
 
@@ -186,7 +200,14 @@ import lime.math.RGBA;
 				sourceOffset = (row * sourceStride) + (column * 4);
 				destOffset = ((row + offsetX) * destStride) + ((column + offsetY) * 4);
 
-				sourcePixel.readUInt8(sourceData, sourceOffset, sourceFormat, sourcePremultiplied);
+				#if js
+				sourcePixel.set(sourceData[sourceOffset + sourceR], sourceData[sourceOffset + sourceG], sourceData[sourceOffset + sourceB],
+					sourceData[sourceOffset + sourceA]);
+				#else
+				var at = sourceStart + sourceOffset;
+				sourcePixel.set(sourceBytes.get(at + sourceR), sourceBytes.get(at + sourceG), sourceBytes.get(at + sourceB), sourceBytes.get(at + sourceA));
+				#end
+				if (sourcePremultiplied) sourcePixel.unmultiplyAlpha();
 
 				if (sourcePixel.a == 0)
 				{
@@ -212,7 +233,11 @@ import lime.math.RGBA;
 							255)));
 				}
 
-				destPixel.writeUInt8(destData, destOffset, destFormat, destPremultiplied);
+				if (destPremultiplied) destPixel.multiplyAlpha();
+				destData[destOffset + destR] = destPixel.r;
+				destData[destOffset + destG] = destPixel.g;
+				destData[destOffset + destB] = destPixel.b;
+				destData[destOffset + destA] = destPixel.a;
 			}
 		}
 
@@ -220,6 +245,19 @@ import lime.math.RGBA;
 		#end
 		return destBitmapData;
 	}
+
+	#if lime
+	/** The byte of channel `channel` (0 red, 1 green, 2 blue, 3 alpha) within a pixel of `format`. **/
+	@:noCompletion private static function __channelOffset(format:PixelFormat, channel:Int):Int
+	{
+		return switch (format)
+		{
+			case BGRA32: [2, 1, 0, 3][channel];
+			case ARGB32: [1, 2, 3, 0][channel];
+			default: channel; // RGBA32
+		}
+	}
+	#end
 
 	@:noCompletion private override function __initShader(renderer:DisplayObjectRenderer, pass:Int, sourceBitmapData:BitmapData):Shader
 	{
