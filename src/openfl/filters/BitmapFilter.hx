@@ -6,8 +6,8 @@ import openfl.display.BlendMode;
 import openfl.display.DisplayObjectRenderer;
 import openfl.display.Shader;
 import openfl.geom.Point;
+import haxe.io.Bytes;
 import openfl.geom.Rectangle;
-import openfl.Vector;
 
 /**
 	The BitmapFilter class is the base class for all image filter effects.
@@ -23,6 +23,7 @@ import openfl.Vector;
 @:fileXml('tags="haxe,release"')
 @:noDebug
 #end
+@:access(openfl.geom.Rectangle)
 class BitmapFilter
 {
 	@:noCompletion private var __bottomExtension:Int;
@@ -116,7 +117,8 @@ class BitmapFilter
 	{
 		var mask = [for (i in 0...width * height) 0.0];
 
-		var pixels = source.getVector(sourceRect);
+		var pixels = __argbPixels(source, sourceRect);
+		var length = pixels.length;
 
 		var sw = Std.int(sourceRect.width);
 		var sh = Std.int(sourceRect.height);
@@ -132,7 +134,8 @@ class BitmapFilter
 			{
 				var dx = x + ox;
 				if (dx < 0 || dx >= width) continue;
-				mask[dy * width + dx] = ((pixels[y * sw + x] >>> 24) & 0xFF) / 255.0;
+				var p = (y * sw + x) * 4;
+				if (p < length) mask[dy * width + dx] = pixels.get(p) / 255.0;
 			}
 		}
 		return mask;
@@ -239,7 +242,8 @@ class BitmapFilter
 			srcA.push(0.0);
 		}
 
-		var pixels = source.getVector(sourceRect);
+		var pixels = __argbPixels(source, sourceRect);
+		var length = pixels.length;
 
 		var sourceWidth = Std.int(sourceRect.width);
 		var sourceHeight = Std.int(sourceRect.height);
@@ -256,17 +260,18 @@ class BitmapFilter
 				var destX = x + destOffsetX;
 				if (destX < 0 || destX >= width) continue;
 
-				var argb = pixels[y * sourceWidth + x];
-				var a = ((argb >>> 24) & 0xFF) / 255.0;
+				var p = (y * sourceWidth + x) * 4;
+				if (p >= length) continue;
+				var a = pixels.get(p) / 255.0;
 				var i = destY * width + destX;
 				srcA[i] = a;
-				srcR[i] = (((argb >> 16) & 0xFF) / 255.0) * a;
-				srcG[i] = (((argb >> 8) & 0xFF) / 255.0) * a;
-				srcB[i] = ((argb & 0xFF) / 255.0) * a;
+				srcR[i] = (pixels.get(p + 1) / 255.0) * a;
+				srcG[i] = (pixels.get(p + 2) / 255.0) * a;
+				srcB[i] = (pixels.get(p + 3) / 255.0) * a;
 			}
 		}
 
-		var out = new Vector<UInt>(width * height, true);
+		var out = Bytes.alloc(width * height * 4);
 
 		for (i in 0...width * height)
 		{
@@ -329,11 +334,36 @@ class BitmapFilter
 				}
 			}
 
-			out[i] = __toStraightARGB(r, g, b, a);
+			var color:Int = __toStraightARGB(r, g, b, a);
+			out.set(i * 4, color >>> 24);
+			out.set(i * 4 + 1, color >> 16);
+			out.set(i * 4 + 2, color >> 8);
+			out.set(i * 4 + 3, color);
 		}
 
-		dest.setVector(dest.rect, out);
+		__setArgbPixels(dest, out);
 		return dest;
+	}
+
+	/**
+		The pixels of `rect` as straight ARGB, four bytes per pixel in the order A, R, G, B: what
+		`getVector` returns, read from the image without the ByteArray and the Vector in between.
+	**/
+	@:noCompletion private static function __argbPixels(source:BitmapData, rect:Rectangle):Bytes
+	{
+		#if lime
+		return source.image.getPixels(rect.__toLimeRectangle(), ARGB32);
+		#else
+		return Bytes.alloc(0);
+		#end
+	}
+
+	/** Writes straight ARGB pixels laid out as `__argbPixels` returns them over the whole of `dest`. **/
+	@:noCompletion private static function __setArgbPixels(dest:BitmapData, pixels:Bytes):Void
+	{
+		#if lime
+		dest.image.setPixels(dest.rect.__toLimeRectangle(), pixels, ARGB32, BIG_ENDIAN);
+		#end
 	}
 
 	// premultiplied 0..1 -> straight 0xAARRGGBB
