@@ -2156,8 +2156,10 @@ class CairoGraphics
 		strokePattern = null;
 
 			var hasLineStyle = false;
-			var initStrokeX:Null<Float> = null;
-			var initStrokeY:Null<Float> = null;
+			// where a stroke would start from, once there has been a path command without a line style
+			var hasInitStroke = false;
+			var initStrokeX = 0.0;
+			var initStrokeY = 0.0;
 			var initMoveX = 0.0;
 			var initMoveY = 0.0;
 
@@ -2177,6 +2179,7 @@ class CairoGraphics
 					}
 					else
 					{
+						hasInitStroke = true;
 						initStrokeX = c.anchorX;
 						initStrokeY = c.anchorY;
 					}
@@ -2191,6 +2194,7 @@ class CairoGraphics
 					}
 					else
 					{
+						hasInitStroke = true;
 						initStrokeX = c.anchorX;
 						initStrokeY = c.anchorY;
 					}
@@ -2205,6 +2209,7 @@ class CairoGraphics
 					}
 					else
 					{
+						hasInitStroke = true;
 						initStrokeX = c.x;
 						initStrokeY = c.y;
 					}
@@ -2219,6 +2224,7 @@ class CairoGraphics
 						}
 						else
 						{
+							hasInitStroke = true;
 							initStrokeX = c.x;
 							initStrokeY = c.y;
 						}
@@ -2232,13 +2238,12 @@ class CairoGraphics
 						hasFill = false;
 						bitmapFill = null;
 						bitmapFillMatrix = null;
-						initStrokeX = null;
-						initStrokeY = null;
+						hasInitStroke = false;
 
 				case LINE_GRADIENT_STYLE:
 					var c = data.readLineGradientStyle();
 
-						if (!hasLineStyle && initStrokeX != null && initStrokeY != null)
+						if (!hasLineStyle && hasInitStroke)
 						{
 							// the stroke commands won't be populated yet because
 							// there was no line style until now. we need the
@@ -2247,8 +2252,7 @@ class CairoGraphics
 							// need to automatically extend the stroke to the
 							// start of that fill.
 							strokeCommands.moveToInternal(initStrokeX, initStrokeY, initMoveX, initMoveY);
-							initStrokeX = null;
-							initStrokeY = null;
+							hasInitStroke = false;
 						}
 
 					hasLineStyle = true;
@@ -2257,7 +2261,7 @@ class CairoGraphics
 				case LINE_BITMAP_STYLE:
 					var c = data.readLineBitmapStyle();
 
-						if (!hasLineStyle && initStrokeX != null && initStrokeY != null)
+						if (!hasLineStyle && hasInitStroke)
 						{
 							// the stroke commands won't be populated yet because
 							// there was no line style until now. we need the
@@ -2266,8 +2270,7 @@ class CairoGraphics
 							// need to automatically extend the stroke to the
 							// start of that fill.
 							strokeCommands.moveToInternal(initStrokeX, initStrokeY, initMoveX, initMoveY);
-							initStrokeX = null;
-							initStrokeY = null;
+							hasInitStroke = false;
 						}
 
 					hasLineStyle = true;
@@ -2278,7 +2281,7 @@ class CairoGraphics
 
 						if (!hasLineStyle && c.thickness != null)
 						{
-							if (initStrokeX != null && initStrokeY != null)
+							if (hasInitStroke)
 							{
 								// the stroke commands won't be populated yet because
 								// there was no line style until now. we need the
@@ -2287,8 +2290,7 @@ class CairoGraphics
 								// need to automatically extend the stroke to the
 								// start of that fill.
 								strokeCommands.moveToInternal(initStrokeX, initStrokeY, initMoveX, initMoveY);
-								initStrokeX = null;
-								initStrokeY = null;
+								hasInitStroke = false;
 							}
 						}
 
